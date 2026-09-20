@@ -27,6 +27,9 @@ public struct SettingsView: View {
     @State private var pluginSearchText = ""
     @State private var selectedPluginTypeFilter: String = "all"
     @State private var skillSearchText = ""
+    /// Skills read from the active workspace's `.swiftopenwork/skills/` folder. Not persisted —
+    /// the files are the state, so this is refreshed from disk rather than cached in settings.
+    @State private var projectSkills: [Skill] = []
     @State private var showingCreateWorkspaceModal = false
     @State private var showingEditWorkspaceModal = false
     @State private var workspaceToEdit: Workspace? = nil
@@ -2426,6 +2429,148 @@ public struct SettingsView: View {
         }
     }
 
+    /// Skills that live in the repository rather than in the app.
+    ///
+    /// Global skills apply to every workspace, which is the wrong scope for anything specific to
+    /// one codebase. These are read from `.swiftopenwork/skills/` in the active workspace on every
+    /// turn, so they can be edited with the rest of the project and reviewed in a pull request.
+    private var projectSkillsCard: some View {
+        let workspace = appState.currentWorkspace
+        let folder = ProjectSkills.folder(in: workspace.folderPath)
+        let folderExists = !ProjectSkills.existingFolders(in: workspace.folderPath).isEmpty
+
+        return SettingsCard(
+            title: "Project Skills (\(projectSkills.count))",
+            description: "Skills stored inside '\(workspace.name)' and loaded only while it is the active workspace. Edited on disk, versioned with the project.",
+            icon: "folder.badge.gearshape"
+        ) {
+            HStack(spacing: 8) {
+                Text(folder)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .textSelection(.enabled)
+
+                Spacer()
+
+                if folderExists {
+                    Button("Reveal in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: folder)])
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                } else {
+                    Button("Create Skills Folder") {
+                        createProjectSkillsFolder(in: workspace.folderPath)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(workspace.folderPath.isEmpty)
+                }
+
+                Button("Reload") { refreshProjectSkills() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+
+            if projectSkills.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "folder.badge.questionmark")
+                        .font(.system(size: 20))
+                        .foregroundColor(.secondary)
+                    Text(folderExists
+                         ? "No skills in this project yet."
+                         : "This project has no skills folder yet.")
+                        .font(.system(size: 12, weight: .medium))
+                    Text("Add a folder per skill containing a SKILL.md file. They load on the next message — no import step.")
+                        .font(.system(size: 10.5))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(projectSkills) { skill in
+                        HStack(spacing: 10) {
+                            Image(systemName: skill.source.icon)
+                                .font(.system(size: 13))
+                                .foregroundColor(skill.isEnabled ? .accentColor : .secondary)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(skill.name)
+                                    .font(.system(size: 12, weight: .semibold))
+                                if !skill.description.isEmpty {
+                                    Text(skill.description)
+                                        .font(.system(size: 10.5))
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(2)
+                                }
+                                if let path = skill.filePath {
+                                    Text(displayPath(path, relativeTo: workspace.folderPath))
+                                        .font(.system(size: 9.5, design: .monospaced))
+                                        .foregroundColor(.secondary.opacity(0.8))
+                                        .lineLimit(1)
+                                        .truncationMode(.head)
+                                }
+                            }
+
+                            Spacer()
+
+                            // Enabling happens in the file's front matter, not here: a toggle in
+                            // settings would be app state that silently disagrees with the
+                            // repository everyone else checks out.
+                            Text(skill.isEnabled ? "Enabled" : "Disabled (enabled: false)")
+                                .font(.system(size: 9.5, weight: .medium))
+                                .foregroundColor(skill.isEnabled ? .green : .secondary)
+
+                            if let path = skill.filePath {
+                                Button {
+                                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                                } label: {
+                                    Image(systemName: "arrow.up.forward.square")
+                                        .font(.system(size: 11))
+                                }
+                                .buttonStyle(.hitTestable)
+                            }
+                        }
+                        .padding(10)
+                        .background(ThemeColors.cardBg(for: appState.settings.theme))
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(ThemeColors.border(for: appState.settings.theme).opacity(0.6), lineWidth: 1)
+                        )
+                    }
+                }
+            }
+        }
+        .onAppear { refreshProjectSkills() }
+        .onChange(of: appState.activeWorkspaceId) { _, _ in refreshProjectSkills() }
+    }
+
+    private func refreshProjectSkills() {
+        projectSkills = ProjectSkills.load(workspacePath: appState.currentWorkspace.folderPath)
+    }
+
+    private func createProjectSkillsFolder(in workspacePath: String) {
+        do {
+            let created = try ProjectSkills.ensureFolder(in: workspacePath)
+            refreshProjectSkills()
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: created)])
+            appState.showToast("Created \(ProjectSkills.relativePath)")
+        } catch {
+            appState.showToast("Could not create the skills folder: \(error.localizedDescription)")
+        }
+    }
+
+    /// `.swiftopenwork/skills/foo/SKILL.md` reads better than the absolute path in a narrow row.
+    private func displayPath(_ path: String, relativeTo root: String) -> String {
+        guard !root.isEmpty, path.hasPrefix(root) else { return path }
+        return String(path.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
     // 14. Skills & MCP
     private var skillsPage: some View {
         VStack(spacing: 20) {
@@ -2633,6 +2778,9 @@ public struct SettingsView: View {
                     }
                 }
             }
+
+            // MARK: - PROJECT SKILLS SECTION
+            projectSkillsCard
 
             // MARK: - MODEL CONTEXT PROTOCOL (MCP) SERVERS SECTION
             SettingsCard(

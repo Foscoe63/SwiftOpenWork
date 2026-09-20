@@ -928,6 +928,14 @@ public final class AgentRunner {
             """
         }
 
+        // Skills that ship with the repository itself. Read from disk every turn, so editing one
+        // takes effect on the next message without an import step.
+        if !inventoryPrompt {
+            skillsSection += ProjectSkills.promptBlock(
+                ProjectSkills.load(workspacePath: workspace.folderPath)
+            )
+        }
+
         var iteration = 0
         var workingMessages = session.messages
 
