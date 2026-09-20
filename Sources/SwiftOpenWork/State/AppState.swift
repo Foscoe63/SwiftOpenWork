@@ -1808,6 +1808,35 @@ public final class AppState: ObservableObject {
         return ws
     }
 
+    /// Register a folder that already exists on disk as a workspace, or switch to the workspace
+    /// already pointing at it.
+    ///
+    /// `createWorkspace` is the path for "make me a new project"; this is the path for "I already
+    /// have one". The distinction that matters is the duplicate check: without it, opening the
+    /// same checkout twice leaves two entries in the switcher with separate session histories,
+    /// and the user has no way to tell which one they are in.
+    @discardableResult
+    public func openExistingProject(at url: URL) -> Workspace {
+        let path = (url.path as NSString).standardizingPath
+        if let existing = workspaces.first(where: {
+            ($0.folderPath as NSString).standardizingPath == path
+        }) {
+            switchWorkspace(to: existing.id)
+            showToast("Opened '\(existing.name)'")
+            return existing
+        }
+        let ws = createWorkspace(
+            name: url.lastPathComponent,
+            category: .project,
+            assignedAgentId: nil,
+            folderPath: path,
+            template: .empty
+        )
+        switchWorkspace(to: ws.id)
+        showToast("Opened '\(ws.name)'")
+        return ws
+    }
+
     public func deleteWorkspace(_ workspace: Workspace) {
         workspaces.removeAll(where: { $0.id == workspace.id })
         if activeWorkspaceId == workspace.id {

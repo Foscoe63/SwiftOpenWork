@@ -12,6 +12,8 @@ public struct WorkspaceSwitcherMenu<LabelContent: View>: View {
     @ViewBuilder var label: () -> LabelContent
 
     @State private var showingWorkspaceSheet = false
+    /// The workspace the remove submenu picked, held until the alert confirms it.
+    @State private var workspacePendingRemoval: Workspace?
     @State private var newWorkspaceName = ""
     @State private var newWorkspaceCategory: WorkspaceCategory = .general
     @State private var newWorkspaceAgentId: String = ""
@@ -62,6 +64,26 @@ public struct WorkspaceSwitcherMenu<LabelContent: View>: View {
                 }
 
                 Button {
+                    openExistingProject()
+                } label: {
+                    Label("Open Existing Project...", systemImage: "folder")
+                }
+
+                if !appState.workspaces.isEmpty {
+                    Menu {
+                        ForEach(appState.workspaces) { ws in
+                            Button(role: .destructive) {
+                                workspacePendingRemoval = ws
+                            } label: {
+                                Label(ws.name, systemImage: ws.icon)
+                            }
+                        }
+                    } label: {
+                        Label("Remove Workspace", systemImage: "trash")
+                    }
+                }
+
+                Button {
                     appState.generateWorkspacesForAgents()
                 } label: {
                     Label("Auto-Generate Workspaces for All Agents", systemImage: "sparkles")
@@ -81,6 +103,38 @@ public struct WorkspaceSwitcherMenu<LabelContent: View>: View {
         .sheet(isPresented: $showingWorkspaceSheet) {
             newWorkspaceModal
         }
+        .alert(
+            "Remove '\(workspacePendingRemoval?.name ?? "")'?",
+            isPresented: Binding(
+                get: { workspacePendingRemoval != nil },
+                set: { if !$0 { workspacePendingRemoval = nil } }
+            ),
+            presenting: workspacePendingRemoval
+        ) { ws in
+            Button("Remove", role: .destructive) {
+                appState.deleteWorkspace(ws)
+                workspacePendingRemoval = nil
+            }
+            Button("Cancel", role: .cancel) { workspacePendingRemoval = nil }
+        } message: { ws in
+            // The distinction people get wrong, and the reason this is an alert rather than a
+            // plain menu item: nothing on disk is touched.
+            Text("This removes the workspace from \(AppIdentity.displayName). The folder and its files stay on disk at \(ws.folderPath.isEmpty ? "their current location" : ws.folderPath).")
+        }
+    }
+
+    /// Point a workspace at a folder that already exists, rather than scaffolding a new one.
+    private func openExistingProject() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.title = "Open Existing Project"
+        panel.prompt = "Open Project"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let ws = appState.openExistingProject(at: url)
+        onSelectWorkspace(ws.id)
     }
 
     @ViewBuilder
