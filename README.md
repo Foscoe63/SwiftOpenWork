@@ -150,7 +150,7 @@ The code-intelligence tools run real language servers, started on first use and 
 - **A new chat suggests what fits the workspace** — ideas to build in an empty folder; for a web, Swift or Python project, *explain it*, *run it and check it* (the preview, a build and a screenshot, or a run with tests), *find and fix a bug* and *add tests*
 - **Command palette (⌘K)** — every command with its shortcut, workspace files, chats, agents and settings in one fuzzy-ranked list (initials work: `fip` → Find in Project), driven from the keyboard, recently run commands first. `>` narrows to commands, `@` jumps to a declared symbol, `:42` goes to a line in the open file
 - **Find in Project (⇧⌘F)** — above the editor: match case, whole word, regex, include/exclude globs; results grouped by file with the match highlighted, and clicking selects it in the editor. Open files are searched as shown, unsaved edits included. Replace All opens each file in the editor with the change unsaved and one undo step, so nothing reaches disk until you save
-- Workspace switcher on the chat header (synced with the sidebar)
+- Workspace switcher on the chat header (synced with the sidebar), with **Open Existing Project...** to register a folder already on disk — reopening the same checkout switches to the workspace you already have rather than adding a second one — and **Remove Workspace**, which drops it from the app and leaves the folder untouched
 - Enabled **Skills** injected into the agent system prompt
 - Extensions, prompt templates, slash commands (`/clear`, `/agent`, `/model`, …)
 - Local RAG (Accelerate), PDF/Vision extract, live canvas, diffs, terminal, voice STT/TTS
