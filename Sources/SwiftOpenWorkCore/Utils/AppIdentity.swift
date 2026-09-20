@@ -81,4 +81,7 @@ public enum AppIdentity {
     public static let legacyWorktreeBranchPrefix = "openwork/"
     public static let legacyWorktreeContainerName = ".openwork-worktrees"
     public static let legacyRulesFileNames = ["OPENWORK.md", ".openwork.md"]
+    /// Where a repository's own skills would have lived under the 1.1 name. Read, never written;
+    /// see `ProjectSkills`.
+    public static let legacySkillsRelativePath = ".openwork/skills"
 }

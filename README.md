@@ -152,6 +152,7 @@ The code-intelligence tools run real language servers, started on first use and 
 - **Find in Project (⇧⌘F)** — above the editor: match case, whole word, regex, include/exclude globs; results grouped by file with the match highlighted, and clicking selects it in the editor. Open files are searched as shown, unsaved edits included. Replace All opens each file in the editor with the change unsaved and one undo step, so nothing reaches disk until you save
 - Workspace switcher on the chat header (synced with the sidebar)
 - Enabled **Skills** injected into the agent system prompt
+- **Project skills** — a repository can carry its own skills in `.swiftopenwork/skills/<name>/SKILL.md`, loaded only while that workspace is active and re-read from disk every turn, so they are edited with the code and reviewed in a pull request. Optional `name` / `description` / `enabled` front matter; Settings -> Skills & MCP lists what the active project carries and creates the folder. `.openwork/skills` and `.claude/skills` are read too
 - Extensions, prompt templates, slash commands (`/clear`, `/agent`, `/model`, …)
 - Local RAG (Accelerate), PDF/Vision extract, live canvas, diffs, terminal, voice STT/TTS
 - **Window state persistence** — frame, sidebar & inspector widths, open/closed inspector, navigation destination, settings tab, last workspace & session survive quit/relaunch

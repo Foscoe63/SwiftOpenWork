@@ -5,6 +5,8 @@ public enum SkillSource: String, Codable, CaseIterable, Sendable {
     case fileImport = "fileImport"
     case urlImport = "urlImport"
     case manual = "manual"
+    /// Read from `.swiftopenwork/skills/` in the workspace, not from `skills.json`.
+    case project = "project"
 
     public var displayName: String {
         switch self {
@@ -12,6 +14,7 @@ public enum SkillSource: String, Codable, CaseIterable, Sendable {
         case .fileImport: return "File Import"
         case .urlImport: return "URL Import"
         case .manual: return "Custom"
+        case .project: return "Project"
         }
     }
 
@@ -21,6 +24,7 @@ public enum SkillSource: String, Codable, CaseIterable, Sendable {
         case .fileImport: return "doc.badge.plus"
         case .urlImport: return "globe"
         case .manual: return "pencil.and.outline"
+        case .project: return "folder.badge.gearshape"
         }
     }
 }
