@@ -220,7 +220,11 @@ private struct PreviewPanel: View {
                 .allowsHitTesting(false)
         )
         .simultaneousGesture(TapGesture().onEnded { onFocus() })
-        .onAppear {
+        .onAppear { [appState] in
+            // `tab` belongs to `PreviewSessions.shared`, so it outlives this view and the
+            // callback stored on it must not pin AppState — hence `weak` on the inner closure.
+            // The outer capture is written out because an implicit strong one here would
+            // contradict that, which is what the compiler warns about.
             tab.onElementPicked = { [weak appState] element, png in
                 let image = png.flatMap { ComposerAttachmentIntake.attachment(fromPNGData: $0, preferredName: "picked-\(element.tag).png") }
                 appState?.addToComposer(text: element.promptText, attachments: image.map { [$0] } ?? [])
