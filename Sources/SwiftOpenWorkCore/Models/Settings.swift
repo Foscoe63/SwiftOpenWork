@@ -327,7 +327,10 @@ public struct AppSettings: Codable, Hashable, Sendable {
         planModeEnabled: Bool = false,
         maxTurnTokens: Int = 2_000_000,
         playNotificationSounds: Bool = true,
-        authorizedFolders: [String] = [FileManager.default.homeDirectoryForCurrentUser.path],
+        // Only the workspace is reachable unless the user adds folders. This was the whole home
+        // directory, which made the file sandbox cover everything a credential lives in.
+        // Existing installs keep their stored list.
+        authorizedFolders: [String] = [],
         terminalSafetyLevel: TerminalSafetyLevel = .safeOnly,
         terminalShell: String = "/bin/zsh",
         allowWebAccess: Bool = true,

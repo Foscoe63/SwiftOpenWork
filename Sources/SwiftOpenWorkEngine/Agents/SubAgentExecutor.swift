@@ -225,7 +225,8 @@ public enum SubAgentExecutor {
                         argumentsJson: call.argumentsJson,
                         worktreePath: worktree?.path,
                         settings: settings,
-                        sessionId: parentSession
+                        sessionId: parentSession,
+                        workspaceRoot: effectiveWorkspace.folderPath
                     ) {
                         _ = await ToolApprovalManager.shared.requestApproval(
                             callId: call.id, toolName: call.toolName, argumentsJson: call.argumentsJson, reason: reason

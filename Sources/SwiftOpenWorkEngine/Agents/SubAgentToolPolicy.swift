@@ -31,10 +31,12 @@ public enum SubAgentToolPolicy {
         argumentsJson: String,
         worktreePath: String?,
         settings: AppSettings,
-        sessionId: String
+        sessionId: String,
+        workspaceRoot: String? = nil
     ) -> String? {
         guard let reason = AgentRunner.approvalReason(
-            toolName: toolName, argumentsJson: argumentsJson, settings: settings, sessionId: sessionId
+            toolName: toolName, argumentsJson: argumentsJson, settings: settings, sessionId: sessionId,
+            workspaceRoot: workspaceRoot ?? worktreePath ?? ""
         ) else { return nil }
         guard let worktreePath else { return reason }
 

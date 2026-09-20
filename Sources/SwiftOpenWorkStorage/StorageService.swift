@@ -14,7 +14,35 @@ public final class StorageService: @unchecked Sendable {
         if !fileManager.fileExists(atPath: directory.path) {
             try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
+        _ = Self.permissionsTightened
         return directory
+    }
+
+    /// Runs `makeOwnerOnly` once per process, on first use of `baseDirectory`.
+    ///
+    /// A `static let` rather than a flag guarded by `lock`: `save` and `load` hold `lock` while
+    /// they call `fileURL(for:)`, which reads `baseDirectory`. Taking the same non-recursive
+    /// `NSLock` here deadlocked the first store access in the process — the app hung at launch
+    /// and the test suite stopped dead. Swift runs a `static let` initialiser exactly once and
+    /// thread-safely, which is all this needed.
+    private static let permissionsTightened: Bool = {
+        DispatchQueue.global(qos: .utility).async { makeOwnerOnly(resolvedBaseDirectory) }
+        return true
+    }()
+
+    /// Owner-only, once per launch: the folder and everything in it. `save` has set 0600 on each
+    /// file it writes since that was fixed, but files not written since — memories, skills,
+    /// watch items — stayed world-readable, and the folder itself was 0755.
+    static func makeOwnerOnly(_ directory: URL) {
+        let fm = FileManager.default
+        try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        guard let walker = fm.enumerator(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { return }
+        for case let url as URL in walker {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            if values?.isSymbolicLink == true { continue }
+            let mode: Int16 = values?.isDirectory == true ? 0o700 : 0o600
+            try? fm.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
+        }
     }
 
     /// Names a data folder to use instead of Application Support. For a deliberate test run

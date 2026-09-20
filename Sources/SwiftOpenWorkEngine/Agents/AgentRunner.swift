@@ -1276,7 +1276,8 @@ public final class AgentRunner {
                     toolName: toolName,
                     argumentsJson: argsJson,
                     settings: loadedSettings,
-                    sessionId: session.id
+                    sessionId: session.id,
+                    workspaceRoot: workspace.folderPath
                 ) {
                     callInfo.status = .waitingApproval
                     callInfo.approvalReason = reason
@@ -1818,6 +1819,12 @@ public final class AgentRunner {
         WebFetchAllowlist.shared.allow(host, for: sessionId)
     }
 
+    private static func jsonArguments(_ json: String) -> [String: Any] {
+        guard let data = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return dict
+    }
+
     private static func fetchURL(argumentsJson: String) -> URL? {
         guard let data = argumentsJson.data(using: .utf8),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -1829,11 +1836,20 @@ public final class AgentRunner {
         toolName: String,
         argumentsJson: String = "{}",
         settings: AppSettings,
-        sessionId: String = ""
+        sessionId: String = "",
+        workspaceRoot: String = ""
     ) -> String? {
         switch toolName {
         case "ask_user":
             return nil
+        case "file_read", "read_file", "document_extract", "extract_document", "read_pdf_or_image":
+            let args = jsonArguments(argumentsJson)
+            let path = ["path", "filename", "filepath", "file"].lazy.compactMap { args[$0] as? String }.first ?? ""
+            return SensitivePaths.reason(forReading: path, workspaceRoot: workspaceRoot)
+        case "grep", "search_code", "code_search":
+            let args = jsonArguments(argumentsJson)
+            let root = (args["path"] as? String) ?? (args["directory"] as? String) ?? ""
+            return SensitivePaths.reason(forSearchingUnder: root, workspaceRoot: workspaceRoot)
         case "fetch_url":
             return fetchApprovalReason(argumentsJson: argumentsJson, settings: settings, sessionId: sessionId)
         case "file_write", "write_file", "create_file", "save_file",
@@ -1861,6 +1877,12 @@ public final class AgentRunner {
         case "terminal_command", "run_command":
             if settings.terminalSafetyLevel == .alwaysAsk {
                 return "Runs a shell command on your Mac (Terminal Safety Level: Always Ask Confirmation)."
+            }
+            // Only where the command is constrained enough for a path check to mean something:
+            // under "Unrestricted" any program could read the same file another way.
+            if settings.terminalSafetyLevel == .safeOnly {
+                let command = (jsonArguments(argumentsJson)["command"] as? String) ?? ""
+                return SensitivePaths.reason(forShellCommand: command, workspaceRoot: workspaceRoot)
             }
             return nil
         default:
