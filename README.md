@@ -359,7 +359,20 @@ Select the **SwiftOpenWork** scheme → Build / Run.
 
 ### Swift Package Manager
 
-SwiftPM has to be pointed at the **Xcode** toolchain. If `xcode-select -p` reports
+SwiftPM has to be pointed at the **Xcode** toolchain. `Scripts/swift.sh` does that per
+invocation, so nothing global changes and no password is needed:
+
+```bash
+Scripts/swift.sh build
+Scripts/swift.sh run SwiftOpenWork
+Scripts/swift.sh test           # 846 tests, in two bundles
+Scripts/swift.sh test --filter WorkspaceContextTests
+```
+
+It takes the same arguments as `swift`. `source Scripts/swift-env.sh` does the same for a whole
+shell, for the commands below that call `swift` and `xcrun` directly.
+
+What it is working around: if `xcode-select -p` reports
 `/Library/Developer/CommandLineTools`, the Command Line Tools toolchain is used instead and the
 build dies early with `unknown argument: '-target-arch-variant'` — misleading, because nothing
 is wrong with the package.
@@ -388,11 +401,12 @@ temporary folder per test process (set `SWIFTOPENWORK_DATA_DIRECTORY` to point a
 at real data). The language-server integration tests use whichever servers are installed and
 skip the rest: the TypeScript, pyright, rust-analyzer and gopls tests run only when those servers are on `PATH`, and the in-process MLX shutdown tests only where their model is installed.
 
-`DEVELOPER_DIR` alone is not always enough. If `swift` on your `PATH` is a standalone toolchain —
-swiftly puts one in `~/.swiftly/bin`, and `swift --version` will say `swift-6.3-RELEASE` rather
-than naming a `swiftlang` build — it will be used against Xcode's SDK and crash in the frontend
-parsing `Accelerate.swiftmodule` (`type 'Quadrature.Error' does not conform to protocol 'Error'`).
-Use Xcode's own toolchain end to end:
+`DEVELOPER_DIR` alone is not always enough, which is the other half of what `Scripts/swift.sh`
+handles. If `swift` on your `PATH` is a standalone toolchain — swiftly puts one in
+`~/.swiftly/bin`, and `swift --version` will say `swift-6.3-RELEASE` rather than naming a
+`swiftlang` build — it will be used against Xcode's SDK and crash in the frontend parsing
+`Accelerate.swiftmodule` (`type 'Quadrature.Error' does not conform to protocol 'Error'`).
+The wrapper puts the selected toolchain's own `bin` first; by hand that is:
 
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
