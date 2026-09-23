@@ -950,10 +950,21 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 let existing = try String(contentsOfFile: fullPath, encoding: .utf8)
                 let count = existing.components(separatedBy: oldString).count - 1
                 if count == 0 {
+                    // Exact text missing: retry ignoring whitespace/indent/line-ending drift.
+                    if let m = EditMatcher.fuzzyMatch(old: oldString, new: newString, in: existing) {
+                        await FileCheckpointStore.shared.record(path: fullPath)
+                        let updated = existing.replacingCharacters(in: m.range, with: m.replacement)
+                        try updated.write(toFile: fullPath, atomically: true, encoding: .utf8)
+                        return ToolExecutionResult(
+                            success: true,
+                            output: "Updated \(path) (1 replacement; old_string matched after ignoring whitespace differences).",
+                            durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                        )
+                    }
                     return ToolExecutionResult(
                         success: false,
                         output: "",
-                        error: "edit_file: old_string not found in \(path)",
+                        error: "edit_file: old_string not found in \(path)." + EditMatcher.missHint(old: oldString, in: existing),
                         durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                     )
                 }

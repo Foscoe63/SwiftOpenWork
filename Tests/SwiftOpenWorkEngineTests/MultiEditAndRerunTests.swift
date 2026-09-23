@@ -42,7 +42,9 @@ final class MultiEditTests: XCTestCase {
         ], to: source)
 
         guard case .failure(let failure) = result else { return XCTFail("expected failure") }
-        XCTAssertEqual(failure, .notFound(index: 1, oldString: "let zzz = 9"))
+        guard case .notFound(let index, let old, _) = failure else { return XCTFail("expected notFound") }
+        XCTAssertEqual(index, 1)
+        XCTAssertEqual(old, "let zzz = 9")
         XCTAssertTrue(failure.message.contains("the file is unchanged"),
                       "a model told only that edit 2 failed would have to guess whether edit 1 landed")
     }
@@ -356,5 +358,13 @@ final class MultiEditToolTests: XCTestCase {
 
     func testCargoWithItsOwnLibtestArgumentsIsNotNarrowed() {
         XCTAssertNil(BuildDiagnostics.rerunCommand(baseCommand: "cargo test -- --nocapture", failures: [.init(name: "a")]))
+    }
+    func testWhitespaceDriftStillMatchesUniquely() throws {
+        let file = "struct A {\n    func f() {\n        let x = 1\n    }\n}\n"
+        let result = MultiEdit.apply([
+            .init(oldString: "\nfunc f() {\n    let x = 1\n}\n", newString: "\nfunc f() {\n    let x = 2\n}\n")
+        ], to: file)
+        let applied = try XCTUnwrap(try? result.get())
+        XCTAssertEqual(applied.contents, "struct A {\n    func f() {\n        let x = 2\n    }\n}\n")
     }
 }
