@@ -59,8 +59,8 @@ targets:
         # The About row used to hardcode "1.0.0" while the released tag was 1.1.0. With
         # GENERATE_INFOPLIST_FILE and no MARKETING_VERSION the bundle also reported 1.0, so
         # there was no single place that knew the version. Bump these on release.
-        MARKETING_VERSION: "1.3.3"
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "1.3.4"
+        CURRENT_PROJECT_VERSION: "7"
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
         INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 SwiftOpenWork. All rights reserved."
         INFOPLIST_KEY_CFBundleDisplayName: "SwiftOpenWork"

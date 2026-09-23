@@ -10,10 +10,10 @@ against this machine, not remembered.
 | SwiftOpenWork | `origin/main`; the module split, Swift 6 and test-host isolation landed in PR #18 | see *Verifying a change* |
 | GrizzyBot | yes, `ecce520` | 538 |
 
-Latest **published** release: **1.3.3 (build 6)**, notarised and stapled, installed in
-`/Applications` on 2026-09-19 — see *Notarisation works (2026-09-19)* below. It carries PR #22
-(element picking, screenshot to chat, errors on edits, workspace suggestions) and PR #26 (the
-sandbox symlink escape fix), and points the update checker at the renamed repository.
+Latest **published** release: **1.3.4 (build 7)**, notarised and stapled, installed in
+`/Applications` on 2026-09-19 — see *Notarisation works (2026-09-19)* below. It carries PR #27
+(`fetch_url` asks per site; chat history saved off the main thread), #29 (sub-agents go through
+approval) and #30 (the safe-command allowlist no longer runs code or writes files).
 
 > **The GitHub repository was renamed `Foscoe63/SwiftOpenWork` on 2026-09-19** (was
 > `Foscoe63/OpenWork-swift`). GitHub redirects the old URLs, including the API URL that 1.3.2 and
@@ -1309,6 +1309,13 @@ with `defaults export io.github.foscoe63.SwiftOpenWork` first and import it afte
   `a54bd1a42e6f8726e275b09e2aa52586bb85c8f76985c06a735a0a5ad45feb46`. Installed over 1.3.2 in
   `/Applications`. The release tests (`RenameToSwiftOpenWorkTests`, `UpdateCheckerTests`,
   `SandboxContainmentTests`) ran in the worktree before the build.
+- **1.3.4 (build 7), 2026-09-19:** built from `main` at `64dbb4f` (PR #30 merged) plus the
+  version bump. A first 1.3.4 build from `3e3e8a8` was notarised and then discarded unpublished,
+  so the release would not ship the allowlist hole #30 closes. Submission
+  `89eda58f-42c2-4df0-b383-2f726e84e2ab`, Accepted and stapled; `spctl` reports
+  `Notarized Developer ID`. Zip 52.9MB, sha256
+  `2d216a61aaf44cde8966b2470a6d22e73f5f72e0953f9f82865cac9434bbecbe`. Installed over 1.3.3 in
+  `/Applications`.
 
 ## The vibe-coding loop: new projects and saving progress (2026-09-19)
 
