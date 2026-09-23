@@ -201,6 +201,11 @@ public final class AppState: ObservableObject {
     private var lastStreamingSessionSave = Date.distantPast
     /// Follow-up typed while a turn is running — sent automatically when the turn finishes.
     @Published public var queuedFollowUp: QueuedComposerMessage?
+    /// Consecutive automatic Continues sent for a session, by session id. Reset whenever the user
+    /// sends anything themselves; capped in `maybeAutoContinue` so a stuck turn surfaces the
+    /// ordinary Continue button instead of looping unattended forever.
+    private var autoContinueChainCounts: [String: Int] = [:]
+    private static let autoContinueChainCap = 5
     /// Set by tool cards when the user wants the turn-change sheet; ChatView observes it.
     @Published public var presentTurnChangeReview: Bool = false
     /// Messages in the current session whose turn can be rewound. Held as a set so the transcript
@@ -901,6 +906,13 @@ public final class AppState: ObservableObject {
             return
         }
 
+        // Anything the user actually chose to send resets the auto-continue chain — only a run
+        // of turns this method itself generated (the exact auto-continue prompt, sent because
+        // nothing else did) should ever count against the cap.
+        if trimmed != AutoContinuePolicy.continuePrompt {
+            autoContinueChainCounts[session.id] = 0
+        }
+
         // Handle slash commands
         if trimmed.hasPrefix("/") {
             if handleSlashCommand(trimmed) {
@@ -1058,9 +1070,41 @@ public final class AppState: ObservableObject {
                 self.refreshLoadedMLXModels()
                 self.announceTurnFinished()
                 self.refreshRestorePoints()
-                self.flushQueuedFollowUp()
+                // A follow-up the user actually queued outranks resuming on our own — it is
+                // newer instructions, not just "keep going."
+                if self.queuedFollowUp != nil {
+                    self.flushQueuedFollowUp()
+                } else {
+                    self.maybeAutoContinue(sessionId: session.id)
+                }
             }
         }
+    }
+
+    /// Send another Continue on the model's behalf when a turn ended without finishing and
+    /// without asking the user anything — see `AutoContinuePolicy`.
+    private func maybeAutoContinue(sessionId: String) {
+        guard settings.autoContinueUntilDone else { return }
+        guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
+        guard let last = session.messages.last(where: { $0.role == .assistant }), !last.isError else { return }
+        let pendingTodos = session.todos.contains { $0.status != .done }
+        guard AutoContinuePolicy.shouldAutoContinue(
+            haltReason: last.haltReason,
+            finalText: last.content,
+            pendingTodos: pendingTodos
+        ) else {
+            autoContinueChainCounts[sessionId] = 0
+            return
+        }
+        let count = autoContinueChainCounts[sessionId] ?? 0
+        guard count < Self.autoContinueChainCap else {
+            // Capped, not disabled: the ordinary halt UI (and a plain "Continue" from the user)
+            // is what breaks a chain that never actually finishes.
+            autoContinueChainCounts[sessionId] = 0
+            return
+        }
+        autoContinueChainCounts[sessionId] = count + 1
+        sendMessage(text: AutoContinuePolicy.continuePrompt)
     }
 
 
@@ -1101,7 +1145,7 @@ public final class AppState: ObservableObject {
     }
 
     public func continueAfterHalt() {
-        sendMessage(text: "Continue from where you stopped. Do not repeat completed work.")
+        sendMessage(text: AutoContinuePolicy.continuePrompt)
     }
 
     /// Jump to a `file:line` from a build or test failure.
