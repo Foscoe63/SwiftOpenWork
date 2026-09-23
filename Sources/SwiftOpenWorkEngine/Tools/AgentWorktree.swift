@@ -137,6 +137,100 @@ public enum AgentWorktree {
         return Info(path: dir.path, branch: branch, head: head.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// What `seedWithUncommittedChanges` did.
+    public struct Seed: Sendable, Equatable {
+        /// The commit the worktree now starts from: a snapshot of the parent's uncommitted state,
+        /// or the unchanged HEAD when there was nothing to copy.
+        public var head: String
+        public var copiedChanges: Bool
+        /// Set when the parent's state could not be reproduced, saying what is missing.
+        public var problem: String?
+    }
+
+    /// Bring the parent checkout's uncommitted work into a fresh worktree, as one commit.
+    ///
+    /// `git worktree add` starts from the last commit, so a sub-agent working for someone with
+    /// uncommitted changes edited the files as they were *before* those changes. A real run had 56
+    /// modified files in the parent — the very files it was asked to change among them — and the
+    /// sub-agent's edits were against versions the user no longer had, unmergeable by construction.
+    /// Tracked changes are applied as a patch and untracked files copied, then committed so
+    /// `git status` in the worktree shows only what the sub-agent itself changed.
+    public static func seedWithUncommittedChanges(
+        worktree: Info,
+        workspacePath: String,
+        maxUntrackedFiles: Int = 2_000,
+        maxUntrackedBytes: Int = 50_000_000
+    ) async -> Seed {
+        let unchanged = Seed(head: worktree.head, copiedChanges: false, problem: nil)
+        guard let root = try? await repositoryRoot(containing: workspacePath) else { return unchanged }
+        let target = URL(fileURLWithPath: worktree.path)
+        var problems: [String] = []
+        var copied = false
+
+        // `git diff --quiet` exits non-zero when there are changes. Checked separately because
+        // `git` decodes output as UTF-8 and returns "" for anything else, which would otherwise
+        // read as "nothing to copy" and leave the worktree silently stale.
+        let hasTrackedChanges = (try? await git(["diff", "HEAD", "--quiet", "--ignore-submodules"], in: root)) == nil
+        let patch = (try? await git(["diff", "HEAD", "--binary", "--ignore-submodules"], in: root)) ?? ""
+        if hasTrackedChanges && patch.isEmpty {
+            problems.append("your uncommitted edits to tracked files could not be read as a patch")
+        }
+        if !patch.isEmpty {
+            let file = FileManager.default.temporaryDirectory
+                .appendingPathComponent("agent-seed-\(UUID().uuidString).patch")
+            do {
+                try patch.write(to: file, atomically: true, encoding: .utf8)
+                defer { try? FileManager.default.removeItem(at: file) }
+                try await git(["apply", "--whitespace=nowarn", file.path], in: target)
+                copied = true
+            } catch {
+                problems.append("your uncommitted edits to tracked files could not be applied")
+            }
+        }
+
+        if let listing = try? await git(["ls-files", "--others", "--exclude-standard", "-z"], in: root) {
+            let paths = listing.split(separator: "\0").map(String.init).filter { !$0.isEmpty }
+            var bytes = 0
+            var skipped = 0
+            for (index, relative) in paths.enumerated() {
+                let source = root.appendingPathComponent(relative)
+                let size = (try? FileManager.default.attributesOfItem(atPath: source.path)[.size] as? Int) ?? 0
+                guard index < maxUntrackedFiles, bytes + size <= maxUntrackedBytes else {
+                    skipped += 1
+                    continue
+                }
+                let destination = target.appendingPathComponent(relative)
+                try? FileManager.default.createDirectory(
+                    at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+                )
+                if (try? FileManager.default.copyItem(at: source, to: destination)) != nil {
+                    bytes += size
+                    copied = true
+                }
+            }
+            if skipped > 0 {
+                problems.append("\(skipped) untracked file(s) were too many or too large to copy")
+            }
+        }
+
+        guard copied else {
+            return Seed(head: worktree.head, copiedChanges: false, problem: problems.first)
+        }
+        do {
+            try await git(["add", "-A"], in: target)
+            try await git([
+                "-c", "user.name=\(AppIdentity.displayName)", "-c", "user.email=agent@localhost",
+                "commit", "-q", "--no-verify", "-m", "Snapshot of uncommitted changes in the parent checkout",
+            ], in: target)
+            let head = try await git(["rev-parse", "--short", "HEAD"], in: target)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return Seed(head: head, copiedChanges: true, problem: problems.isEmpty ? nil : problems.joined(separator: "; "))
+        } catch {
+            return Seed(head: worktree.head, copiedChanges: true,
+                        problem: "the copied changes could not be committed, so they will show as the sub-agent's own")
+        }
+    }
+
     public static func list(workspacePath: String) async throws -> [Info] {
         let root = try await repositoryRoot(containing: workspacePath)
         let output = try await git(["worktree", "list", "--porcelain"], in: root)

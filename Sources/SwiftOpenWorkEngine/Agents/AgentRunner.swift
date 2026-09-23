@@ -14,6 +14,11 @@ public final class AgentStreamAccumulator {
     /// Where the current ReAct iteration's output starts. The loop check looks only past these.
     private var textIterationStart = 0
     private var reasoningIterationStart = 0
+    /// Stretches of `fullText` moved to Reasoning because tools followed them. Kept, rather than
+    /// applied once, because every later render starts again from `fullText`: `finalize` used to
+    /// re-publish the whole of it, so each hidden "Let me examine…" came back at the end of the
+    /// turn — seven copies of the same heading in one reply.
+    private var hiddenRanges: [Range<Int>] = []
 
     public init(initialMessage: ChatMessage, onUpdate: @escaping (ChatMessage) -> Void) {
         self.message = initialMessage
@@ -290,7 +295,7 @@ public final class AgentStreamAccumulator {
 
     /// Split leaked model thinking out of the visible bubble; keep raw `fullText` for tool parsing.
     private func publishVisibleContent() {
-        var split = AssistantContentSanitizer.splitThinking(from: fullText)
+        var split = AssistantContentSanitizer.splitThinking(from: visibleSourceText)
         split.thinking = AssistantContentSanitizer.stripControlTokens(split.thinking)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !split.thinking.isEmpty {
@@ -305,6 +310,22 @@ public final class AgentStreamAccumulator {
             message.thinkingTimeMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
         }
         message.content = AssistantContentSanitizer.sanitizeVisible(split.visible)
+    }
+
+    /// `fullText` without the narration hidden so far.
+    private var visibleSourceText: String {
+        guard !hiddenRanges.isEmpty else { return fullText }
+        var out = ""
+        var cursor = 0
+        let characters = Array(fullText)
+        for range in hiddenRanges.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            let lower = min(max(range.lowerBound, cursor), characters.count)
+            let upper = min(range.upperBound, characters.count)
+            if lower > cursor { out += String(characters[cursor..<lower]) }
+            cursor = max(cursor, upper)
+        }
+        if cursor < characters.count { out += String(characters[cursor...]) }
+        return out
     }
 
     public func cleanToolCallSyntax(from rawText: String) -> String {
@@ -385,17 +406,20 @@ public final class AgentStreamAccumulator {
             message.reasoning = fullReasoning
             message.thinkingTimeMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
         }
-        // Show only content from before this turn until the final answer lands.
-        let prior = String(fullText.prefix(beforeLength))
-        let priorSplit = AssistantContentSanitizer.splitThinking(from: prior)
-        message.content = AssistantContentSanitizer.sanitizeVisible(priorSplit.visible)
+        // Show only content from before this step until the final answer lands, and keep it
+        // hidden when the turn is re-rendered later.
+        hiddenRanges.append(beforeLength..<fullText.count)
+        publishVisibleContent()
         onUpdate(message)
     }
 
-    /// Sanitized text suitable for feeding back as an intermediate assistant message.
-    public var sanitizedFullText: String {
-        let split = AssistantContentSanitizer.splitThinking(from: fullText)
-        return AssistantContentSanitizer.sanitizeVisible(split.visible)
+    /// What one step of the turn said, starting at `offset` in `fullText`, sanitized for feeding
+    /// back to the model as that step's assistant message.
+    ///
+    /// This used to be the whole turn's text, fed back after every step, so by step eight the
+    /// model was shown its own opening paragraph eight times — and repeated it.
+    public func stepText(from offset: Int) -> String {
+        cleanToolCallSyntax(from: String(fullText.dropFirst(offset)))
     }
 }
 
@@ -744,7 +768,8 @@ public final class AgentRunner {
         onSubAgentTaskCreated: @escaping (SubAgentTask) -> Void,
         onSubAgentTaskUpdated: @escaping (SubAgentTask) -> Void,
         onInterAgentMessage: @escaping (AgentMessage) -> Void,
-        onSessionTodosUpdated: (([SessionTodoItem]) -> Void)? = nil
+        onSessionTodosUpdated: (([SessionTodoItem]) -> Void)? = nil,
+        onModelContextUpdated: ((ModelContextSnapshot) -> Void)? = nil
     ) async {
         // The chat composer's "Reasoning" pill overrides the agent's own configured effort for
         // this turn when set; nil (no override) preserves the agent's own setting.
@@ -897,7 +922,10 @@ public final class AgentRunner {
         }
         let teamSection = (inventoryPrompt || !canDelegate)
             ? ""
-            : Self.teamPromptSection(agent: agent, allAgents: allAgents, provider: provider)
+            : Self.teamPromptSection(
+                agent: agent, allAgents: allAgents, provider: provider,
+                budget: (steps: max(1, loadedSettings.subAgentStepBudget), minutes: max(1, loadedSettings.subAgentTimeoutMinutes))
+            )
 
         // Undo is scoped to one turn, so the window opens here rather than at session start.
         await FileCheckpointStore.shared.beginTurn(label: session.id)
@@ -937,7 +965,11 @@ public final class AgentRunner {
         }
 
         var iteration = 0
-        var workingMessages = session.messages
+        // Continue from the transcript the model saw last turn, so the local engine's cache
+        // extends it instead of re-reading the whole conversation (see `Session.modelHistory`).
+        var workingMessages = session.modelHistory()
+        // The last step's reply, when the turn ended on an answer rather than on tool calls.
+        var finalStepText: String?
 
         var turnPromptTokens = 0
         var turnCompletionTokens = 0
@@ -954,6 +986,8 @@ public final class AgentRunner {
         var warnedMcpStall = false
         /// Consecutive failures per (tool, arguments) pair, for `identicalFailureLimit`.
         var repeatedFailures: [String: Int] = [:]
+        /// Successful file reads this turn, by call signature, for `unchangedReadNote`.
+        var readLog: [String: RecordedRead] = [:]
         var mcpDisabledThisTurn = false
 
         // Promotion is turn-scoped: a catalog harvested against an earlier server set must not
@@ -1140,6 +1174,18 @@ public final class AgentRunner {
                 // Say so. A silently truncated repetitive answer looks like the model simply
                 // stopped, and the user has no way to know the app cut it off or why.
                 accumulator.appendNotice("Stopped: the model was repeating itself.")
+                // The repeated text was left as the reply, and nothing said what the turn had
+                // done or how to go on: a thirty-minute turn ended on its own looping narration.
+                // It moves to Reasoning, and the halt offers Continue from the tool results.
+                accumulator.hideTurnNarration(beforeLength: turnTextBefore.count)
+                let ran = accumulator.message.toolCalls.count
+                accumulator.setHalt(
+                    reason: "repetition",
+                    text: "The model started repeating itself, so this turn was cut off"
+                        + (ran > 0 ? " after \(ran) tool call(s)" : "")
+                        + ". Press Continue to resume from where it got to."
+                )
+                halted = true
                 break
             }
 
@@ -1156,6 +1202,7 @@ public final class AgentRunner {
 
             // Inventory questions should be one-shot answers — never enter a tool loop.
             if inventoryPrompt {
+                finalStepText = accumulator.stepText(from: turnTextBefore.count)
                 finishedNaturally = true
                 break
             }
@@ -1234,9 +1281,17 @@ public final class AgentRunner {
                             Do not write more prose before the tool call.
                             """
                         )
+                        // What it said goes in first, or the nudge answers a message the model
+                        // is never shown.
+                        workingMessages.append(ChatMessage(
+                            sessionId: session.id,
+                            role: .assistant,
+                            content: accumulator.stepText(from: turnTextBefore.count)
+                        ))
                         workingMessages.append(nudgeMsg)
                         continue
                     } else {
+                        finalStepText = accumulator.stepText(from: turnTextBefore.count)
                         finishedNaturally = true
                         break
                     }
@@ -1247,9 +1302,28 @@ public final class AgentRunner {
             // used to grow mid-loop, when the mail chaining appended follow-up calls the model had
             // not asked for; that was removed, so what the model emitted is all that runs.
             if !pendingCallsToExecute.isEmpty {
+                // The step as the model produced it: its text, then the calls it made. Results
+                // follow, each answering its call by id. This used to be appended *after* the
+                // results and held the whole turn's text, so the model read its narration out of
+                // order and once more per step.
+                workingMessages.append(ChatMessage(
+                    sessionId: session.id,
+                    role: .assistant,
+                    content: accumulator.stepText(from: turnTextBefore.count),
+                    toolCalls: pendingCallsToExecute.map {
+                        ToolCallInfo(
+                            id: $0.id,
+                            toolName: $0.tool,
+                            argumentsJson: Self.sanitizeToolArgumentsJson(toolName: $0.tool, argumentsJson: $0.args)
+                        )
+                    }
+                ))
                 // Hide "Let me check…" preamble once tools are underway.
                 accumulator.hideTurnNarration(beforeLength: turnTextBefore.count)
             }
+            // Notes for the model that arise while tools run. They wait until every result is in:
+            // a message between a call's results breaks the call/result pairing providers require.
+            var notesAfterResults: [ChatMessage] = []
             var stopToolLoop = false
             let toolQueue = pendingCallsToExecute
             var queueIndex = 0
@@ -1327,7 +1401,7 @@ public final class AgentRunner {
                     accumulator.addToolCall(callInfo)
                 }
 
-                let signature = toolName + argsJson
+                let signature = Self.callSignature(toolName, argsJson)
                 let repeatCount = (identicalToolCounts[signature] ?? 0) + 1
                 identicalToolCounts[signature] = repeatCount
 
@@ -1394,6 +1468,12 @@ public final class AgentRunner {
                             host.showToast("Plan mode exited")
                         }
                         resultOutput = "Plan mode exited."
+                    } else if let note = Self.unchangedReadNote(
+                        toolName: toolName, argumentsJson: argsJson, workspaceRoot: workspace.folderPath,
+                        log: readLog, transcript: workingMessages
+                    ) {
+                        resultOutput = note
+                        accumulator.appendNotice("Skipped re-reading an unchanged file.")
                     } else if let priorFailures = repeatedFailures[Self.callSignature(toolName, argsJson)],
                               priorFailures >= Self.identicalFailureLimit {
                         // Refuse to run a call that has already failed identically.
@@ -1500,6 +1580,15 @@ public final class AgentRunner {
                     }
                 }
 
+                // Remember real reads only; a skipped one points back at the read it stands for.
+                if resultSuccess, Self.canonicalToolName(toolName) == "file_read",
+                   !resultOutput.hasPrefix("Unchanged since"),
+                   let path = Self.readTarget(argumentsJson: argsJson, workspaceRoot: workspace.folderPath) {
+                    readLog[Self.callSignature(toolName, argsJson)] = RecordedRead(
+                        callId: callId, modified: Self.modificationDate(path), step: iteration
+                    )
+                }
+
                 // Track identical failures so the branch above can refuse the third one.
                 let repeatKey = Self.callSignature(toolName, argsJson)
                 if resultSuccess {
@@ -1574,7 +1663,7 @@ public final class AgentRunner {
                         let names = newcomers.prefix(8).map(\.injectName).joined(separator: ", ")
                         let more = newcomers.count > 8 ? " (+\(newcomers.count - 8) more)" : ""
                         accumulator.appendNotice("Promoted \(newcomers.count) \(server.name) tools to direct calls.")
-                        workingMessages.append(
+                        notesAfterResults.append(
                             ChatMessage(
                                 sessionId: session.id,
                                 role: .user,
@@ -1611,6 +1700,7 @@ public final class AgentRunner {
             if stopToolLoop {
                 break
             }
+            workingMessages.append(contentsOf: notesAfterResults)
 
             // MCP escalation. Repeating a call that cannot succeed is the most common way a turn
             // burns its whole step budget, so warn once, then take the tools away.
@@ -1646,14 +1736,6 @@ public final class AgentRunner {
                 ))
             }
 
-            // Append assistant intermediate progress to context so next turn is fully continuous
-            let intermediateAssistantMsg = ChatMessage(
-                sessionId: session.id,
-                role: .assistant,
-                content: accumulator.sanitizedFullText
-            )
-            workingMessages.append(intermediateAssistantMsg)
-
             // Do not dump raw tool JSON/text into the user-facing chat bubble.
             // The tool observations are already fed back to the LLM in workingMessages as role: .tool / user observation,
             // allowing the LLM to read the result and write a clean, user-friendly natural language response.
@@ -1665,6 +1747,17 @@ public final class AgentRunner {
                 text: "Reached the autonomous round cap (\(maxIterations)). Press Continue to keep going from here."
             )
         }
+
+        var modelContext = workingMessages
+        if let finalStepText {
+            modelContext.append(ChatMessage(
+                id: assistantMsgId, sessionId: session.id, role: .assistant, content: finalStepText
+            ))
+        }
+        onModelContextUpdated?(ModelContextSnapshot(
+            coveredMessageIds: session.messages.map(\.id) + [assistantMsgId],
+            messages: modelContext
+        ))
 
         accumulator.finalize()
     }
@@ -1700,7 +1793,12 @@ public final class AgentRunner {
     /// so it could only guess ids. "Auto-Delegate Complex Tasks" — a toggle nothing read — now
     /// decides whether the agent is encouraged to hand off separable work or only does so when
     /// asked.
-    public nonisolated static func teamPromptSection(agent: Agent, allAgents: [Agent], provider: ModelProvider) -> String {
+    public nonisolated static func teamPromptSection(
+        agent: Agent,
+        allAgents: [Agent],
+        provider: ModelProvider,
+        budget: (steps: Int, minutes: Int)? = nil
+    ) -> String {
         let team = agent.subAgentIds.compactMap { id in allAgents.first { $0.id == id } }
         let members = team.isEmpty
             ? allAgents.filter { $0.id != agent.id }
@@ -1721,6 +1819,13 @@ public final class AgentRunner {
         let localCost = provider.type == .local
             ? " This session runs on a local model, so sub-agents run one at a time and each costs a full prompt re-read: delegate sparingly."
             : ""
+        // A lead that did not know this handed ten features to one sub-agent with an 8-step,
+        // 10-minute budget, twice, and got nothing back either time.
+        let limits = budget.map {
+            "\nEach sub-agent gets \($0.steps) steps and \($0.minutes) minutes, then is stopped mid-task. "
+                + "Delegate one self-contained change per agent_spawn, never a list of features."
+                + " Its report is its own account: verify what matters (a file it says it wrote, a claim about the code) before telling the user."
+        } ?? ""
         return """
 
         ### Your team
@@ -1728,7 +1833,7 @@ public final class AgentRunner {
         \(when)
         A sub-agent runs unattended with its own tools, in an isolated git worktree when the workspace \
         is a repository, and its report comes back as the tool result. Changes it makes stay on its \
-        branch until merged; say so rather than claiming they are in the user's checkout.\(localCost)
+        branch until merged; say so rather than claiming they are in the user's checkout.\(localCost)\(limits)
         """
     }
 
@@ -1744,9 +1849,132 @@ public final class AgentRunner {
     /// identical attempt is a loop, not a strategy.
     public static let identicalFailureLimit = 2
 
-    /// Identity of a tool call for repeat detection: the tool and its exact arguments.
-    public static func callSignature(_ toolName: String, _ argumentsJson: String) -> String {
-        "\(toolName)\u{1}\(argumentsJson.trimmingCharacters(in: .whitespacesAndNewlines))"
+    /// Identity of a tool call for repeat detection: the tool and what its arguments mean.
+    ///
+    /// This compared raw strings, which a model defeats without trying: a real run read the same
+    /// script eleven times across two turns by alternating `file_read` and `read_file` and
+    /// reordering the keys, so no count ever reached the breaker's first nudge. Aliases of one tool
+    /// share a name here, keys are sorted, the path-key spellings `ToolExecutionEngine` accepts
+    /// collapse to `path`, and whole-number strings compare equal to the number.
+    public nonisolated static func callSignature(_ toolName: String, _ argumentsJson: String) -> String {
+        let name = canonicalToolName(toolName)
+        let trimmed = argumentsJson.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let dict = object as? [String: Any] else {
+            return "\(name)\u{1}\(trimmed)"
+        }
+        var normalized: [String: Any] = [:]
+        for (key, value) in dict {
+            let canonicalKey = ["filename", "filepath", "file", "file_path"].contains(key) ? "path" : key
+            normalized[canonicalKey] = normalizedArgument(value)
+        }
+        guard JSONSerialization.isValidJSONObject(normalized),
+              let out = try? JSONSerialization.data(withJSONObject: normalized, options: [.sortedKeys]),
+              let text = String(data: out, encoding: .utf8) else {
+            return "\(name)\u{1}\(trimmed)"
+        }
+        return "\(name)\u{1}\(text)"
+    }
+
+    private nonisolated static func normalizedArgument(_ value: Any) -> Any {
+        if let string = value as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let number = ToolExecutionEngine.intArgument(trimmed) { return number }
+            return trimmed
+        }
+        if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+           let int = ToolExecutionEngine.intArgument(number.doubleValue) {
+            return int
+        }
+        if let dict = value as? [String: Any] { return dict.mapValues(normalizedArgument) }
+        if let list = value as? [Any] { return list.map(normalizedArgument) }
+        return value
+    }
+
+    /// One name per tool, whichever alias the model used. Mirrors the alias groups
+    /// `ToolExecutionEngine` dispatches on; a name not listed is its own canonical name.
+    public nonisolated static func canonicalToolName(_ name: String) -> String {
+        let lower = name.lowercased()
+        return toolAliases[lower] ?? lower
+    }
+
+    private nonisolated static let toolAliases: [String: String] = {
+        let groups: [[String]] = [
+            ["file_read", "read_file"],
+            ["file_write", "write_file", "create_file", "save_file"],
+            ["find_symbol", "symbol_search"],
+            ["grep", "search_code", "code_search"],
+            ["glob", "find_files"],
+            ["file_list", "list_files", "list_directory", "ls", "dir"],
+            ["file_copy", "copy_file", "cp"],
+            ["file_move", "move_file", "mv"],
+            ["file_delete", "delete_file", "rm"],
+            ["terminal_command", "run_command"],
+            ["edit_file", "file_edit"],
+            ["multi_edit", "edit_file_multi"],
+            ["get_current_date", "get_date", "current_date", "date"],
+            ["document_extract", "extract_document", "read_pdf_or_image"],
+            ["workspace_semantic_search", "search_workspace"],
+            ["screenshot_window", "screenshot_app"],
+            ["accessibility_tree", "ui_tree", "inspect_window"],
+            ["run_app", "launch_app"],
+            ["mcp_call", "call_mcp_tool"],
+        ]
+        var map: [String: String] = [:]
+        for group in groups {
+            for alias in group.dropFirst() { map[alias] = group[0] }
+        }
+        return map
+    }()
+
+    /// A file read that succeeded this turn.
+    public struct RecordedRead: Sendable, Equatable {
+        public var callId: String
+        public var modified: Date?
+        public var step: Int
+    }
+
+    /// A short answer in place of re-reading a file the model already has, or nil to read it.
+    ///
+    /// The stuck breaker only nudged, and nudges were ignored: one turn read the same 12-line
+    /// script six more times after "try a different approach", each copy re-sent and re-read by
+    /// the model. When the identical read already succeeded this turn, the file has not changed
+    /// since, and that earlier result is still in the transcript unfolded, the contents are
+    /// already in front of the model — so say so instead of sending them again.
+    public nonisolated static func unchangedReadNote(
+        toolName: String,
+        argumentsJson: String,
+        workspaceRoot: String,
+        log: [String: RecordedRead],
+        transcript: [ChatMessage]
+    ) -> String? {
+        guard canonicalToolName(toolName) == "file_read",
+              let earlier = log[callSignature(toolName, argumentsJson)],
+              let path = readTarget(argumentsJson: argumentsJson, workspaceRoot: workspaceRoot),
+              modificationDate(path) == earlier.modified,
+              let result = transcript.last(where: { $0.role == .tool && $0.id == earlier.callId }),
+              !result.content.hasPrefix("[Earlier tool result compacted]") else { return nil }
+        return "Unchanged since you read it at step \(earlier.step) of this turn — the full result of that read is "
+            + "above and is still current. Use it instead of reading the file again; to see other lines, "
+            + "pass a different offset/limit."
+    }
+
+    /// The absolute path a `file_read` call targets.
+    public nonisolated static func readTarget(argumentsJson: String, workspaceRoot: String) -> String? {
+        guard let data = argumentsJson.data(using: .utf8),
+              let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        for key in ["path", "filename", "filepath", "file", "file_path"] {
+            if let raw = dict[key] as? String, !raw.isEmpty {
+                let expanded = (raw as NSString).expandingTildeInPath
+                return expanded.hasPrefix("/") ? expanded : (workspaceRoot as NSString).appendingPathComponent(expanded)
+            }
+        }
+        return nil
+    }
+
+    nonisolated static func modificationDate(_ path: String) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
     }
 
     /// Internal rather than private so tests can prove a newly added writing tool is blocked here.

@@ -13,17 +13,17 @@ public struct DashboardView: View {
         appState.sessions.reduce(0) { $0 + $1.messages.count }
     }
 
+    // Both totals below read `Session.totalPromptTokens`/`totalCompletionTokens` and
+    // `estimatedCost`, which `recordActivity(providers:)` sets from each message's real token
+    // count and the session's model's real per-1k price — not a character-count guess priced at
+    // one flat rate for every provider, which is what this used to show regardless of whether the
+    // session ran on a free local model or a paid cloud one.
     private var totalEstimatedTokens: Int {
-        appState.sessions.reduce(0) { sessionAcc, session in
-            sessionAcc + session.messages.reduce(0) { msgAcc, msg in
-                msgAcc + (msg.content.count / 4) + ((msg.reasoning?.count ?? 0) / 4)
-            }
-        }
+        appState.sessions.reduce(0) { $0 + $1.totalPromptTokens + $1.totalCompletionTokens }
     }
 
     private var estimatedCost: Double {
-        // Assume rough average of $0.002 per 1k tokens for cloud, $0 for local
-        Double(totalEstimatedTokens) / 1000.0 * 0.0015
+        appState.sessions.reduce(0) { $0 + $1.estimatedCost }
     }
 
     public var body: some View {

@@ -926,10 +926,12 @@ public final class AppState: ObservableObject {
 
         session.messages.append(userMsg)
         
-        // Auto rename session title on first message
-        if session.messages.filter({ $0.role == .user }).count == 1 {
+        // Name the session after its first real message; slash commands do not count.
+        if Session.isTitleCandidate(trimmed),
+           session.messages.filter({ $0.role == .user && Session.isTitleCandidate($0.content) }).count == 1 {
             session.title = String(trimmed.prefix(35))
         }
+        session.recordActivity(providers: providers)
 
         if let idx = sessions.firstIndex(where: { $0.id == session.id }) {
             sessions[idx] = session
@@ -992,6 +994,9 @@ public final class AppState: ObservableObject {
                         } else {
                             self.sessions[sIdx].messages.append(updatedMsg)
                         }
+                        if !updatedMsg.isStreaming {
+                            self.sessions[sIdx].recordActivity(providers: self.providers)
+                        }
                         // Every streamed chunk lands here. Saving each one rewrote all chat
                         // history tens of times a second; once a second is enough while it
                         // streams, and the finished message is always saved.
@@ -1030,6 +1035,11 @@ public final class AppState: ObservableObject {
                 onSessionTodosUpdated: { [weak self] todos in
                     guard let self = self else { return }
                     self.updateSessionTodos(todos, sessionId: session.id)
+                },
+                onModelContextUpdated: { [weak self] snapshot in
+                    guard let self = self,
+                          let sIdx = self.sessions.firstIndex(where: { $0.id == session.id }) else { return }
+                    self.sessions[sIdx].modelContext = snapshot
                 }
             )
 

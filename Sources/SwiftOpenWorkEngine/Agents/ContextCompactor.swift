@@ -16,16 +16,24 @@ public enum ContextCompactor {
     ///
     /// Recent results are what the next step reasons about; older ones have usually already been
     /// acted on and only their existence still matters.
-    public static func foldOldToolResults(_ messages: [ChatMessage], keepLast: Int = 4) -> [ChatMessage] {
+    ///
+    /// Folding rewrites history, and the local engine's cache can only continue a transcript that
+    /// extends what it has seen — so every fold costs a full re-prefill. Folding one result per
+    /// step, as a sliding window did, paid that on every step once four results existed: a real
+    /// run logged "Context cache reset: history diverged" fifteen times in one turn. Folds now
+    /// wait until `batch` results are due and then take them all, so the cache survives the
+    /// steps in between.
+    public static func foldOldToolResults(_ messages: [ChatMessage], keepLast: Int = 4, batch: Int = 4) -> [ChatMessage] {
         var toolIndices: [Int] = []
         for (i, m) in messages.enumerated() where m.role == .tool {
             toolIndices.append(i)
         }
         guard toolIndices.count > keepLast else { return messages }
 
-        let foldSet = Set(toolIndices.dropLast(keepLast))
+        let foldSet = Set(toolIndices.dropLast(keepLast).filter { messages[$0].content.count > 500 })
+        guard foldSet.count >= max(1, batch) else { return messages }
         return messages.enumerated().map { i, m in
-            guard foldSet.contains(i), m.role == .tool, m.content.count > 500 else { return m }
+            guard foldSet.contains(i) else { return m }
             var copy = m
             let preview = String(m.content.prefix(180)).replacingOccurrences(of: "\n", with: " ")
             copy.content = "[Earlier tool result compacted] \(preview)…"

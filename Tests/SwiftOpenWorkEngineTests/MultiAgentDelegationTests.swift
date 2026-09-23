@@ -90,6 +90,17 @@ final class MultiAgentDelegationTests: XCTestCase {
         XCTAssertTrue(result.error?.contains("needs target_agent_id") ?? false, result.error ?? "")
     }
 
+    /// A `tools.json` saved before `target_agent_id` existed kept offering `subagent_id`, because
+    /// saved schemas were only ever filled when empty. The model followed it and every spawn failed.
+    func testASavedStaleSchemaIsReplacedByTheCatalogs() throws {
+        let stale = #"{"type":"object","properties":{"task_title":{"type":"string"},"subagent_id":{"type":"string"}},"required":["task_title"]}"#
+        var tools = [Tool(id: "agent_spawn", name: "agent_spawn", displayName: "", description: "", category: .agents, parametersJsonSchema: stale)]
+        XCTAssertTrue(ToolSchemaCatalog.applySchemas(to: &tools))
+        XCTAssertEqual(tools[0].parametersJsonSchema, ToolSchemaCatalog.schemaJSON(for: "agent_spawn"))
+        XCTAssertTrue(tools[0].parametersJsonSchema.contains("target_agent_id"))
+        XCTAssertFalse(ToolSchemaCatalog.applySchemas(to: &tools), "an up-to-date schema is not rewritten")
+    }
+
     func testAnAgentCannotSpawnItself() async {
         let result = await spawn(["target_agent_id": "research-agent", "task_title": "x"],
                                  as: Agent(id: "research-agent", name: "Research"))
@@ -106,6 +117,22 @@ final class MultiAgentDelegationTests: XCTestCase {
         let result = await spawn(["target_agent_id": "research-agent", "task_title": "x"], as: deep, depth: 1)
         XCTAssertFalse(result.success)
         XCTAssertTrue(result.error?.contains("depth limit") ?? false, result.error ?? "")
+    }
+
+    /// The sub-agent step budget and time limit were a hard-coded 8 steps and 300 seconds. They
+    /// are settings now; a settings file saved before they existed must keep those values, and a
+    /// changed value must survive a save.
+    func testTheSubAgentLimitsKeepTheirOldDefaultsAndRoundTrip() throws {
+        let old = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        XCTAssertEqual(old.subAgentStepBudget, 8)
+        XCTAssertEqual(old.subAgentTimeoutMinutes, 5)
+
+        var settings = AppSettings.default
+        settings.subAgentStepBudget = 20
+        settings.subAgentTimeoutMinutes = 30
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
+        XCTAssertEqual(decoded.subAgentStepBudget, 20)
+        XCTAssertEqual(decoded.subAgentTimeoutMinutes, 30)
     }
 
     // MARK: - Messaging

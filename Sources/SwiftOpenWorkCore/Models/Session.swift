@@ -24,6 +24,8 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     public var forkedAtMessageId: String?
     /// Sticky checklist from `todo_write` — survives across turns in this session.
     public var todos: [SessionTodoItem]
+    /// The conversation as the model last saw it; see `modelHistory()`.
+    public var modelContext: ModelContextSnapshot? = nil
 
     public init(
         id: String = UUID().uuidString,
@@ -88,5 +90,74 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
         forkedFromSessionId = try c.decodeIfPresent(String.self, forKey: .forkedFromSessionId)
         forkedAtMessageId = try c.decodeIfPresent(String.self, forKey: .forkedAtMessageId)
         todos = try c.decodeIfPresent([SessionTodoItem].self, forKey: .todos) ?? []
+        modelContext = try c.decodeIfPresent(ModelContextSnapshot.self, forKey: .modelContext)
+    }
+
+    /// What to send the model as this session's history.
+    ///
+    /// A turn's steps — each assistant step with its calls, each tool result, folded as the loop
+    /// folded them — lived only in the loop and were thrown away when it ended; the session kept
+    /// just the final reply. So every new message sent a history the local engine's cache had
+    /// never seen, and the whole conversation was re-read from the start: "Context cache reset:
+    /// history diverged" at the top of every turn, 24K tokens re-read each time. It also meant
+    /// the model forgot what its tools had returned one message ago, and re-read the same files.
+    ///
+    /// The snapshot is used only while the session still begins with exactly the messages it
+    /// covers — same ids, same user text. An edit, a fork, a deleted message or a restore falls
+    /// back to the plain transcript.
+    public func modelHistory() -> [ChatMessage] {
+        guard let snapshot = modelContext, snapshot.covers(messages) else { return messages }
+        return snapshot.messages + messages.dropFirst(snapshot.coveredMessageIds.count)
+    }
+
+    /// Stamp the session as touched now and total its token counts from its messages.
+    ///
+    /// Neither was ever written: every saved session carried `updatedAt == createdAt` and zero
+    /// totals however long it ran, so an export said a four-hour session had used nothing.
+    ///
+    /// `providers` prices the totals against the session's own model — pass the app's provider
+    /// catalog so `estimatedCost` is real. Omitting it (the default) leaves the cost at whatever
+    /// it already was, so callers that only care about the token totals need not look up pricing.
+    public mutating func recordActivity(at date: Date = Date(), providers: [ModelProvider] = []) {
+        updatedAt = date
+        totalPromptTokens = messages.reduce(0) { $0 + max(0, $1.promptTokens) }
+        totalCompletionTokens = messages.reduce(0) { $0 + max(0, $1.completionTokens) }
+        if let model = providers.first(where: { $0.id == providerId })?.models.first(where: { $0.id == modelId }) {
+            estimatedCost = Double(totalPromptTokens) / 1000.0 * model.costPer1kPrompt
+                + Double(totalCompletionTokens) / 1000.0 * model.costPer1kCompletion
+        }
+    }
+
+    /// Whether `text` should name a session: its first message that is not a slash command.
+    /// A session opened with `/i-have-adhd` was titled "/i-have-adhd" for good.
+    public static func isTitleCandidate(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && !trimmed.hasPrefix("/")
+    }
+}
+
+/// The model-facing transcript at the end of a turn, and which session messages it stands for.
+public struct ModelContextSnapshot: Codable, Hashable, Sendable {
+    /// Ids of the session messages, in order, that `messages` replaces.
+    public var coveredMessageIds: [String]
+    public var messages: [ChatMessage]
+
+    public init(coveredMessageIds: [String], messages: [ChatMessage]) {
+        self.coveredMessageIds = coveredMessageIds
+        self.messages = messages
+    }
+
+    /// Whether `sessionMessages` still starts with what this snapshot was taken from.
+    public func covers(_ sessionMessages: [ChatMessage]) -> Bool {
+        guard !coveredMessageIds.isEmpty,
+              sessionMessages.count >= coveredMessageIds.count,
+              sessionMessages.prefix(coveredMessageIds.count).map(\.id) == coveredMessageIds else { return false }
+        // User text is what the snapshot must not contradict. A message compacted out of the
+        // snapshot has no copy to compare, which is fine: compaction replaced it on purpose.
+        let byId = Dictionary(messages.map { ($0.id, $0.content) }, uniquingKeysWith: { first, _ in first })
+        for message in sessionMessages.prefix(coveredMessageIds.count) where message.role == .user {
+            if let seen = byId[message.id], seen != message.content { return false }
+        }
+        return true
     }
 }

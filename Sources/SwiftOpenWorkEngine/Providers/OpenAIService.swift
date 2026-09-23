@@ -234,12 +234,17 @@ public final class OpenAIService: LLMProviderClient, Sendable {
         // Images. Every provider used to serialize `content` as a bare String, so an attached
         // screenshot never reached the model and the reply discussed a picture it had not seen.
         var blindImageCount = 0
+        let pairing = ToolCallPairing(messages)
         for msg in messages {
             let images = ImageTransport.imageAttachments(in: msg)
             let canSee = model.supportsVision && !images.isEmpty
             if !images.isEmpty && !model.supportsVision { blindImageCount += images.count }
 
-            if msg.role == .tool {
+            if msg.role == .tool && !pairing.isAnswer(msg) {
+                // A result with no call in front of it: `tool` would be rejected, so it goes as
+                // text. Only transcripts from before the loop recorded its calls look like this.
+                formattedMessages.append(["role": "user", "content": "[Tool output]\n" + msg.content])
+            } else if msg.role == .tool {
                 // Radiant / OpenAI-compat: native tool role + tool_call_id.
                 // (Legacy user-role wrapping caused local models to ignore observations.)
                 formattedMessages.append([
@@ -264,7 +269,21 @@ public final class OpenAIService: LLMProviderClient, Sendable {
                     "content": ImageTransport.openAIContent(text: msg.content, images: images)
                 ])
             } else {
-                formattedMessages.append(["role": msg.role.rawValue, "content": msg.content])
+                var entry: [String: Any] = ["role": msg.role.rawValue, "content": msg.content]
+                let calls = pairing.answeredCalls(of: msg)
+                if !calls.isEmpty {
+                    entry["tool_calls"] = calls.map { call -> [String: Any] in
+                        [
+                            "id": call.id,
+                            "type": "function",
+                            "function": [
+                                "name": call.toolName,
+                                "arguments": ToolCallPairing.argumentsString(call.argumentsJson),
+                            ],
+                        ]
+                    }
+                }
+                formattedMessages.append(entry)
             }
         }
 
@@ -384,12 +403,11 @@ public final class OpenAIService: LLMProviderClient, Sendable {
                         parametersDict = [
                             "type": "object",
                             "properties": [
-                                "task_title": ["type": "string", "description": "Short title of the delegated sub-task"],
-                                "task_description": ["type": "string", "description": "Detailed instructions for the sub-agent"],
-                                "subagent_id": ["type": "string", "description": "Target sub-agent identifier (e.g. coder-agent, reviewer-agent, research-agent)"],
-                                "subagent_name": ["type": "string", "description": "Display name of the target sub-agent"]
+                                "target_agent_id": ["type": "string", "description": "Which agent to delegate to - its id or name, from the configured agents"],
+                                "task_title": ["type": "string", "description": "The objective, stated so it can be worked on without further questions"],
+                                "task_description": ["type": "string", "description": "Context the sub-agent needs: files, constraints, what done looks like"]
                             ],
-                            "required": ["task_title", "task_description"]
+                            "required": ["target_agent_id", "task_title"]
                         ]
                     case "agent_message":
                         parametersDict = [

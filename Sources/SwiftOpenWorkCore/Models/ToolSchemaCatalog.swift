@@ -11,12 +11,13 @@ public enum ToolSchemaCatalog {
         var changed = false
         for i in tools.indices {
             let name = tools[i].name
-            let current = tools[i].parametersJsonSchema.trimmingCharacters(in: .whitespacesAndNewlines)
-            if current.isEmpty || current == "{}" || current == "null" {
-                if let catalog = schemas[name] {
-                    tools[i].parametersJsonSchema = catalog
-                    changed = true
-                }
+            // The catalog is the contract `ToolExecutionEngine` reads arguments against, so it
+            // wins over whatever an install saved. This used to fill only empty schemas, which
+            // left a saved `agent_spawn` offering `subagent_id` long after the executor started
+            // requiring `target_agent_id` — every spawn failed however the model retried.
+            if let catalog = schemas[name], tools[i].parametersJsonSchema != catalog {
+                tools[i].parametersJsonSchema = catalog
+                changed = true
             }
             // Ensure Radiant-parity requiresApproval defaults for mutating tools
             if ["file_write", "file_delete", "file_move", "file_copy", "edit_file", "file_edit", "multi_edit", "edit_file_multi", "rename_symbol", "setup_xcode_language_server"].contains(name),

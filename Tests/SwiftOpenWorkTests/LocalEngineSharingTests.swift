@@ -107,6 +107,39 @@ final class LocalGenerationGateTests: XCTestCase {
         await gate.release(b)
     }
 
+    /// A sub-agent's deadline excludes time queued behind a sibling, so the wait must be measured
+    /// — including while it is still going on, which is when the watchdog asks.
+    func testTimeQueuedIsRecordedOnTheWaitClock() async throws {
+        let gate = LocalGenerationGate()
+        let clock = LocalGenerationGate.WaitClock()
+        let held = try await gate.acquire(label: "sibling")
+        let waiter = Task {
+            try await LocalGenerationGate.$waitClock.withValue(clock) {
+                try await gate.acquire(label: "sub-agent")
+            }
+        }
+        try await waitUntil { await gate.queueLength == 1 }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertGreaterThan(clock.seconds, 0.15, "a wait in progress counts")
+        await gate.release(held)
+        let ticket = try await waiter.value
+        let waited = clock.seconds
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(clock.seconds, waited, accuracy: 0.001, "the clock stops once the engine is handed over")
+        await gate.release(ticket)
+    }
+
+    /// An uncontended acquire adds nothing to the clock.
+    func testNoWaitNoWaitTime() async throws {
+        let gate = LocalGenerationGate()
+        let clock = LocalGenerationGate.WaitClock()
+        let ticket = try await LocalGenerationGate.$waitClock.withValue(clock) {
+            try await gate.acquire(label: "solo")
+        }
+        await gate.release(ticket)
+        XCTAssertEqual(clock.seconds, 0)
+    }
+
     // MARK: - Helpers
 
     private actor OrderRecorder {

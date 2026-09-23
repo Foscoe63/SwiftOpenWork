@@ -408,6 +408,26 @@ public struct ExecutableLocator: Sendable {
         return nil
     }
 
+    /// The Xcode developer directory to run build commands under, when the system would pick the
+    /// Command Line Tools instead — nil when no override is needed or none is possible.
+    ///
+    /// `xcode-select` pointing at the Command Line Tools with Xcode installed is common (installing
+    /// the tools after Xcode does it), and `xcodebuild` then refuses to run at all: "tool
+    /// 'xcodebuild' requires Xcode, but active developer directory … is a command line tools
+    /// instance". An agent cannot run `sudo xcode-select -s`, so every Xcode project build failed
+    /// with nothing it could do. `DEVELOPER_DIR` is the per-process equivalent and needs no rights.
+    public func xcodeDeveloperDirectoryOverride() -> String? {
+        if let explicit = environment["DEVELOPER_DIR"], !explicit.isEmpty { return nil }
+        if let selected = selectedDeveloperDirectory(), selected.contains(".app/") { return nil }
+        let xcodes = listDirectory("/Applications")
+            .filter { $0.hasPrefix("Xcode") && $0.hasSuffix(".app") }
+            .map { "/Applications/" + $0 }
+            .sorted { Self.isNewer(bundleVersion($0), than: bundleVersion($1)) }
+        return xcodes
+            .map { $0 + "/Contents/Developer" }
+            .first { isExecutable($0 + "/usr/bin/xcodebuild") }
+    }
+
     /// Numeric version comparison, so 26.10 beats 26.9. A missing version sorts last.
     public static func isNewer(_ lhs: String?, than rhs: String?) -> Bool {
         guard let lhs else { return false }

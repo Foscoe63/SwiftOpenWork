@@ -23,6 +23,37 @@ public actor LocalGenerationGate {
     /// `LocalGenerationGate.$claimLabel.withValue(...)`.
     @TaskLocal public static var claimLabel: String?
 
+    /// Where a run's time spent queued behind other generations is recorded. Set around a run
+    /// with `LocalGenerationGate.$waitClock.withValue(...)` by callers whose time limit should
+    /// count only their own work — a sub-agent queued behind a sibling was stopped at its
+    /// deadline having generated almost nothing.
+    @TaskLocal public static var waitClock: WaitClock?
+
+    /// Total time spent waiting in the queue, including a wait still in progress.
+    public final class WaitClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var total: Double = 0
+        private var waitingSince: Double?
+
+        public init() {}
+
+        public var seconds: Double {
+            lock.lock(); defer { lock.unlock() }
+            return total + (waitingSince.map { CFAbsoluteTimeGetCurrent() - $0 } ?? 0)
+        }
+
+        func begin() {
+            lock.lock(); defer { lock.unlock() }
+            if waitingSince == nil { waitingSince = CFAbsoluteTimeGetCurrent() }
+        }
+
+        func end() {
+            lock.lock(); defer { lock.unlock() }
+            if let since = waitingSince { total += CFAbsoluteTimeGetCurrent() - since }
+            waitingSince = nil
+        }
+    }
+
     public struct Ticket: Sendable, Equatable {
         fileprivate let id: UInt64
     }
@@ -63,6 +94,9 @@ public actor LocalGenerationGate {
             return Ticket(id: id)
         }
         onWait(holder?.label ?? "another generation")
+        let clock = Self.waitClock
+        clock?.begin()
+        defer { clock?.end() }
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 waiters.append(Waiter(id: id, label: label, continuation: continuation))
