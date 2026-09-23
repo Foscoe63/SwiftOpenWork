@@ -208,6 +208,13 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var allowSubAgentCreation: Bool
     public var maxGlobalSubAgentDepth: Int
     public var maxAutonomousIterations: Int
+    /// Rounds a sub-agent started by `agent_spawn` gets before it must report back. Separate from
+    /// `maxAutonomousIterations` so delegated work can stay cheaper than the lead's own turn.
+    public var subAgentStepBudget: Int
+    /// Minutes of work a sub-agent gets before it stops and reports what it has. A round still
+    /// generating at the deadline is cancelled; time queued behind other generations on the local
+    /// engine does not count.
+    public var subAgentTimeoutMinutes: Int
     public var showInterAgentCommunicationLogs: Bool
     public var enableAgentCollaborationRoom: Bool
 
@@ -349,6 +356,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
         allowSubAgentCreation: Bool = true,
         maxGlobalSubAgentDepth: Int = 3,
         maxAutonomousIterations: Int = 25,
+        subAgentStepBudget: Int = 8,
+        subAgentTimeoutMinutes: Int = 5,
         showInterAgentCommunicationLogs: Bool = false,
         enableAgentCollaborationRoom: Bool = false,
         mcpServers: [MCPServerConfig] = defaultMCPServers,
@@ -424,6 +433,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.allowSubAgentCreation = allowSubAgentCreation
         self.maxGlobalSubAgentDepth = maxGlobalSubAgentDepth
         self.maxAutonomousIterations = maxAutonomousIterations
+        self.subAgentStepBudget = subAgentStepBudget
+        self.subAgentTimeoutMinutes = subAgentTimeoutMinutes
         self.showInterAgentCommunicationLogs = showInterAgentCommunicationLogs
         self.enableAgentCollaborationRoom = enableAgentCollaborationRoom
         self.mcpServers = mcpServers.isEmpty ? AppSettings.defaultMCPServers : mcpServers
@@ -494,6 +505,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.allowSubAgentCreation = try container.decodeIfPresent(Bool.self, forKey: .allowSubAgentCreation) ?? def.allowSubAgentCreation
         self.maxGlobalSubAgentDepth = try container.decodeIfPresent(Int.self, forKey: .maxGlobalSubAgentDepth) ?? def.maxGlobalSubAgentDepth
         self.maxAutonomousIterations = try container.decodeIfPresent(Int.self, forKey: .maxAutonomousIterations) ?? def.maxAutonomousIterations
+        self.subAgentStepBudget = try container.decodeIfPresent(Int.self, forKey: .subAgentStepBudget) ?? def.subAgentStepBudget
+        self.subAgentTimeoutMinutes = try container.decodeIfPresent(Int.self, forKey: .subAgentTimeoutMinutes) ?? def.subAgentTimeoutMinutes
         self.showInterAgentCommunicationLogs = try container.decodeIfPresent(Bool.self, forKey: .showInterAgentCommunicationLogs) ?? def.showInterAgentCommunicationLogs
         self.enableAgentCollaborationRoom = try container.decodeIfPresent(Bool.self, forKey: .enableAgentCollaborationRoom) ?? def.enableAgentCollaborationRoom
 

@@ -2066,6 +2066,14 @@ public struct SettingsView: View {
                     Stepper("", value: $appState.settings.maxAutonomousIterations, in: 1...50)
                 }
 
+                SettingsRow(title: "Sub-agent Step Budget (\(appState.settings.subAgentStepBudget) steps)", subtitle: "Rounds a delegated sub-agent gets before it must report back (1 - 50)", icon: "person.2.badge.gearshape") {
+                    Stepper("", value: $appState.settings.subAgentStepBudget, in: 1...50)
+                }
+
+                SettingsRow(title: "Sub-agent Time Limit (\(appState.settings.subAgentTimeoutMinutes) min)", subtitle: "Working time a delegated sub-agent gets before it reports what it has; time queued for the local model is not counted (1 - 60 minutes)", icon: "timer") {
+                    Stepper("", value: $appState.settings.subAgentTimeoutMinutes, in: 1...60)
+                }
+
                 SettingsRow(title: "Plan Mode", subtitle: "Block writes/shell/mutating MCP until exit_plan_mode (Radiant parity)", icon: "list.clipboard") {
                     Toggle("", isOn: $appState.settings.planModeEnabled)
                         .toggleStyle(.switch)

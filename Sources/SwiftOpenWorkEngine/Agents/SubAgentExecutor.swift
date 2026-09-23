@@ -27,8 +27,14 @@ public enum SubAgentExecutor {
         public var toolCallsMade: [String]
         public var filesChanged: [String]
         public var refusedActions: [String]
+        /// Paths the sub-agent tried to write and was refused, so its report can be checked
+        /// against them.
+        public var refusedWritePaths: [String] = []
         public var worktreePath: String?
         public var branch: String?
+        /// The commit the worktree started from. When the parent had uncommitted changes this is
+        /// a snapshot of them, so the sub-agent's own work is the diff against it, not against main.
+        public var baseCommit: String? = nil
         public var iterations: Int
         public var stoppedBecause: String
         public var durationMs: Double
@@ -43,6 +49,21 @@ public enum SubAgentExecutor {
             }
             if !filesChanged.isEmpty {
                 lines.append("Files changed (\(filesChanged.count)):\n" + filesChanged.map { "  \($0)" }.joined(separator: "\n"))
+                // A lead that received this list once said nothing about it and moved on to the
+                // next task; the five edited files sat on a branch the user never heard of.
+                if let branch {
+                    lines.append("These changes are only on branch `\(branch)`, not in the user's checkout. "
+                        + "Tell the user they exist and where; do not describe them as applied, and merge only if asked.")
+                    if let baseCommit, let worktreePath {
+                        lines.append("Its own edits alone: `git -C \(worktreePath) diff \(baseCommit)`.")
+                    }
+                    // After a timeout the lead re-delegated the same work from scratch, and the second
+                    // sub-agent never saw the first one's five edited files.
+                    if !succeeded {
+                        lines.append("It did not finish. A new agent_spawn starts from the user's checkout and will not see this work; "
+                            + "delegate the remaining part as a smaller task, or report this branch to the user.")
+                    }
+                }
             } else {
                 lines.append("No files were changed.")
             }
@@ -53,8 +74,30 @@ public enum SubAgentExecutor {
                 lines.append("Refused (needs a person to approve):\n" + refusedActions.map { "  \($0)" }.joined(separator: "\n"))
             }
             let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { lines.append("\nIts report:\n\(trimmed)") }
+            // A research sub-agent had its report file refused and still wrote "Report Location:
+            // …/deep_analysis_report.md"; the lead passed that on and the user went looking for a
+            // file that was never written. Its account is checked against what was refused.
+            let phantom = Self.mentionedRefusedWrites(in: trimmed, refused: refusedWritePaths)
+            if !phantom.isEmpty {
+                lines.append("Warning: its report mentions " + phantom.map { "`\($0)`" }.joined(separator: ", ")
+                    + ", but writing that was refused — the file was not created. Do not tell the user it exists.")
+            }
+            // Its account, not a fact. A research sub-agent reported "no unit tests visible" in a
+            // project with a test target, and the lead relayed it to the user as a finding.
+            if !trimmed.isEmpty {
+                lines.append("\nIts report (its own account: check any claim you act on or repeat to the user):\n\(trimmed)")
+            }
             return lines.joined(separator: "\n")
+        }
+
+        /// Refused write targets the report names, by path or file name.
+        public static func mentionedRefusedWrites(in report: String, refused: [String]) -> [String] {
+            var seen = Set<String>()
+            return refused.filter { path in
+                let name = (path as NSString).lastPathComponent
+                guard !name.isEmpty, seen.insert(path).inserted else { return false }
+                return report.contains(path) || report.contains(name)
+            }
         }
     }
 
@@ -119,9 +162,21 @@ public enum SubAgentExecutor {
                     workspacePath: workspace.folderPath,
                     name: "sub-\(subAgent.role)-\(UUID().uuidString.prefix(4))"
                 )
-                worktree = info
+                let seed = await AgentWorktree.seedWithUncommittedChanges(
+                    worktree: info, workspacePath: workspace.folderPath
+                )
+                var seeded = info
+                seeded.head = seed.head
+                worktree = seeded
                 effectiveWorkspace.folderPath = info.path
-                onProgress("Isolated in \(info.branch)")
+                if let problem = seed.problem {
+                    isolationNote = """
+
+                    (The isolated worktree does not fully match the user's checkout: \(problem). \
+                    Its edits may not apply cleanly to their current files.)
+                    """
+                }
+                onProgress("Isolated in \(info.branch)" + (seed.copiedChanges ? " with your uncommitted changes" : ""))
             } catch {
                 isolationNote = """
 
@@ -149,6 +204,11 @@ public enum SubAgentExecutor {
         Do the work with the tools you have. When the objective is met, reply with a short \
         report and make no further tool calls. Do not ask for confirmation; do not describe \
         what you would do instead of doing it.
+
+        Your budget is \(maxIterations) steps and \(Int(deadlineSeconds / 60)) minutes; when it runs out you are \
+        stopped mid-task. Find code with grep before reading it, and read large files in windows \
+        with offset and limit — reading whole files is what uses the time up. If the objective is \
+        bigger than the budget, do the first complete piece and say what is left.
         """
 
         var messages: [ChatMessage] = [
@@ -161,41 +221,85 @@ public enum SubAgentExecutor {
         ]
 
         var toolCallsMade: [String] = []
+        var refusedWritePaths: [String] = []
+        // Same breaker as the lead's loop. A sub-agent had none, and one spent its whole budget
+        // re-reading files it had already read.
+        var identicalCalls: [String: Int] = [:]
+        var lastText = ""
         var summary = ""
         var iterations = 0
         var stoppedBecause = "completed"
         var succeeded = true
+        // The deadline counts the sub-agent's own work, not time queued behind other generations
+        // on the local engine. Parallel sub-agents on the built-in model take turns, and one spent
+        // most of its 600s waiting for a sibling and was stopped having done little but read.
+        let queueWait = LocalGenerationGate.WaitClock()
+        let worked = { CFAbsoluteTimeGetCurrent() - started - queueWait.seconds }
+        let outOfTime = {
+            let waited = Int(queueWait.seconds)
+            return "ran out of time after \(Int(deadlineSeconds))s"
+                + (waited > 0 ? " of work (plus \(waited)s waiting for the local model)" : "")
+        }
 
         await ToolApprovalManager.shared.withUnattendedApprovals {
             while iterations < maxIterations {
-                if CFAbsoluteTimeGetCurrent() - started > deadlineSeconds {
-                    stoppedBecause = "ran out of time after \(Int(deadlineSeconds))s"
+                if worked() > deadlineSeconds {
+                    stoppedBecause = outOfTime()
                     succeeded = false
+                    // What it last said is the only account of where it got to; the report was
+                    // empty on a timeout, so the lead learned nothing about the work it had done.
+                    summary = lastText
                     break
                 }
                 iterations += 1
 
                 let box = ConcurrentTextBox()
                 let calls = ToolCallBox()
-                do {
+                // The deadline was only checked between rounds, so one slow round ran a sub-agent
+                // to 759s against a 600s limit. The round in flight is now cancelled at the deadline.
+                let requestMessages = messages
+                let round = Task {
                     // Named, so a turn queued behind this one on the local engine can say who
                     // it is waiting for.
-                    try await LocalGenerationGate.$claimLabel.withValue("sub-agent \(subAgent.name)") {
-                        try await ProviderRouter.shared.stream(
-                            provider: provider,
-                            model: model,
-                            systemPrompt: systemPrompt,
-                            messages: messages,
-                            temperature: subAgent.temperature,
-                            maxTokens: subAgent.maxTokens,
-                            reasoningEffort: .off,
-                            tools: tools
-                        ) { chunk in
-                            if !chunk.deltaText.isEmpty { box.append(chunk.deltaText) }
-                            if !chunk.toolCalls.isEmpty { calls.add(chunk.toolCalls) }
+                    try await LocalGenerationGate.$waitClock.withValue(queueWait) {
+                        try await LocalGenerationGate.$claimLabel.withValue("sub-agent \(subAgent.name)") {
+                            try await ProviderRouter.shared.stream(
+                                provider: provider,
+                                model: model,
+                                systemPrompt: systemPrompt,
+                                messages: requestMessages,
+                                temperature: subAgent.temperature,
+                                maxTokens: subAgent.maxTokens,
+                                reasoningEffort: .off,
+                                tools: tools
+                            ) { chunk in
+                                if !chunk.deltaText.isEmpty { box.append(chunk.deltaText) }
+                                if !chunk.toolCalls.isEmpty { calls.add(chunk.toolCalls) }
+                            }
                         }
                     }
+                }
+                // Time queued for the engine does not count, so the watchdog re-arms for whatever
+                // the queue added while it slept instead of cancelling a round still waiting its turn.
+                let watchdog = Task {
+                    while !Task.isCancelled {
+                        let remaining = deadlineSeconds - worked()
+                        if remaining <= 0 { round.cancel(); return }
+                        try? await Task.sleep(nanoseconds: UInt64(max(1, remaining) * 1_000_000_000))
+                    }
+                }
+                do {
+                    try await round.value
+                    watchdog.cancel()
                 } catch {
+                    watchdog.cancel()
+                    if worked() >= deadlineSeconds - 1 {
+                        stoppedBecause = outOfTime()
+                        succeeded = false
+                        let partial = AssistantContentSanitizer.splitThinking(from: box.text).visible
+                        summary = partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? lastText : partial
+                        break
+                    }
                     stoppedBecause = "the model call failed: \(error.localizedDescription)"
                     succeeded = false
                     break
@@ -203,6 +307,7 @@ public enum SubAgentExecutor {
 
                 let text = AssistantContentSanitizer.splitThinking(from: box.text).visible
                 let pending = calls.drain()
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { lastText = text }
 
                 if pending.isEmpty {
                     summary = text
@@ -211,6 +316,7 @@ public enum SubAgentExecutor {
                 }
 
                 messages.append(ChatMessage(role: .assistant, content: text, toolCalls: pending))
+                var repeatedOut = false
                 for call in pending {
                     toolCallsMade.append(call.toolName)
                     onProgress("\(subAgent.name): \(call.toolName)")
@@ -231,12 +337,25 @@ public enum SubAgentExecutor {
                         _ = await ToolApprovalManager.shared.requestApproval(
                             callId: call.id, toolName: call.toolName, argumentsJson: call.argumentsJson, reason: reason
                         )
+                        if let path = Self.writeTarget(toolName: call.toolName, argumentsJson: call.argumentsJson) {
+                            refusedWritePaths.append(path)
+                        }
                         messages.append(ChatMessage(
                             id: call.id,
                             role: .tool,
                             content: "Refused: \(reason) Sub-agents run unattended, so nobody can approve it. Do not retry it; continue without it and say in your report that it was skipped."
                         ))
                         continue
+                    }
+                    let signature = AgentRunner.callSignature(call.toolName, call.argumentsJson)
+                    let repeats = (identicalCalls[signature] ?? 0) + 1
+                    identicalCalls[signature] = repeats
+                    if repeats >= 5 {
+                        stoppedBecause = "kept repeating the same \(call.toolName) call"
+                        succeeded = false
+                        summary = lastText
+                        repeatedOut = true
+                        break
                     }
                     let result = await AgentRunContext.$current.withValue(frame) {
                         await ToolExecutionEngine.shared.execute(
@@ -250,7 +369,8 @@ public enum SubAgentExecutor {
                     messages.append(ChatMessage(
                         id: call.id,
                         role: .tool,
-                        content: ToolBounds.boundResult(AgentRunner.describeToolResult(result)).text,
+                        content: ToolBounds.boundResult(AgentRunner.describeToolResult(result)
+                            + (repeats >= 3 ? "\n\n[Stuck breaker] You have made this identical call \(repeats) times; its result has not changed. Use what you have, or finish with your report." : "")).text,
                         attachments: result.producedImages.map {
                             MessageAttachment(
                                 name: ($0 as NSString).lastPathComponent,
@@ -262,6 +382,7 @@ public enum SubAgentExecutor {
                     ))
                 }
 
+                if repeatedOut { break }
                 if iterations >= maxIterations {
                     stoppedBecause = "hit its \(maxIterations)-step budget"
                     succeeded = false
@@ -292,12 +413,36 @@ public enum SubAgentExecutor {
             toolCallsMade: Array(NSOrderedSet(array: toolCallsMade)).compactMap { $0 as? String },
             filesChanged: changed,
             refusedActions: refused,
+            refusedWritePaths: refusedWritePaths,
             worktreePath: worktree?.path,
             branch: worktree?.branch,
+            baseCommit: worktree?.head,
             iterations: iterations,
             stoppedBecause: stoppedBecause,
             durationMs: (CFAbsoluteTimeGetCurrent() - started) * 1000
         )
+    }
+
+    /// The file a writing call targets, or nil for any other call.
+    public static func writeTarget(toolName: String, argumentsJson: String) -> String? {
+        let writers: Set<String> = ["file_write", "edit_file", "multi_edit", "file_copy", "file_move"]
+        guard writers.contains(AgentRunner.canonicalToolName(toolName)),
+              let data = argumentsJson.data(using: .utf8),
+              let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        for key in ["path", "filename", "filepath", "file", "file_path", "destination", "to"] {
+            if let value = dict[key] as? String, !value.isEmpty { return value }
+        }
+        return nil
+    }
+
+    /// Whether the run failed on its first model call, before any tool ran — the model was never
+    /// reached, so running it again elsewhere repeats nothing.
+    public static func failedBeforeStarting(_ outcome: Outcome) -> Bool {
+        !outcome.succeeded
+            && outcome.stoppedBecause.hasPrefix("the model call failed")
+            && outcome.iterations <= 1
+            && outcome.toolCallsMade.isEmpty
+            && outcome.filesChanged.isEmpty
     }
 
     /// Commits on the worktree's branch since it was created. nil when git cannot say, which is

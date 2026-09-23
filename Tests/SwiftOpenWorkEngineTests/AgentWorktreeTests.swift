@@ -43,6 +43,39 @@ final class AgentWorktreeTests: XCTestCase {
         }
     }
 
+    /// A worktree started from the last commit, so a sub-agent edited files as they were before
+    /// the user's uncommitted changes — 56 of them in the run that showed it.
+    func testASeededWorktreeStartsFromTheUsersUncommittedState() async throws {
+        try "seed\nwork in progress\n".write(to: repo.appendingPathComponent("seed.txt"), atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(at: repo.appendingPathComponent("new"), withIntermediateDirectories: true)
+        try "brand new\n".write(to: repo.appendingPathComponent("new/file.txt"), atomically: true, encoding: .utf8)
+
+        let info = try await AgentWorktree.create(workspacePath: repo.path, name: "seeded")
+        let seed = await AgentWorktree.seedWithUncommittedChanges(worktree: info, workspacePath: repo.path)
+        let tree = URL(fileURLWithPath: info.path)
+
+        XCTAssertTrue(seed.copiedChanges)
+        XCTAssertNil(seed.problem)
+        XCTAssertNotEqual(seed.head, info.head, "the snapshot is its own commit")
+        XCTAssertEqual(try String(contentsOf: tree.appendingPathComponent("seed.txt"), encoding: .utf8), "seed\nwork in progress\n")
+        XCTAssertEqual(try String(contentsOf: tree.appendingPathComponent("new/file.txt"), encoding: .utf8), "brand new\n")
+        let status = try await AgentWorktree.git(["status", "--porcelain"], in: tree)
+        XCTAssertEqual(status, "", "the user's changes must not be reported as the sub-agent's")
+
+        // The user's own checkout is untouched.
+        let own = try await AgentWorktree.git(["status", "--porcelain"], in: repo)
+        XCTAssertTrue(own.contains("seed.txt"))
+        let log = try await AgentWorktree.git(["log", "--oneline"], in: repo)
+        XCTAssertEqual(log.split(separator: "\n").count, 1)
+    }
+
+    func testACleanCheckoutIsLeftAtItsCommit() async throws {
+        let info = try await AgentWorktree.create(workspacePath: repo.path, name: "clean")
+        let seed = await AgentWorktree.seedWithUncommittedChanges(worktree: info, workspacePath: repo.path)
+        XCTAssertFalse(seed.copiedChanges)
+        XCTAssertEqual(seed.head, info.head)
+    }
+
     /// Git subprocesses must never block the caller's thread: a `waitUntilExit()` on the main
     /// thread both freezes the UI and spins the run loop, which re-enters unrelated work.
     func testGitRunsOffTheCallersThread() async throws {

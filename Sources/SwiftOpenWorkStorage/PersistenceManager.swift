@@ -812,7 +812,7 @@ public final class PersistenceManager: Sendable {
                         SwiftOpenWork is your native macOS autonomous AI workspace powered by SwiftUI.
                         
                         ### Key Features:
-                        - **Local & Cloud Model Providers**: Run locally with **Ollama**, **LM Studio**, or connect to **OpenAI**, **Anthropic Claude 3.7**, **Groq**, **DeepSeek**, and **OpenRouter**.
+                        - **Local & Cloud Model Providers**: Run models on this Mac with the built-in **Apple Silicon** engine, **Ollama** or **LM Studio**, or connect to **OpenAI**, **Anthropic**, **Groq**, **DeepSeek** and **OpenRouter**.
                         - **Autonomous Multi-Agent Hierarchy**: Lead agents can spawn sub-agents (Coders, Researchers, Reviewers) and communicate in real time.
                         - **Built-in Tool Execution**: Safe file reading/writing, shell commands, web search, and calculation.
                         - **Side Inspector**: Track live sub-agent trees, inter-agent messages, artifacts, and tools.

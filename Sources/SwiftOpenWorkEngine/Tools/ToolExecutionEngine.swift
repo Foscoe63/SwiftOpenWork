@@ -54,8 +54,16 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     private init() {}
 
     public static func defaultEnvironment(custom: [String: String] = [:]) -> [String: String] {
-        ShellEnvironment.standard(custom: custom)
+        var env = ShellEnvironment.standard(custom: custom)
+        if env["DEVELOPER_DIR"] == nil, let xcode = xcodeOverride {
+            env["DEVELOPER_DIR"] = xcode
+        }
+        return env
     }
+
+    /// Resolved once: which Xcodes are installed does not change under a running app often enough
+    /// to pay a directory scan on every shell command.
+    private static let xcodeOverride = ExecutableLocator().xcodeDeveloperDirectoryOverride()
 
     /// Run a tool, logging the call and its result when verbose logging is on.
     ///
@@ -279,9 +287,33 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     }
 
     /// Local models send numbers as strings often enough to accept both.
+    /// The `items` of a `todo_write` call, or nil when the call did not send a list.
+    ///
+    /// Accepts the list as an array, as a JSON string of one (local models do both), or under
+    /// `todos`. An absent key is nil, not empty — the difference between "clear" and "forgot".
+    public static func todoItems(from dict: [String: Any]) -> [[String: Any]]? {
+        for key in ["items", "todos"] {
+            if let list = dict[key] as? [[String: Any]] { return list }
+            if let text = dict[key] as? String,
+               let data = text.data(using: .utf8),
+               let list = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] {
+                return list
+            }
+        }
+        return nil
+    }
+
+    /// `"80.0"` and `80.0` count too: a real export showed a local model sending
+    /// `"offset":"80.0"`, which `Int(_:)` rejects, so the window was dropped and the whole file
+    /// came back from line 1 — the model then asked again, and again.
     public static func intArgument(_ value: Any?) -> Int? {
         if let int = value as? Int { return int }
-        if let string = value as? String { return Int(string.trimmingCharacters(in: .whitespaces)) }
+        if let double = value as? Double, double.isFinite, double == double.rounded() { return Int(double) }
+        if let string = value as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespaces)
+            if let int = Int(trimmed) { return int }
+            if let double = Double(trimmed), double.isFinite, double == double.rounded() { return Int(double) }
+        }
         return nil
     }
 
@@ -430,9 +462,9 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
                 return denial
             }
-            let offset = (dict["offset"] as? Int) ?? (dict["start_line"] as? Int)
-            let limit = (dict["limit"] as? Int) ?? (dict["max_lines"] as? Int)
-            return readFile(path: fullPath, offset: offset, limit: limit, startTime: startTime)
+            let offset = Self.intArgument(dict["offset"]) ?? Self.intArgument(dict["start_line"])
+            let limit = Self.intArgument(dict["limit"]) ?? Self.intArgument(dict["max_lines"])
+            return readFile(path: fullPath, offset: offset, limit: limit, workspaceRoot: workspace.folderPath, startTime: startTime)
 
         case "file_write", "write_file", "create_file", "save_file":
             let path = (dict["path"] as? String) ?? (dict["filename"] as? String) ?? (dict["filepath"] as? String) ?? (dict["file"] as? String) ?? (dict["title"] as? String) ?? ""
@@ -524,7 +556,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             )
 
         case "git_log":
-            let count = (dict["count"] as? Int) ?? (dict["limit"] as? Int) ?? 10
+            let count = Self.intArgument(dict["count"]) ?? Self.intArgument(dict["limit"]) ?? 10
             let out = GitTools.log(in: workspace.folderPath, count: count)
             return ToolExecutionResult(
                 success: out.isRepository, output: out.text,
@@ -673,7 +705,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             if let denial = sandboxDenial(for: symbolRoot, workspace: workspace, settings: settings, startTime: startTime) {
                 return denial
             }
-            let symbolLimit = (dict["limit"] as? Int) ?? (dict["max_results"] as? Int) ?? 20
+            let symbolLimit = Self.intArgument(dict["limit"]) ?? Self.intArgument(dict["max_results"]) ?? 20
             let symbols = await SymbolIndex.shared.lookup(name: name, root: symbolRoot, limit: symbolLimit)
             return ToolExecutionResult(
                 success: true,
@@ -697,7 +729,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             }
             let include = (dict["include"] as? String) ?? (dict["glob"] as? String)
             let caseInsensitive = (dict["case_insensitive"] as? Bool) ?? (dict["ignore_case"] as? Bool) ?? false
-            let grepLimit = (dict["limit"] as? Int) ?? (dict["max_results"] as? Int) ?? 100
+            let grepLimit = Self.intArgument(dict["limit"]) ?? Self.intArgument(dict["max_results"]) ?? 100
             do {
                 let result = try CodeSearch.grep(
                     pattern: pattern,
@@ -733,7 +765,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             if let denial = sandboxDenial(for: root, workspace: workspace, settings: settings, startTime: startTime) {
                 return denial
             }
-            let globLimit = (dict["limit"] as? Int) ?? 200
+            let globLimit = Self.intArgument(dict["limit"]) ?? 200
             let hits = CodeSearch.glob(pattern: pattern, root: root, limit: globLimit)
             if hits.paths.isEmpty {
                 return ToolExecutionResult(
@@ -1070,8 +1102,25 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             )
 
         case "todo_write":
-            let items = dict["items"] as? [[String: Any]] ?? []
+            // Only an explicit empty list clears. Missing or unreadable `items` used to default to
+            // `[]`, so a local model sending `todo_write {}` four times in a row wiped a ten-item
+            // plan the user was following, and was told "Todo list cleared." as if it had asked.
+            guard let items = Self.todoItems(from: dict) else {
+                return ToolExecutionResult(
+                    success: false, output: "",
+                    error: "todo_write needs `items`: the full list, e.g. {\"items\":[{\"content\":\"…\",\"status\":\"pending\"}]}. "
+                        + "The list was left unchanged. Send `\"items\": []` only to clear it on purpose.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
             let todos = SessionTodoItem.parse(from: items)
+            if todos.isEmpty && !items.isEmpty {
+                return ToolExecutionResult(
+                    success: false, output: "",
+                    error: "todo_write: none of the \(items.count) item(s) had a `content` string. The list was left unchanged.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
             let summary = todos.prefix(20).enumerated().map { idx, item in
                 "\(idx + 1). [\(item.status.rawValue)] \(item.content)"
             }.joined(separator: "\n")
@@ -1149,7 +1198,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                 )
             }
-            let topK = (dict["top_k"] as? Int) ?? (dict["limit"] as? Int) ?? 6
+            let topK = Self.intArgument(dict["top_k"]) ?? Self.intArgument(dict["limit"]) ?? 6
             let hits = await CodeIndex.shared.search(query: query, root: workspace.folderPath, topK: topK)
             return ToolExecutionResult(
                 success: true,
@@ -1578,19 +1627,38 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             if let note = choice.note, let callId {
                 await LiveToolOutput.shared.append(callId: callId, chunk: note + "\n")
             }
-            let outcome = await SubAgentExecutor.run(
-                subAgent: targetAgent,
-                parentAgent: currentAgent,
-                objective: taskTitle,
-                context: taskDesc,
-                workspace: workspace,
-                provider: choice.provider,
-                model: choice.model,
-                depth: depth,
-                onProgress: { line in
-                    if let callId { LiveToolOutput.shared.append(callId: callId, chunk: line + "\n") }
+            let runSubAgent = { (provider: ModelProvider, model: ModelInfo) async -> SubAgentExecutor.Outcome in
+                await SubAgentExecutor.run(
+                    subAgent: targetAgent,
+                    parentAgent: currentAgent,
+                    objective: taskTitle,
+                    context: taskDesc,
+                    workspace: workspace,
+                    provider: provider,
+                    model: model,
+                    depth: depth,
+                    maxIterations: max(1, spawnSettings.subAgentStepBudget),
+                    deadlineSeconds: Double(max(1, spawnSettings.subAgentTimeoutMinutes)) * 60,
+                    onProgress: { line in
+                        if let callId { LiveToolOutput.shared.append(callId: callId, chunk: line + "\n") }
+                    }
+                )
+            }
+            var outcome = await runSubAgent(choice.provider, choice.model)
+            var choiceNote = choice.note
+            // A provider switched on but not running — Ollama installed, not started — failed the
+            // whole delegation on its first call, while one switched *off* fell back to the lead's
+            // model. Unreachable is treated like off: once, before any work was done.
+            if SubAgentExecutor.failedBeforeStarting(outcome),
+               let parent = parentFrame, parent.provider.id != choice.provider.id {
+                if let callId {
+                    await LiveToolOutput.shared.append(callId: callId, chunk: "\(choice.provider.name) could not be reached; retrying on \(parent.model.name).\n")
                 }
-            )
+                let unreachable = outcome.stoppedBecause
+                outcome = await runSubAgent(parent.provider, parent.model)
+                choiceNote = "\(targetAgent.name) is configured for \(choice.model.id) on \(choice.provider.name), "
+                    + "which could not be used (\(unreachable)); it ran on \(parent.model.name) instead."
+            }
             if let callId { await LiveToolOutput.shared.finish(callId: callId) }
 
             task.status = outcome.succeeded ? .completed : .failed
@@ -1600,7 +1668,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             task.durationMs = outcome.durationMs
             if !outcome.succeeded { task.errorMessage = outcome.stoppedBecause }
 
-            let report = choice.note.map { "\($0)\n\n\(outcome.report)" } ?? outcome.report
+            let report = choiceNote.map { "\($0)\n\n\(outcome.report)" } ?? outcome.report
             return ToolExecutionResult(
                 success: outcome.succeeded,
                 output: report,
@@ -1972,6 +2040,51 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         SafeShellCommand.isSafe(command)
     }
 
+    /// Files in `root` the model most likely meant by a path that does not exist, relative to root.
+    ///
+    /// Telling it to `glob` was not enough: a real run read `ProTerm/Source/SSHSessionManager.swift`
+    /// as `ProTermSourceSSHSessionManager.swift` — separators dropped — globbed, found the right
+    /// file, and then sent the same mangled path again. Naming the candidate breaks that loop.
+    /// Matches are, in order: the same path with separators ignored, then the same file name.
+    public static func similarPaths(toMissing path: String, in root: String, limit: Int = 3) -> [String] {
+        let rootURL = URL(fileURLWithPath: (root as NSString).expandingTildeInPath).standardizedFileURL
+        let rootPath = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
+        let missing = URL(fileURLWithPath: path).standardizedFileURL.path
+        let missingRelative = missing.hasPrefix(rootPath) ? String(missing.dropFirst(rootPath.count)) : missing
+        let missingName = (missing as NSString).lastPathComponent.lowercased()
+        let missingFlat = missingRelative.replacingOccurrences(of: "/", with: "").lowercased()
+        guard !missingName.isEmpty else { return [] }
+
+        let skipped: Set<String> = [".git", "node_modules", "build", "DerivedData", ".build", "Pods", ".swiftpm"]
+        guard let walker = FileManager.default.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsPackageDescendants]
+        ) else { return [] }
+
+        var flatMatches: [String] = []
+        var nameMatches: [String] = []
+        var visited = 0
+        for case let url as URL in walker {
+            visited += 1
+            if visited > 50_000 { break }
+            let name = url.lastPathComponent
+            if skipped.contains(name) {
+                walker.skipDescendants()
+                continue
+            }
+            let relative = String(url.standardizedFileURL.path.dropFirst(rootPath.count))
+            let lowerName = name.lowercased()
+            if relative.replacingOccurrences(of: "/", with: "").lowercased() == missingFlat {
+                flatMatches.append(relative)
+            } else if lowerName == missingName
+                        || (lowerName.count >= 8 && missingName.hasSuffix(lowerName) && missingName.contains(".")) {
+                nameMatches.append(relative)
+            }
+        }
+        return Array((flatMatches + nameMatches.sorted { $0.count < $1.count }).prefix(limit))
+    }
+
     /// Lines returned when the caller does not ask for a specific window.
     public static let defaultReadLineLimit = 2_000
     /// Individual lines longer than this are clipped; minified bundles otherwise blow the budget.
@@ -1987,6 +2100,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         path: String,
         offset: Int?,
         limit: Int?,
+        workspaceRoot: String? = nil,
         startTime: Double
     ) -> ToolExecutionResult {
         let cleanPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
@@ -1998,7 +2112,13 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         } catch {
             var message = "Failed to read file '\(cleanPath)': \(error.localizedDescription)"
             if !FileManager.default.fileExists(atPath: expanded) {
-                message += " The file does not exist — use `glob` to find the right path rather than guessing."
+                let nearby = workspaceRoot.map { Self.similarPaths(toMissing: expanded, in: $0) } ?? []
+                if nearby.isEmpty {
+                    message += " The file does not exist — use `glob` to find the right path rather than guessing."
+                } else {
+                    message += " The file does not exist. Did you mean: "
+                        + nearby.map { "`\($0)`" }.joined(separator: ", ") + "?"
+                }
             } else {
                 message += " If this is a binary or non-UTF8 file, it cannot be read as text."
             }

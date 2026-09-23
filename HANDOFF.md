@@ -1444,6 +1444,86 @@ were dropped from the banned substrings — every command must start with an all
 matching names as text refused `rg "func (x|y)"` (`func ` contains `nc `).
 `SafeShellBypassTests` lists every bypass above.
 
+## What one exported session showed (2026-09-21)
+
+A local-model session (`majentik/Qwen3-Coder-Next-MLX-5bit`) asked to improve ProTerm removed one
+line in an hour. Every fault below is in that export; the tests are in
+`AgentLoopTranscriptTests`.
+
+- **The loop fed each step back wrong.** After the tool results it appended one assistant message
+  holding the *whole turn's* text, so the model read its narration after its own results, and once
+  more per step — it repeated "# SSH Password Security Fix / Let me examine…" seven times. Each
+  step is now an assistant message with only that step's text and its `toolCalls`, *before* the
+  results. `finalize` also re-published narration `hideTurnNarration` had hidden; hidden ranges
+  are now kept.
+- **Cloud providers were never sent the calls.** OpenAI and Anthropic got `tool`/`tool_result`
+  messages with no `tool_calls`/`tool_use` in front of them, which both APIs reject.
+  `ToolCallPairing` decides what can go native: a call only if its result follows, a result only
+  if it answers such a call, anything else as text — so transcripts saved before this still send.
+- **The KV cache was rebuilt every step.** `foldOldToolResults` was a sliding window: once four
+  results existed, every step folded one more, rewrote history and hit `MLXSessionReuse`'s
+  divergence check — fifteen "Context cache reset" notices in one turn. It now folds in batches
+  of four.
+- **The stuck breaker compared raw strings**, and the model read one script eleven times by
+  alternating `file_read`/`read_file` and reordering keys. `callSignature` normalises aliases, key
+  order, path-key spellings and whole-number strings. Sub-agents had no breaker at all; they
+  now nudge at three identical calls and stop at five.
+- **`todo_write {}` cleared the list**, four times running. Missing `items` is now an error;
+  only an explicit `[]` clears; a JSON-string list is accepted.
+- **`"offset":"80.0"` was ignored** (`Int("80.0")` is nil), so the whole file came back and the
+  model asked again. `intArgument` takes whole-number strings and doubles and is used for every
+  count and window argument.
+- **A mangled path** (`ProTermSourceSSHSessionManager.swift`) now gets "Did you mean
+  `ProTerm/Source/SSHSessionManager.swift`?" — separators ignored first, then file name.
+- **Xcode builds failed with "0 error(s)"** because `xcode-select` pointed at the Command Line
+  Tools (as it does on this machine). The shell environment now sets `DEVELOPER_DIR` to the newest
+  installed Xcode in exactly that case; the summary says "before reporting any compiler errors"
+  and names the `xcode-select -s` fix when it is still needed.
+- **Sub-agent reports:** a timeout now reports the sub-agent's last words instead of nothing; a
+  report naming a file whose write was refused gets a warning (the lead had told the user about a
+  report file that was never written); changes left on a worktree branch are said to be unmerged.
+- **Sessions** never updated `updatedAt` or their token totals, and one opened with a slash
+  command was titled after it (`/i-have-adhd`). Both fixed in `Session.recordActivity` /
+  `isTitleCandidate`.
+
+Why the delegated work produced nothing mergeable — the second look:
+
+- **Sub-agent worktrees started from the last commit.** The parent had 56 uncommitted files,
+  including the ones the sub-agent was asked to change, so it edited versions the user no longer
+  had. `AgentWorktree.seedWithUncommittedChanges` now applies the parent's tracked diff, copies
+  untracked files and commits them as a snapshot; the report names that commit so the
+  sub-agent's own edits are `git diff <snapshot>`.
+- **The time limit was checked only between rounds**, so a 600s sub-agent ran 759s. The round in
+  flight is now cancelled at the deadline and its partial text reported.
+- **The lead did not know the budget.** It gave all ten features to one sub-agent, then, after the
+  timeout, features 2–10 again from scratch, never seeing the first one's branch. The team section
+  now states the step and minute budget and asks for one change per `agent_spawn`; an unfinished
+  report says its work will not carry into a new spawn; the sub-agent is told its own budget and
+  to grep and read in windows rather than whole files.
+- **A repetition stop left the looping text as the answer.** It now moves to Reasoning and the turn
+  ends in a halt with Continue.
+
+Third pass, on what was still open:
+
+- **Every new message re-read the whole conversation.** A turn's steps (step messages, tool
+  results, folds) lived only in the loop; the session kept the final reply, so the next message
+  sent a history the cache had never seen — and the model had forgotten last turn's tool results.
+  `Session.modelContext` now holds the transcript the model last saw, and `modelHistory()`
+  continues from it while the session still starts with the messages it covers (same ids, same
+  user text); an edit, fork or deletion falls back to the plain messages.
+- **Unchanged re-reads.** A `file_read` identical to one that succeeded this turn, on a file not
+  modified since, whose result is still unfolded in the transcript, answers "Unchanged since step
+  N" instead of re-sending the file.
+- **A sub-agent whose provider was on but unreachable** (Ollama enabled, not running) failed the
+  delegation on its first call; one switched off fell back to the lead's model. An unreached model
+  now falls back the same way, once, before any work (`SubAgentExecutor.failedBeforeStarting`).
+  Found by a live delegation run; the test host's isolated settings have Ollama on.
+- **Sub-agent reports are labelled as the sub-agent's own account**, and the lead is told to verify
+  claims before repeating them.
+
+Not code: in `agents.json` on this machine, `coder-agent` is named "Reviewer-Agent" and
+`reviewer-agent` "Coder-Agent", which is why delegations looked mislabelled.
+
 ## What is left
 
 ### Settings still dead

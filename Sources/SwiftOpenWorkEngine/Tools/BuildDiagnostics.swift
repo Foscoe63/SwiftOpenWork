@@ -140,6 +140,16 @@ public enum BuildDiagnostics {
 
     // MARK: - Reporting
 
+    /// A failure caused by the machine rather than the project, stated as such, so the model
+    /// reports it instead of editing code that was never compiled.
+    public static func environmentHint(in output: String) -> String? {
+        if output.contains("requires Xcode, but active developer directory") {
+            return "This is the machine's setup, not the code: no full Xcode was found to build with. "
+                + "The user can fix it with `sudo xcode-select -s /Applications/Xcode.app` — tell them; do not edit code over it."
+        }
+        return nil
+    }
+
     /// Render a result the model can act on: verdict first, then errors, then a bounded tail.
     public static func summarize(
         command: String,
@@ -157,7 +167,14 @@ public enum BuildDiagnostics {
         if exitCode == 0 {
             lines.append("`\(command)` succeeded." + (warnings.isEmpty ? "" : " \(warnings.count) warning(s)."))
         } else {
-            lines.append("`\(command)` failed (exit \(exitCode)) with \(errors.count) error(s).")
+            // "with 0 error(s)" read as a clean compile that failed for no reason. When nothing
+            // parsed, the cause is in the tail below, not in the code.
+            lines.append(errors.isEmpty
+                ? "`\(command)` failed (exit \(exitCode)) before reporting any compiler errors."
+                : "`\(command)` failed (exit \(exitCode)) with \(errors.count) error(s).")
+            if let hint = environmentHint(in: output) {
+                lines.append(hint)
+            }
         }
 
         if !errors.isEmpty {

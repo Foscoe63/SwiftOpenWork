@@ -106,30 +106,56 @@ public final class AnthropicService: LLMProviderClient, Sendable {
 
         var formattedMessages: [[String: Any]] = []
         var blindImageCount = 0
+        let pairing = ToolCallPairing(messages)
         for msg in messages {
             let images = ImageTransport.imageAttachments(in: msg)
             let canSee = model.supportsVision && !images.isEmpty
             if !images.isEmpty && !model.supportsVision { blindImageCount += images.count }
 
-            if msg.role == .tool {
+            if msg.role == .tool && pairing.isAnswer(msg) {
                 // Unlike OpenAI, a `tool_result` block may itself contain images, so a screenshot
                 // stays attached to the call that produced it.
                 var resultContent: Any = msg.content
                 if canSee {
                     resultContent = ImageTransport.anthropicContent(text: msg.content, images: images)
                 }
-                formattedMessages.append([
-                    "role": "user",
-                    "content": [
-                        [
-                            "type": "tool_result",
-                            "tool_use_id": msg.id,
-                            "content": resultContent
-                        ]
-                    ]
-                ])
+                let block: [String: Any] = [
+                    "type": "tool_result",
+                    "tool_use_id": msg.id,
+                    "content": resultContent
+                ]
+                // Every result for one assistant turn belongs in the single user turn after it.
+                if let last = formattedMessages.indices.last,
+                   formattedMessages[last]["role"] as? String == "user",
+                   var blocks = formattedMessages[last]["content"] as? [[String: Any]],
+                   blocks.allSatisfy({ $0["type"] as? String == "tool_result" }) {
+                    blocks.append(block)
+                    formattedMessages[last]["content"] = blocks
+                } else {
+                    formattedMessages.append(["role": "user", "content": [block]])
+                }
+            } else if msg.role == .tool {
+                // No `tool_use` in front of it, which the API rejects as a `tool_result`.
+                formattedMessages.append(["role": "user", "content": "[Tool output]\n" + msg.content])
             } else {
                 let role = msg.role == .assistant ? "assistant" : "user"
+                let calls = pairing.answeredCalls(of: msg)
+                if !calls.isEmpty {
+                    var blocks: [[String: Any]] = []
+                    if !msg.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        blocks.append(["type": "text", "text": msg.content])
+                    }
+                    for call in calls {
+                        blocks.append([
+                            "type": "tool_use",
+                            "id": call.id,
+                            "name": call.toolName,
+                            "input": ToolCallPairing.argumentsObject(call.argumentsJson),
+                        ])
+                    }
+                    formattedMessages.append(["role": role, "content": blocks])
+                    continue
+                }
                 formattedMessages.append([
                     "role": role,
                     "content": canSee
@@ -249,12 +275,11 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                         parametersDict = [
                             "type": "object",
                             "properties": [
-                                "task_title": ["type": "string", "description": "Short title of the delegated sub-task"],
-                                "task_description": ["type": "string", "description": "Detailed instructions for the sub-agent"],
-                                "subagent_id": ["type": "string", "description": "Target sub-agent identifier"],
-                                "subagent_name": ["type": "string", "description": "Display name of the target sub-agent"]
+                                "target_agent_id": ["type": "string", "description": "Which agent to delegate to - its id or name, from the configured agents"],
+                                "task_title": ["type": "string", "description": "The objective, stated so it can be worked on without further questions"],
+                                "task_description": ["type": "string", "description": "Context the sub-agent needs: files, constraints, what done looks like"]
                             ],
-                            "required": ["task_title", "task_description"]
+                            "required": ["target_agent_id", "task_title"]
                         ]
                     case "agent_message":
                         parametersDict = [

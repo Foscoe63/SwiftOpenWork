@@ -108,6 +108,7 @@ public final class OllamaService: LLMProviderClient, Sendable {
         if !systemPrompt.isEmpty {
             formattedMessages.append(["role": "system", "content": systemPrompt])
         }
+        let pairing = ToolCallPairing(messages)
         for msg in messages {
             if msg.role == .tool {
                 // Prefer native tool role when the request includes tools (Radiant parity).
@@ -125,6 +126,13 @@ public final class OllamaService: LLMProviderClient, Sendable {
                 }
             } else {
                 var entry: [String: Any] = ["role": msg.role.rawValue, "content": msg.content]
+                let calls = pairing.answeredCalls(of: msg)
+                if !tools.isEmpty, !calls.isEmpty {
+                    // Ollama takes arguments as an object, not a JSON string.
+                    entry["tool_calls"] = calls.map { call -> [String: Any] in
+                        ["function": ["name": call.toolName, "arguments": ToolCallPairing.argumentsObject(call.argumentsJson)]]
+                    }
+                }
                 // Ollama takes images as a sibling array of bare base64 strings, not as
                 // content blocks.
                 let images = ImageTransport.imageAttachments(in: msg)
