@@ -2078,6 +2078,11 @@ public struct SettingsView: View {
                     Toggle("", isOn: $appState.settings.planModeEnabled)
                         .toggleStyle(.switch)
                 }
+
+                SettingsRow(title: "Auto-Continue Until Done", subtitle: "When a turn stops with the todo list still open and no question asked, send Continue automatically instead of waiting for you to (stops after 5 in a row)", icon: "arrow.clockwise") {
+                    Toggle("", isOn: $appState.settings.autoContinueUntilDone)
+                        .toggleStyle(.switch)
+                }
             }
 
             WorkspaceRulesCard(appState: appState)
