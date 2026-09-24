@@ -3,6 +3,7 @@ import XCTest
 @testable import SwiftOpenWorkEngine
 
 /// Loose aliases must not be a way around a safety check.
+@MainActor
 final class AliasesDoNotBypassSafetyTests: XCTestCase {
     private var settings: AppSettings { AppSettings.default }
 
