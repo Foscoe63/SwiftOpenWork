@@ -974,6 +974,8 @@ public final class AgentRunner {
         var turnPromptTokens = 0
         var turnCompletionTokens = 0
         var identicalToolCounts: [String: Int] = [:]
+        /// Signatures of calls parsed from the model's text and already sent to run this turn.
+        var textCallsAlreadyRun = Set<String>()
         var askUserStreak = 0
         var halted = false
         var finishedNaturally = false
@@ -1232,11 +1234,21 @@ public final class AgentRunner {
                 }
             } else {
                 let newlyGeneratedDelta = String(accumulator.fullText.dropFirst(turnTextBefore.count))
-                var parsedMarkdownCalls = parseToolCalls(from: newlyGeneratedDelta)
-                if parsedMarkdownCalls.isEmpty && !accumulator.fullText.isEmpty {
-                    parsedMarkdownCalls = parseToolCalls(from: accumulator.fullText)
+                let knownMCP = Set((await MCPClientManager.shared.advertisedToolNames()).values.flatMap { $0 })
+                var parsedMarkdownCalls = parseToolCalls(from: newlyGeneratedDelta, knownMCP: knownMCP)
+                // Fall back to the whole turn only when this step produced no text at all (the
+                // accumulator can be reconciled to a shorter string mid-turn). `fullText` keeps the
+                // raw call syntax of every earlier step, so parsing it in any other case replayed
+                // calls that had already run — an edit applied twice fails "old_string not found",
+                // and a replayed file_write overwrites newer content with older.
+                if parsedMarkdownCalls.isEmpty,
+                   newlyGeneratedDelta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   !accumulator.fullText.isEmpty {
+                    parsedMarkdownCalls = parseToolCalls(from: accumulator.fullText, knownMCP: knownMCP)
+                        .filter { !textCallsAlreadyRun.contains(Self.callSignature($0.tool, $0.args)) }
                 }
                 for parsed in parsedMarkdownCalls {
+                    textCallsAlreadyRun.insert(Self.callSignature(parsed.tool, parsed.args))
                     pendingCallsToExecute.append((id: UUID().uuidString, tool: parsed.tool, args: parsed.args))
                 }
             }
@@ -2208,135 +2220,14 @@ public final class AgentRunner {
     }
 
 
-    private func parseToolCalls(from text: String) -> [(tool: String, args: String)] {
-        var calls: [(tool: String, args: String)] = []
-        
-        // Helper to normalize parsed dictionary into (tool, args)
-        func addCall(from dict: [String: Any]) {
-            // Case 1: GrizzyClaw / MCP style: {"mcp": "server_name", "tool": "tool_name", "arguments": {...}}
-            if let mcpServer = dict["mcp"] as? String ?? dict["server"] as? String {
-                let mcpTool = dict["tool"] as? String ?? dict["action"] as? String ?? dict["name"] as? String ?? "query"
-                let mcpArgs = (dict["arguments"] as? [String: Any]) ?? (dict["parameters"] as? [String: Any]) ?? (dict["args"] as? [String: Any]) ?? [:]
-                let wrapper: [String: Any] = [
-                    "server": mcpServer,
-                    "tool": mcpTool,
-                    "arguments": mcpArgs
-                ]
-                let paramsData = (try? JSONSerialization.data(withJSONObject: wrapper)) ?? Data()
-                let paramsStr = String(data: paramsData, encoding: .utf8) ?? "{}"
-                calls.append((tool: "mcp_call", args: paramsStr))
-                return
-            }
-
-            // Case 2: Standard {"tool": "...", "parameters": {...}} or {"name": "...", "arguments": {...}}
-            if let tool = (dict["tool"] as? String) ?? (dict["name"] as? String) {
-                let params = (dict["parameters"] as? [String: Any]) ?? (dict["arguments"] as? [String: Any]) ?? (dict["args"] as? [String: Any]) ?? [:]
-                let paramsData = (try? JSONSerialization.data(withJSONObject: params)) ?? Data()
-                let paramsStr = String(data: paramsData, encoding: .utf8) ?? "{}"
-                calls.append((tool: tool, args: paramsStr))
-            }
-        }
-
-        // 1. Match TOOL_CALL = { ... } format (from GrizzyClaw)
-        let toolCallAssignPattern = "TOOL_CALL\\s*=\\s*(\\{[\\s\\S]*?\\})"
-        if let regex = try? NSRegularExpression(pattern: toolCallAssignPattern, options: []) {
-            let nsString = text as NSString
-            let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
-            for match in matches {
-                if match.numberOfRanges > 1 {
-                    let jsonString = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    if let data = jsonString.data(using: .utf8),
-                       let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                        addCall(from: dict)
-                    }
-                }
-            }
-        }
-
-        // 2. Match Markdown code blocks with JSON: ```tool_call {"tool": "...", "parameters": {...}} ``` or ```json or ```
-        let markdownPattern = "```(?:tool_call|json)?\\s*(?:\\r?\\n)?\\s*(\\{[\\s\\S]*?\\})(?:\\s*(?:\\r?\\n)?```|$)"
-        if let regex = try? NSRegularExpression(pattern: markdownPattern, options: []) {
-            let nsString = text as NSString
-            let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
-            for match in matches {
-                if match.numberOfRanges > 1 {
-                    let jsonString = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    if let data = jsonString.data(using: .utf8),
-                       let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                        addCall(from: dict)
-                    }
-                }
-            }
-        }
-        
-        // 3. Fallback: Match naked JSON containing {"tool": "...", "parameters": ...} or {"mcp": "...", "tool": ...}
-        if calls.isEmpty {
-            let nakedJsonPattern = "(\\{\\s*\"(?:tool|name|mcp|server)\"\\s*:\\s*\"[^\"]+\"[\\s\\S]*?\\})"
-            if let regex = try? NSRegularExpression(pattern: nakedJsonPattern, options: []) {
-                let nsString = text as NSString
-                let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
-                for match in matches {
-                    if match.numberOfRanges > 1 {
-                        let jsonString = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        if let data = jsonString.data(using: .utf8),
-                           let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                            addCall(from: dict)
-                        }
-                    }
-                }
-            }
-        }
-        
-        // 4. Match Qwen / XML style tool calls: <tool_call>\n<function=name>\n<parameter=key>\nval\n</parameter>\n</tool_call>
-        let xmlPattern = "<tool_call>[\\s\\S]*?<function=([a-zA-Z0-9_-]+)>([\\s\\S]*?)(?:</tool_call>|$)"
-        if let xmlRegex = try? NSRegularExpression(pattern: xmlPattern, options: []) {
-            let nsString = text as NSString
-            let matches = xmlRegex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
-            for match in matches {
-                guard match.numberOfRanges >= 3 else { continue }
-                let functionName = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                let paramsBody = nsString.substring(with: match.range(at: 2))
-                
-                var paramsDict: [String: Any] = [:]
-                let paramTagPattern = "<parameter=([a-zA-Z0-9_-]+)>([\\s\\S]*?)(?:</parameter>|$)"
-                if let paramRegex = try? NSRegularExpression(pattern: paramTagPattern, options: []) {
-                    let paramNs = paramsBody as NSString
-                    let paramMatches = paramRegex.matches(in: paramsBody, options: [], range: NSRange(location: 0, length: paramNs.length))
-                    for pMatch in paramMatches {
-                        if pMatch.numberOfRanges >= 3 {
-                            let pKey = paramNs.substring(with: pMatch.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                            var pVal = paramNs.substring(with: pMatch.range(at: 2))
-                            if pVal.hasPrefix("\n") { pVal.removeFirst() }
-                            if pVal.hasSuffix("\n") { pVal.removeLast() }
-                            paramsDict[pKey] = pVal
-                        }
-                    }
-                }
-                
-                let paramsData = (try? JSONSerialization.data(withJSONObject: paramsDict)) ?? Data()
-                let paramsStr = String(data: paramsData, encoding: .utf8) ?? "{}"
-                calls.append((tool: functionName, args: paramsStr))
-            }
-        }
-        
-        // 5. Match Loose / Inline tool invocations like `tool_name(param="value")` or `file_list(path="/Volumes/...")`
-        if calls.isEmpty {
-            let funcCallPattern = "([a-zA-Z0-9_-]+)\\s*\\(\\s*([a-zA-Z0-9_-]+)\\s*=\\s*[\"']([^\"']+)[\"']\\s*\\)"
-            if let regex = try? NSRegularExpression(pattern: funcCallPattern, options: []) {
-                let nsString = text as NSString
-                let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
-                for match in matches {
-                    if match.numberOfRanges >= 4 {
-                        let tool = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        let key = nsString.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        let val = nsString.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        let dict: [String: Any] = ["tool": tool, "parameters": [key: val]]
-                        addCall(from: dict)
-                    }
-                }
-            }
-        }
-
-        return calls
+    /// Tool calls the model wrote as text. See `TextToolCallParser` for what is and isn't accepted.
+    private func parseToolCalls(from text: String, knownMCP: Set<String>) -> [(tool: String, args: String)] {
+        TextToolCallParser.parse(text) { name in
+            let canonical = ToolCallRepair.canonicalName(name)
+            return ToolCallRepair.builtInNames.contains(canonical)
+                || canonical == "mcp_call"
+                || name.hasPrefix("mcp__")
+                || knownMCP.contains(name)
+        }.map { (tool: $0.tool, args: $0.args) }
     }
 }
