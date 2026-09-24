@@ -1035,6 +1035,21 @@ public final class AgentRunner {
                Never start a dev server with terminal_command — it is killed after two minutes.
                Before changing a function's signature or behaviour, find_references shows every
                caller; code_diagnostics checks one edited file in seconds.
+            Editing well is most of the job:
+               - Read the region immediately before you edit it; file_read prefixes every line with
+                 its number and a tab — that prefix is not part of the file, so leave it out of
+                 old_string.
+               - Keep old_string short (2-6 lines) but unique, copied exactly from what you just read.
+                 Use multi_edit for several changes to one file, and file_write only for new files
+                 or full rewrites.
+               - If an edit fails, the error says where your old_string stopped matching. Re-read that
+                 region and copy it — do not retry variations from memory, and do not guess line
+                 numbers.
+               - If the same error survives two attempts, stop patching. Re-read the error and the
+                 surrounding code, and change approach.
+               - Swift: "the compiler is unable to type-check this expression in reasonable time"
+                 means one expression is too complex. Break it into separate `let` values with
+                 explicit types; do not restructure the code around it.
             1. Do not narrate ("I will check…" / "Let me…"). Call the tool immediately, then answer.
             2. Prefer native tool calls. Markdown fallback only if needed:
             ```tool_call

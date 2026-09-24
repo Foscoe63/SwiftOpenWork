@@ -197,16 +197,27 @@ public enum EditMatcher {
     }
 
     /// Why an edit missed, phrased so the model can correct itself instead of retrying blind.
+    ///
+    /// Anchors on the first line of `old`, then walks forward to the first line that stops
+    /// matching and shows expected vs actual there — the model usually got the opening right and
+    /// drifted later, and a bare "lines differ" leaves it guessing which.
     public static func missHint(old: String, in contents: String) -> String {
-        let firstLine = old.split(separator: "\n", omittingEmptySubsequences: true)
-            .map { $0.trimmingCharacters(in: .whitespaces) }.first(where: { !$0.isEmpty }) ?? ""
-        guard !firstLine.isEmpty else { return "" }
-        let fileLines = contents.components(separatedBy: .newlines)
-        if let idx = fileLines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == firstLine }) {
-            let end = min(fileLines.count, idx + 4)
-            let snippet = fileLines[idx..<end].joined(separator: "\n")
-            return " The first line of old_string exists at line \(idx + 1), but the following lines differ. Actual text there:\n\(snippet)\nRe-read the file and copy old_string exactly."
+        let oldLines = old.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let anchor = oldLines.firstIndex(where: { !$0.isEmpty }) else { return "" }
+        let wanted = Array(oldLines[anchor...])
+        let fileLines = contents.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        guard let start = fileLines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == wanted[0] }) else {
+            return " The first line of old_string does not appear anywhere in the file — it may have changed since you last read it. Re-read the file before editing."
         }
-        return " The first line of old_string does not appear anywhere in the file — it may have changed since you last read it. Re-read the file before editing."
+        var k = 0
+        while k < wanted.count, start + k < fileLines.count,
+              fileLines[start + k].trimmingCharacters(in: .whitespaces) == wanted[k] { k += 1 }
+        let line = start + k + 1
+        let expected = k < wanted.count ? wanted[k] : ""
+        let actual = start + k < fileLines.count ? fileLines[start + k] : "(end of file)"
+        let end = min(fileLines.count, start + max(k, 0) + 3)
+        let context = fileLines[start..<end].joined(separator: "\n")
+        return " old_string matches the file from line \(start + 1) up to line \(line - 1), then diverges at line \(line): you wrote `\(expected)` but the file has `\(actual.trimmingCharacters(in: .whitespaces))`. Actual text from line \(start + 1):\n\(context)\nRe-read that region and copy it exactly, or use a shorter old_string that stops before the divergence."
     }
 }

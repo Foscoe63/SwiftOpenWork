@@ -367,4 +367,13 @@ final class MultiEditToolTests: XCTestCase {
         let applied = try XCTUnwrap(try? result.get())
         XCTAssertEqual(applied.contents, "struct A {\n    func f() {\n        let x = 2\n    }\n}\n")
     }
+    func testMissHintPointsAtTheFirstDivergingLine() {
+        let file = "a\n  // Filter\n  if ch == 1 {\n    i += 1\n  }\n"
+        guard case .failure(let failure) = MultiEdit.apply([
+            .init(oldString: "// Filter\nif ch == 1 {\n  j += 1\n}", newString: "x")
+        ], to: file) else { return XCTFail("expected failure") }
+        XCTAssertTrue(failure.message.contains("diverges at line 4"))
+        XCTAssertTrue(failure.message.contains("`j += 1`"))
+        XCTAssertTrue(failure.message.contains("`i += 1`"))
+    }
 }
