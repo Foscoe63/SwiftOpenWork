@@ -52,8 +52,10 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                 if let parsed = try? JSONDecoder().decode(AnthropicModelsResponse.self, from: data),
                    let data = parsed.data, !data.isEmpty {
                     return data.map { m in
-                        let isReasoning = m.id.contains("3-7") || m.id.contains("r1") || m.id.contains("thinking")
-                        return ModelInfo(
+                        // Every Claude 3.7+ model can think; only the older 3.0/3.5 line cannot.
+                        let isLegacy = m.id.contains("claude-3-opus") || m.id.contains("3-5-") || m.id.contains("claude-3-haiku")
+                        let isReasoning = !isLegacy
+                        let info = ModelInfo(
                             id: m.id,
                             name: m.display_name ?? m.id,
                             providerId: provider.id,
@@ -63,22 +65,34 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                             supportsStreaming: true,
                             supportsTools: true,
                             description: "Anthropic Claude Model",
-                            isDefault: m.id.contains("3-7") || m.id.contains("3-5-sonnet"),
+                            isDefault: m.id.contains("sonnet-5"),
                             speedTier: m.id.contains("haiku") ? "Fast" : "Powerful",
                             costPer1kPrompt: m.id.contains("haiku") ? 0.0008 : 0.003,
                             costPer1kCompletion: m.id.contains("haiku") ? 0.004 : 0.015
                         )
+                        // Context and price from the shared table when the model is one we know;
+                        // the heuristics above only stand in for models it doesn't list.
+                        return KnownModels.applying(to: info)
                     }
                 }
             }
         }
 
+        // Offline fallback when `/models` cannot be reached.
         return [
-            ModelInfo(id: "claude-3-7-sonnet-20250219", name: "Claude 3.7 Sonnet (Hybrid)", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: true, isDefault: true, speedTier: "Powerful", costPer1kPrompt: 0.003, costPer1kCompletion: 0.015),
-            ModelInfo(id: "claude-3-5-sonnet-20241022", name: "Claude 3.5 Sonnet", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Powerful", costPer1kPrompt: 0.003, costPer1kCompletion: 0.015),
-            ModelInfo(id: "claude-3-5-haiku-20241022", name: "Claude 3.5 Haiku", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Fast", costPer1kPrompt: 0.0008, costPer1kCompletion: 0.004),
-            ModelInfo(id: "claude-3-opus-20240229", name: "Claude 3 Opus", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Powerful", costPer1kPrompt: 0.015, costPer1kCompletion: 0.075)
-        ]
+            ("claude-sonnet-5", true), ("claude-opus-5-5", false), ("claude-fable-5-1", false),
+            ("claude-haiku-4-5-20251001", false),
+        ].map { id, isDefault in
+            KnownModels.applying(to: ModelInfo(
+                id: id,
+                name: KnownModels.spec(for: id)?.displayName ?? id,
+                providerId: provider.id,
+                supportsVision: true,
+                supportsReasoning: true,
+                isDefault: isDefault,
+                speedTier: id.contains("haiku") ? "Fast" : "Powerful"
+            ))
+        }
     }
 
     public func streamChat(

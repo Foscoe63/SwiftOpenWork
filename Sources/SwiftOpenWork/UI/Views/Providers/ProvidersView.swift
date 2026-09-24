@@ -711,7 +711,7 @@ public struct ProviderEditModalView: View {
 
                         // Add Custom Model Row
                         HStack(spacing: 6) {
-                            TextField("Model ID (e.g. gpt-4o)", text: $newModelId)
+                            TextField("Model ID (e.g. gpt-6-sol)", text: $newModelId)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 11, design: .monospaced))
                             TextField("Display Name", text: $newModelName)

@@ -185,7 +185,7 @@ public final class OpenAIService: LLMProviderClient, Sendable {
     private func makeModelInfo(id: String, name: String?, ownedBy: String?, providerId: String) -> ModelInfo {
         let isReasoning = id.contains("r1") || id.contains("o1") || id.contains("o3") || id.contains("reason")
         let displayName = name ?? id.components(separatedBy: "/").last ?? id
-        return ModelInfo(
+        return KnownModels.applying(to: ModelInfo(
             id: id,
             name: displayName,
             providerId: providerId,
@@ -196,7 +196,7 @@ public final class OpenAIService: LLMProviderClient, Sendable {
             supportsTools: id.contains("coder") || id.contains("gpt") || id.contains("claude") || id.contains("qwen"),
             description: "Provider model (\(ownedBy ?? "standard"))",
             speedTier: isReasoning ? "Powerful" : "Fast"
-        )
+        ))
     }
 
     public func streamChat(
