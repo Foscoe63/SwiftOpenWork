@@ -2501,7 +2501,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         timer.setEventHandler {
             if process.isRunning {
                 state.markTimedOut()
-                // The whole tree, not just the shell: see `ProcessTree`.
+                // The whole tree, not just the shell: see `ProcessTree.terminate`.
                 ProcessTree.terminate(process.processIdentifier)
             }
         }
@@ -2573,7 +2573,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         timeoutTimer.setEventHandler {
             if process.isRunning {
                 state.markTimedOut()
-                // The whole tree, not just the shell: see `ProcessTree`.
+                // The whole tree, not just the shell: see `ProcessTree.terminate`.
                 ProcessTree.terminate(process.processIdentifier)
             }
         }

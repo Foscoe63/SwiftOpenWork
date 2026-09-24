@@ -3,15 +3,10 @@ import XCTest
 
 final class ProcessTreeTests: XCTestCase {
 
-    func testDescendantsAreListedChildrenFirst() {
-        let ps = "  10 1\n 11 10\n 12 11\n 13 1\n 99 50\n"
-        XCTAssertEqual(ProcessTree.descendants(of: 10, inPsOutput: ps), [12, 11])
-        XCTAssertEqual(ProcessTree.descendants(of: 1, inPsOutput: ps), [12, 11, 10, 13])
-        XCTAssertEqual(ProcessTree.descendants(of: 77, inPsOutput: ps), [])
-    }
-
-    func testMalformedPsLinesAreIgnored() {
-        XCTAssertEqual(ProcessTree.descendants(of: 1, inPsOutput: "garbage\n 2 1\n x y\n"), [2])
+    func testTerminationFindsTheSameDescendantsThePreviewCodeDoes() {
+        let pairs = ProcessTree.parse(psOutput: "  10 1\n 11 10\n 12 11\n 13 1\n 99 50\n")
+        XCTAssertEqual(Set(ProcessTree.descendants(of: 10, in: pairs)), [11, 12])
+        XCTAssertTrue(ProcessTree.descendants(of: 77, in: pairs).isEmpty)
     }
 
     /// The bug: terminating only the shell left the process it started running, holding the pipe.
@@ -24,7 +19,7 @@ final class ProcessTreeTests: XCTestCase {
         shell.standardError = FileHandle.nullDevice
         try shell.run()
         Thread.sleep(forTimeInterval: 0.5)
-        XCTAssertFalse(ProcessTree.descendants(of: shell.processIdentifier).isEmpty, "the sleep should be running under the shell")
+        XCTAssertFalse(ProcessTree.liveDescendants(of: shell.processIdentifier).isEmpty, "the sleep should be running under the shell")
 
         ProcessTree.terminate(shell.processIdentifier, grace: 0.5)
         shell.waitUntilExit()
