@@ -482,10 +482,45 @@ public final class ToolExecutionEngine: @unchecked Sendable {
 
         case "file_write", "write_file", "create_file", "save_file":
             let path = (dict["path"] as? String) ?? (dict["filename"] as? String) ?? (dict["filepath"] as? String) ?? (dict["file"] as? String) ?? (dict["title"] as? String) ?? ""
-            let content = (dict["content"] as? String) ?? (dict["text"] as? String) ?? (dict["body"] as? String) ?? (dict["data"] as? String) ?? ""
+            guard !path.trimmingCharacters(in: .whitespaces).isEmpty else {
+                return ToolExecutionResult(
+                    success: false, output: "",
+                    error: "file_write requires a `path`. Nothing was written.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+            // A call with no `content` used to write an empty file — and a model whose output was
+            // cut off mid-call sends exactly that — so it silently wiped whatever was there.
+            // Missing is an error; an explicit empty string is a deliberate empty file.
+            let rawContent = dict["content"] ?? dict["text"] ?? dict["body"] ?? dict["data"]
+            let content: String
+            switch rawContent {
+            case let string as String:
+                content = string
+            case let object as [String: Any]:
+                content = Self.prettyJSON(object) ?? ""
+            case let array as [Any]:
+                content = Self.prettyJSON(array) ?? ""
+            case .some(let other) where !(other is NSNull):
+                content = "\(other)"
+            default:
+                return ToolExecutionResult(
+                    success: false, output: "",
+                    error: "file_write requires `content` (the full file text); none was given, so nothing was written and '\(path)' is unchanged. If the file is large, write it in smaller pieces or use edit_file for targeted changes.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
             let fullPath = path.hasPrefix("/") ? path : (workspace.folderPath as NSString).appendingPathComponent(path)
             if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
                 return denial
+            }
+            var writeIsDirectory: ObjCBool = false
+            if fileManager.fileExists(atPath: fullPath, isDirectory: &writeIsDirectory), writeIsDirectory.boolValue {
+                return ToolExecutionResult(
+                    success: false, output: "",
+                    error: "file_write: '\(path)' is a directory. Give the path of the file to create inside it.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
             }
             await FileCheckpointStore.shared.record(path: fullPath)
             return writeFile(path: fullPath, content: content, startTime: startTime)
@@ -609,7 +644,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             let pathHint = (dict["path"] as? String) ?? (dict["file"] as? String)
             let dryRun = (dict["dry_run"] as? Bool) ?? false
             let mode = (dict["mode"] as? String).flatMap(SymbolRename.Mode.init(rawValue:)) ?? .auto
-            let declarationLine = (dict["line"] as? Int) ?? (dict["line"] as? String).flatMap(Int.init)
+            let declarationLine = Self.intArgument(dict["line"])
             defer { if let callId { LiveToolOutput.conclude(noteFor: callId) } }
             do {
                 let outcome = try await SymbolRename.rename(
@@ -801,6 +836,11 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         case "file_list", "list_files", "list_directory", "ls", "dir":
             let path = (dict["path"] as? String) ?? (dict["directory"] as? String) ?? (dict["folder"] as? String) ?? workspace.folderPath
             let fullPath = path.hasPrefix("/") ? path : (workspace.folderPath as NSString).appendingPathComponent(path)
+            // Every other read tool checks the sandbox; this one did not, so listing worked
+            // anywhere on disk with the sandbox on.
+            if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
             return listDirectory(path: fullPath, startTime: startTime)
 
         case "file_copy", "copy_file", "cp":
@@ -811,6 +851,9 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             if let denial = sandboxDenial(for: fullFrom, workspace: workspace, settings: settings, startTime: startTime)
                 ?? sandboxDenial(for: fullTo, workspace: workspace, settings: settings, startTime: startTime) {
                 return denial
+            }
+            if let problem = Self.transferProblem(tool: "file_copy", from: from, to: to, fullFrom: fullFrom, fullTo: fullTo) {
+                return ToolExecutionResult(success: false, output: "", error: problem, durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
             }
             await FileCheckpointStore.shared.record(path: fullTo)
             do {
@@ -843,6 +886,11 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 ?? sandboxDenial(for: fullTo, workspace: workspace, settings: settings, startTime: startTime) {
                 return denial
             }
+            // Checked before anything is touched: the destination used to be deleted first, so a
+            // mistyped source destroyed the destination, and moving a file onto itself deleted it.
+            if let problem = Self.transferProblem(tool: "file_move", from: from, to: to, fullFrom: fullFrom, fullTo: fullTo) {
+                return ToolExecutionResult(success: false, output: "", error: problem, durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            }
             await FileCheckpointStore.shared.record(path: fullFrom)
             await FileCheckpointStore.shared.record(path: fullTo)
             do {
@@ -871,6 +919,15 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             let fullPath = path.hasPrefix("/") ? path : (workspace.folderPath as NSString).appendingPathComponent(path)
             if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
                 return denial
+            }
+            // An empty or missing `path` resolves to the workspace folder itself, and `removeItem`
+            // is recursive. Refuse anything that is the workspace root, a parent of it, or home.
+            if let reason = Self.refusedDeleteTarget(fullPath, workspaceRoot: workspace.folderPath) {
+                return ToolExecutionResult(
+                    success: false, output: "",
+                    error: "file_delete refused: \(reason) Name the specific file or folder to delete.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
             }
             await FileCheckpointStore.shared.record(path: fullPath)
             do {
@@ -960,6 +1017,17 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                 )
             }
+            guard oldString != newString else {
+                return ToolExecutionResult(
+                    success: false,
+                    output: "",
+                    error: "edit_file: old_string and new_string are identical, so nothing would change. Nothing was written.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+            if let problem = editTargetProblem(tool: "edit_file", path: path, fullPath: fullPath, workspace: workspace, startTime: startTime) {
+                return problem
+            }
             do {
                 let existing = try String(contentsOfFile: fullPath, encoding: .utf8)
                 let count = existing.components(separatedBy: oldString).count - 1
@@ -1029,6 +1097,9 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                     error: "multi_edit requires `edits`: a list of {old_string, new_string, replace_all?} objects.",
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                 )
+            }
+            if let problem = editTargetProblem(tool: "multi_edit", path: path, fullPath: fullPath, workspace: workspace, startTime: startTime) {
+                return problem
             }
             do {
                 let existing = try String(contentsOfFile: fullPath, encoding: .utf8)
@@ -1272,6 +1343,10 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 return Self.failure("\(toolName) needs a 'path' to an image file.", startTime)
             }
             let fullPath = rawPath.hasPrefix("/") ? rawPath : (workspace.folderPath as NSString).appendingPathComponent(rawPath)
+            // Reads a file like `file_read` does, so it answers to the same sandbox.
+            if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
             guard fileManager.fileExists(atPath: fullPath) else {
                 return Self.failure("No file at \(rawPath).", startTime)
             }
@@ -2115,6 +2190,61 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         return Array((flatMatches + nameMatches.sorted { $0.count < $1.count }).prefix(limit))
     }
 
+    /// Why an edit can't even start: the target is a folder, or isn't there. nil when it's a file.
+    /// Same recovery help `file_read` gives — a raw "couldn't be opened" leaves a model retrying
+    /// the same mangled path.
+    private func editTargetProblem(tool: String, path: String, fullPath: String, workspace: Workspace, startTime: Double) -> ToolExecutionResult? {
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: fullPath, isDirectory: &isDirectory)
+        if exists, !isDirectory.boolValue { return nil }
+        var message: String
+        if exists {
+            message = "\(tool): '\(path)' is a directory, not a file. Pass the path of one file inside it (`file_list` shows what is there)."
+        } else {
+            message = "\(tool): '\(path)' does not exist."
+            let nearby = Self.similarPaths(toMissing: fullPath, in: workspace.folderPath)
+            if nearby.isEmpty {
+                message += " Use `glob` to find the right path rather than guessing, or `file_write` to create a new file."
+            } else {
+                message += " Did you mean: " + nearby.map { "`\($0)`" }.joined(separator: ", ") + "?"
+            }
+        }
+        return ToolExecutionResult(
+            success: false, output: "", error: message,
+            durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        )
+    }
+
+    /// What `file_read` returns for a directory: its entries, with each subfolder's files inline so
+    /// a skills-style layout (`<slug>/SKILL.md`) shows the exact path to read next.
+    static func directoryListing(atPath path: String, displayPath: String, limit: Int = 200) -> String {
+        let fm = FileManager.default
+        let names = ((try? fm.contentsOfDirectory(atPath: path)) ?? [])
+            .filter { !$0.hasPrefix(".") }
+            .sorted()
+        var lines: [String] = []
+        var example: String?
+        for name in names.prefix(limit) {
+            let full = (path as NSString).appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            fm.fileExists(atPath: full, isDirectory: &isDir)
+            if isDir.boolValue {
+                let children = ((try? fm.contentsOfDirectory(atPath: full)) ?? []).filter { !$0.hasPrefix(".") }.sorted()
+                if example == nil, let first = children.first { example = "\(name)/\(first)" }
+                let shown = children.prefix(6).joined(separator: ", ")
+                lines.append("\(name)/" + (children.isEmpty ? "  (empty)" : "  → \(shown)" + (children.count > 6 ? ", …" : "")))
+            } else {
+                if example == nil { example = name }
+                lines.append(name)
+            }
+        }
+        var output = "\(displayPath) is a directory, not a file — file_read reads files. Its contents:\n"
+        output += lines.isEmpty ? "(empty)" : lines.map { "  \($0)" }.joined(separator: "\n")
+        if names.count > limit { output += "\n  … and \(names.count - limit) more" }
+        output += "\n\nRead one file with its full path, e.g. \((displayPath as NSString).appendingPathComponent(example ?? "<name>"))"
+        return output
+    }
+
     /// Lines returned when the caller does not ask for a specific window.
     public static let defaultReadLineLimit = 2_000
     /// Individual lines longer than this are clipped; minified bundles otherwise blow the budget.
@@ -2135,6 +2265,18 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     ) -> ToolExecutionResult {
         let cleanPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
         let expanded = (cleanPath as NSString).expandingTildeInPath
+
+        // A directory is not a file, and saying "binary or non-UTF8" about one sent a model into
+        // retrying the same read until the repeated-failure breaker stopped it. Answer with what it
+        // was looking for: the folder's contents, one level into subfolders.
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory), isDirectory.boolValue {
+            return ToolExecutionResult(
+                success: true,
+                output: Self.directoryListing(atPath: expanded, displayPath: cleanPath),
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+        }
 
         let content: String
         do {
@@ -2222,16 +2364,45 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         }
     }
 
+    /// Names never worth showing an agent. Everything else dotted stays: `.github`, `.env.example`,
+    /// `.gitignore` and `.swiftopenwork` are exactly what it needs to find.
+    private static let listingNoise: Set<String> = [".git", ".DS_Store", ".build", "node_modules", ".swiftpm"]
+
     private func listDirectory(path: String, startTime: Double) -> ToolExecutionResult {
         let cleanPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
         let expanded = (cleanPath as NSString).expandingTildeInPath
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: expanded, isDirectory: &isDirectory) else {
+            return ToolExecutionResult(
+                success: false, output: "",
+                error: "Failed to list '\(cleanPath)': it does not exist. Use `glob` to find the right path.",
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+        }
+        guard isDirectory.boolValue else {
+            return ToolExecutionResult(
+                success: false, output: "",
+                error: "'\(cleanPath)' is a file, not a directory. Use `file_read` to read it.",
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+        }
         do {
             let items = try fileManager.contentsOfDirectory(atPath: expanded)
-            let sorted = items.filter { !$0.hasPrefix(".") }.sorted()
-            let result = sorted.joined(separator: "\n")
+                .filter { !Self.listingNoise.contains($0) }
+                .sorted()
+            let limit = 500
+            // A trailing slash marks a folder — without it a model cannot tell one from a file, and
+            // tries to read it.
+            let lines = items.prefix(limit).map { name -> String in
+                var isDir: ObjCBool = false
+                fileManager.fileExists(atPath: (expanded as NSString).appendingPathComponent(name), isDirectory: &isDir)
+                return isDir.boolValue ? name + "/" : name
+            }
+            var result = lines.joined(separator: "\n")
+            if items.count > limit { result += "\n… and \(items.count - limit) more" }
             return ToolExecutionResult(
                 success: true,
-                output: result.isEmpty ? "(Directory is empty or contains only hidden files)" : "Files in \(cleanPath):\n\(result)",
+                output: result.isEmpty ? "(Directory is empty)" : "Files in \(cleanPath) (folders end in /):\n\(result)",
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
         } catch {
@@ -2242,6 +2413,45 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
         }
+    }
+
+    /// Why a delete target must not be removed, or nil when it may be.
+    static func refusedDeleteTarget(_ fullPath: String, workspaceRoot: String) -> String? {
+        let target = (fullPath as NSString).standardizingPath
+        let root = (workspaceRoot as NSString).standardizingPath
+        let home = NSHomeDirectory()
+        if target.isEmpty || target == "/" { return "that is the filesystem root." }
+        if target == root { return "that is the workspace folder itself." }
+        if target == home { return "that is the home folder." }
+        if root.hasPrefix(target.hasSuffix("/") ? target : target + "/") { return "that folder contains the workspace." }
+        return nil
+    }
+
+    /// Why a copy or move can't proceed, or nil when it can. Everything here is checked before the
+    /// destination is touched.
+    static func transferProblem(tool: String, from: String, to: String, fullFrom: String, fullTo: String) -> String? {
+        let fm = FileManager.default
+        if from.trimmingCharacters(in: .whitespaces).isEmpty { return "\(tool) requires a `source`. Nothing was changed." }
+        if to.trimmingCharacters(in: .whitespaces).isEmpty { return "\(tool) requires a `destination`. Nothing was changed." }
+        guard fm.fileExists(atPath: fullFrom) else {
+            return "\(tool): source '\(from)' does not exist, so nothing was changed (the destination was left as it was). Use `glob` to find the right path."
+        }
+        let a = (fullFrom as NSString).standardizingPath
+        let b = (fullTo as NSString).standardizingPath
+        if a == b { return "\(tool): source and destination are the same path. Nothing was changed." }
+        var isDir: ObjCBool = false
+        if fm.fileExists(atPath: a, isDirectory: &isDir), isDir.boolValue, b.hasPrefix(a + "/") {
+            return "\(tool): cannot put a folder inside itself ('\(to)'). Nothing was changed."
+        }
+        return nil
+    }
+
+    /// Pretty-printed JSON for a `file_write` whose content arrived as an object or array.
+    static func prettyJSON(_ value: Any) -> String? {
+        guard JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
+              let string = String(data: data, encoding: .utf8) else { return nil }
+        return string + "\n"
     }
 
     public struct ProcessRun {
