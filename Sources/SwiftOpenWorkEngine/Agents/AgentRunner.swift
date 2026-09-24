@@ -1483,6 +1483,14 @@ public final class AgentRunner {
                             host.showToast("Plan mode exited")
                         }
                         resultOutput = "Plan mode exited."
+                    } else if planModeActive, ToolCallRepair.isBlockedInPlanMode(toolName) {
+                        // The tool list is filtered in plan mode, but a model can still name a tool
+                        // it was not offered — and the dispatcher resolves aliases such as `bash`
+                        // and `write`. Enforce it here, where the call would actually run.
+                        resultSuccess = false
+                        resultError = "blocked in plan mode"
+                        resultOutput = "Error: plan mode is on, so `\(toolName)` (it changes files or runs commands) was not run. Propose your plan, then call `exit_plan_mode` once the user approves."
+                        accumulator.appendNotice("Blocked `\(toolName)` in plan mode.")
                     } else if let note = Self.unchangedReadNote(
                         toolName: toolName, argumentsJson: argsJson, workspaceRoot: workspace.folderPath,
                         log: readLog, transcript: workingMessages
@@ -1964,19 +1972,9 @@ public final class AgentRunner {
 
     /// Internal rather than private so tests can prove a newly added writing tool is blocked here.
     public static func filterToolsForPlanMode(_ tools: [Tool]) -> [Tool] {
-        let blocked: Set<String> = [
-            "file_write", "write_file", "create_file", "save_file",
-            "file_delete", "delete_file", "rm",
-            "file_move", "move_file", "mv",
-            "file_copy", "copy_file", "cp",
-            "edit_file", "file_edit", "multi_edit", "edit_file_multi", "rename_symbol",
-            "preview_start", "run_app", "launch_app", "git_commit", "worktree_create", "worktree_remove",
-            "setup_xcode_language_server",
-            "terminal_command", "run_command"
-        ]
         var filtered = tools.filter { tool in
             if tool.name == "exit_plan_mode" || tool.name == "ask_user" { return true }
-            if blocked.contains(tool.name) { return false }
+            if ToolCallRepair.isBlockedInPlanMode(tool.name) { return false }
             if MCPNamespacedTool.isNamespaced(tool.name) {
                 // Plan mode allows reads only, and classification is fail-closed: an MCP tool we
                 // cannot positively identify as a read stays out.
@@ -2033,7 +2031,7 @@ public final class AgentRunner {
     /// Approving a fetch from a public site allows that site for the rest of the chat. Local
     /// addresses are never remembered: they ask every time.
     static func rememberApprovedFetch(toolName: String, argumentsJson: String, sessionId: String) {
-        guard toolName == "fetch_url", !sessionId.isEmpty,
+        guard ToolCallRepair.builtInCanonical(toolName) == "fetch_url", !sessionId.isEmpty,
               let url = fetchURL(argumentsJson: argumentsJson),
               let host = WebFetchPolicy.normalizedHost(url),
               !WebFetchPolicy.isLocal(host: host) else { return }
@@ -2060,6 +2058,19 @@ public final class AgentRunner {
         sessionId: String = "",
         workspaceRoot: String = ""
     ) -> String? {
+        // Decide on what the call *is*, not on how the model spelled it — and on the arguments the
+        // dispatcher will actually use. `delete` and `remove` resolve to file_delete, and `read`
+        // with a `file_path` reads that path; a check on the raw name and keys would wave both
+        // through unprompted.
+        let canonical = ToolCallRepair.builtInCanonical(toolName)
+        let toolName = canonical ?? toolName
+        var argumentsJson = argumentsJson
+        if let canonical, let data = argumentsJson.data(using: .utf8),
+           let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+           let normalizedData = try? JSONSerialization.data(withJSONObject: ToolCallRepair.normalizeArguments(tool: canonical, parsed)),
+           let normalized = String(data: normalizedData, encoding: .utf8) {
+            argumentsJson = normalized
+        }
         switch toolName {
         case "ask_user":
             return nil
