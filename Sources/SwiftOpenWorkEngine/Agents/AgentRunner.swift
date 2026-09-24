@@ -1077,7 +1077,18 @@ public final class AgentRunner {
 
             iteration += 1
 
-            workingMessages = ContextCompactor.foldOldToolResults(workingMessages)
+            // Only under real context pressure: every fold rewrites history, and a local model's
+            // KV cache cannot continue through a rewrite, so each one is a full re-read. See
+            // `ContextCompactor.foldOldToolResults`.
+            workingMessages = ContextCompactor.foldOldToolResults(
+                workingMessages,
+                pressure: (
+                    estimatedTokens: ContextCompactor.estimatedTokens(
+                        workingMessages, extraCharacters: systemPromptWithTools.count
+                    ),
+                    windowTokens: model.contextWindow
+                )
+            )
 
             // A milestone reached this iteration — a green build or test run, a clean tree — means
             // the work behind it is settled. Compacting here trades detail for room at the

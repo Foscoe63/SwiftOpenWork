@@ -23,7 +23,22 @@ public enum ContextCompactor {
     /// run logged "Context cache reset: history diverged" fifteen times in one turn. Folds now
     /// wait until `batch` results are due and then take them all, so the cache survives the
     /// steps in between.
-    public static func foldOldToolResults(_ messages: [ChatMessage], keepLast: Int = 4, batch: Int = 4) -> [ChatMessage] {
+    ///
+    /// That still paid a full re-read every fourth step whether or not the context needed the
+    /// room: on a 70B model with a 128K window and 15K tokens in use, a fold cost minutes to save
+    /// nothing. So when `pressure` is given, folding only starts once the transcript fills
+    /// `foldPressureFraction` of the window; below that the transcript is left exactly as it
+    /// was, and the cache keeps working. Nil keeps the unconditional behaviour.
+    public static func foldOldToolResults(
+        _ messages: [ChatMessage],
+        keepLast: Int = 4,
+        batch: Int = 4,
+        pressure: (estimatedTokens: Int, windowTokens: Int)? = nil
+    ) -> [ChatMessage] {
+        if let pressure, pressure.windowTokens > 0,
+           Double(pressure.estimatedTokens) < Double(pressure.windowTokens) * foldPressureFraction {
+            return messages
+        }
         var toolIndices: [Int] = []
         for (i, m) in messages.enumerated() where m.role == .tool {
             toolIndices.append(i)
@@ -39,6 +54,23 @@ public enum ContextCompactor {
             copy.content = "[Earlier tool result compacted] \(preview)…"
             return copy
         }
+    }
+
+    /// Fraction of the context window the transcript must fill before old tool results are
+    /// folded away.
+    public static let foldPressureFraction = 0.4
+
+    /// A cheap, deliberately pessimistic token estimate for a working transcript: about three
+    /// characters a token, which over-counts prose and is about right for code, so folding
+    /// starts a little early rather than a little late. `extraCharacters` is the system prompt
+    /// and tool schemas, which the transcript does not contain.
+    public static func estimatedTokens(_ messages: [ChatMessage], extraCharacters: Int = 0) -> Int {
+        var characters = extraCharacters
+        for message in messages {
+            characters += message.content.count
+            for call in message.toolCalls { characters += call.argumentsJson.count + call.toolName.count }
+        }
+        return characters / 3
     }
 
     // MARK: - Digest

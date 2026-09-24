@@ -166,6 +166,29 @@ public enum MLXSessionReuse {
         max(0, cachedBefore) + max(0, prefilled)
     }
 
+    /// What changed at the first place `incoming` stops matching `consumed`, for the notice the
+    /// user sees. "history diverged at message 3" alone is unactionable: it does not say whether a
+    /// tool result was folded, a message edited, or the caller rendered something differently.
+    /// Returns nil when nothing differs before `incoming` runs out.
+    public static func describeDivergence(consumed: [Fingerprint], incoming: [Fingerprint]) -> String? {
+        func brief(_ text: String) -> String {
+            let flat = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+            return flat.count > 48 ? String(flat.prefix(48)) + "…" : flat
+        }
+        var i = 0
+        while i < consumed.count, i < incoming.count {
+            if !consumed[i].matches(incoming[i]) {
+                let before = consumed[i], now = incoming[i]
+                if before.role != now.role {
+                    return "message \(i + 1) changed role, from \(before.role) to \(now.role)"
+                }
+                return "message \(i + 1) (\(now.role)) changed: was “\(brief(before.content))”, now “\(brief(now.content))”"
+            }
+            i += 1
+        }
+        return nil
+    }
+
     /// Whether `incoming` can continue a session that has already consumed `consumed`.
     public static func decide(
         cachedKey: Key?,
