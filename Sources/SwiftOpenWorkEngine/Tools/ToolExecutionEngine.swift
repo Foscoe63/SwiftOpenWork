@@ -2482,10 +2482,15 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         process.standardError = pipe
 
         let state = ShellOutputState(maxBytes: 1_000_000)
+        let endOfOutput = DispatchSemaphore(value: 0)
         LiveToolOutput.announce(command: command, callId: callId)
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let chunk = handle.availableData
-            guard !chunk.isEmpty else { return }
+            guard !chunk.isEmpty else {
+                handle.readabilityHandler = nil
+                endOfOutput.signal()
+                return
+            }
             state.append(chunk)
             // The same bytes the buffer gets, so a build can be watched instead of waited on.
             LiveToolOutput.publish(chunk: String(decoding: chunk, as: UTF8.self), callId: callId)
@@ -2496,7 +2501,8 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         timer.setEventHandler {
             if process.isRunning {
                 state.markTimedOut()
-                process.terminate()
+                // The whole tree, not just the shell: see `ProcessTree`.
+                ProcessTree.terminate(process.processIdentifier)
             }
         }
         timer.resume()
@@ -2510,12 +2516,10 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         }
         process.waitUntilExit()
         timer.cancel()
+        // Wait for the pipe to close, but not forever: a background process the command started
+        // (`npm run dev &`) holds it open, and reading to end-of-file would hang the tool call.
+        _ = endOfOutput.wait(timeout: .now() + 1.5)
         pipe.fileHandleForReading.readabilityHandler = nil
-        let remainder = pipe.fileHandleForReading.readDataToEndOfFile()
-        if !remainder.isEmpty {
-            state.append(remainder)
-            LiveToolOutput.publish(chunk: String(decoding: remainder, as: UTF8.self), callId: callId)
-        }
         LiveToolOutput.conclude(callId: callId, exitCode: process.terminationStatus)
 
         let (output, didTimeOut) = state.finalize()
@@ -2550,10 +2554,15 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         // command's combined stdout/stderr exceeds the kernel pipe buffer, an unread pipe makes
         // the child block on write() and never exit, which deadlocks waitUntilExit() forever.
         let state = ShellOutputState(maxBytes: 200_000)
+        let endOfOutput = DispatchSemaphore(value: 0)
         LiveToolOutput.announce(command: command, callId: callId)
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let chunk = handle.availableData
-            guard !chunk.isEmpty else { return }
+            guard !chunk.isEmpty else {
+                handle.readabilityHandler = nil
+                endOfOutput.signal()
+                return
+            }
             state.append(chunk)
             LiveToolOutput.publish(chunk: String(decoding: chunk, as: UTF8.self), callId: callId)
         }
@@ -2564,7 +2573,8 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         timeoutTimer.setEventHandler {
             if process.isRunning {
                 state.markTimedOut()
-                process.terminate()
+                // The whole tree, not just the shell: see `ProcessTree`.
+                ProcessTree.terminate(process.processIdentifier)
             }
         }
         timeoutTimer.resume()
@@ -2573,13 +2583,10 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             try process.run()
             process.waitUntilExit()
             timeoutTimer.cancel()
+            // Let the handler drain what was written just before exit, but never wait on a pipe a
+            // surviving background process still holds open — that used to hang the call forever.
+            _ = endOfOutput.wait(timeout: .now() + 1.5)
             pipe.fileHandleForReading.readabilityHandler = nil
-            // Drain any bytes written between the last readabilityHandler callback and exit.
-            let remainder = pipe.fileHandleForReading.readDataToEndOfFile()
-            if !remainder.isEmpty {
-                state.append(remainder)
-                LiveToolOutput.publish(chunk: String(decoding: remainder, as: UTF8.self), callId: callId)
-            }
             LiveToolOutput.conclude(callId: callId, exitCode: process.terminationStatus)
 
             let (output, didTimeOut) = state.finalize()
