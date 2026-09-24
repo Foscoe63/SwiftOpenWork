@@ -118,6 +118,16 @@ public final class AnthropicService: LLMProviderClient, Sendable {
         request.setValue(provider.apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
+        // What this model accepts differs by generation — see `AnthropicRequestPolicy`. The old
+        // shape (`thinking: enabled` + `temperature`) is a 400 on the current Claude 5 models.
+        let shape = AnthropicRequestPolicy.shape(
+            modelId: model.id,
+            supportsReasoning: model.supportsReasoning,
+            effort: reasoningEffort,
+            temperature: temperature,
+            topP: PersistenceManager.shared.loadSettings().defaultTopP,
+            maxTokens: maxTokens
+        )
         var formattedMessages: [[String: Any]] = []
         var blindImageCount = 0
         let pairing = ToolCallPairing(messages)
@@ -192,21 +202,10 @@ public final class AnthropicService: LLMProviderClient, Sendable {
             "system": systemPrompt
         ]
 
-        if model.supportsReasoning && reasoningEffort != .off {
-            let budgetTokens = reasoningEffort == .high ? 4096 : (reasoningEffort == .medium ? 2048 : 1024)
-            body["thinking"] = [
-                "type": "enabled",
-                "budget_tokens": budgetTokens
-            ]
-        } else {
-            body["temperature"] = temperature
-            // Only outside the thinking branch: the Anthropic API rejects top_p alongside
-            // extended thinking, and requires temperature 1 there.
-            let topP = PersistenceManager.shared.loadSettings().defaultTopP
-            if topP > 0, topP < 1.0 {
-                body["top_p"] = topP
-            }
-        }
+        if let thinking = shape.thinking { body["thinking"] = thinking }
+        if let outputConfig = shape.outputConfig { body["output_config"] = outputConfig }
+        if let temperature = shape.temperature { body["temperature"] = temperature }
+        if let topP = shape.topP { body["top_p"] = topP }
 
         // Add native tools in Anthropic schema { name: "...", description: "...", input_schema: {...} }
         if !tools.isEmpty {
@@ -356,7 +355,6 @@ public final class AnthropicService: LLMProviderClient, Sendable {
         var currentToolUseId = ""
         var currentToolName = ""
         var currentToolArgs = ""
-
         for try await line in bytes.lines {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.hasPrefix("data:") else { continue }
@@ -365,6 +363,31 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
 
             let eventType = json["type"] as? String
+
+            if eventType == "error" {
+                // An overload or server fault mid-stream arrives as an event, not an HTTP status,
+                // and was skipped — the reply just stopped, with nothing saying why.
+                let detail = (json["error"] as? [String: Any])?["message"] as? String ?? "the stream reported an error"
+                let kind = (json["error"] as? [String: Any])?["type"] as? String ?? "error"
+                throw NSError(domain: "AnthropicService", code: 500, userInfo: [
+                    NSLocalizedDescriptionKey: "Anthropic stream error (\(kind)): \(detail)"
+                ])
+            }
+
+            // Token counts, so the context meter and session cost have something to show. Input
+            // arrives in `message_start`; output in `message_delta`. Cached input counts as input:
+            // it occupies the window whether or not it was billed at the discounted rate.
+            if eventType == "message_start",
+               let usage = (json["message"] as? [String: Any])?["usage"] as? [String: Any] {
+                let input = (usage["input_tokens"] as? Int ?? 0)
+                    + (usage["cache_creation_input_tokens"] as? Int ?? 0)
+                    + (usage["cache_read_input_tokens"] as? Int ?? 0)
+                onChunk(LLMStreamChunk(promptTokens: input))
+            } else if eventType == "message_delta",
+                      let usage = json["usage"] as? [String: Any],
+                      let output = usage["output_tokens"] as? Int {
+                onChunk(LLMStreamChunk(completionTokens: output))
+            }
 
             if eventType == "content_block_start" {
                 if let contentBlock = json["content_block"] as? [String: Any],
