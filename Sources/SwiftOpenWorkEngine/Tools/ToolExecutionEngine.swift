@@ -155,7 +155,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 // Running language servers would otherwise answer from the old text until the
                 // file-system event arrives, and an agent often edits and then queries at once.
                 await LanguageServerPool.shared.filesChanged(changed.paths, created: changed.created)
-                if Self.editToolNames.contains(toolName) {
+                if Self.editToolNames.contains(ToolCallRepair.canonicalName(toolName)) {
                     // Instructions say to check an edit; smaller models often do not. When a
                     // server is already warm, its verdict rides along with the edit for free.
                     var reports: [String] = []
@@ -326,9 +326,11 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             paths.append(target)
             if result.fileDiff?.kind == .created { created.insert(target) }
         }
-        if ["file_move", "move_file", "mv", "file_copy", "copy_file", "cp"].contains(toolName.lowercased()),
+        let canonicalName = ToolCallRepair.canonicalName(toolName)
+        if ["file_move", "file_copy"].contains(canonicalName),
            let data = argumentsJson.data(using: .utf8),
-           let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+           let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            let dict = ToolCallRepair.normalizeArguments(tool: canonicalName, parsed)
             for key in ["source", "destination", "from", "to"] {
                 if let raw = dict[key] as? String, !raw.isEmpty {
                     let path = raw.hasPrefix("/") ? raw : (workspace.folderPath as NSString).appendingPathComponent(raw)
@@ -357,11 +359,15 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             "multi_edit", "edit_file_multi",
             "file_delete", "delete_file", "rm",
         ]
-        guard singleFileTools.contains(toolName.lowercased()) else { return nil }
+        let canonical = ToolCallRepair.canonicalName(toolName)
+        guard singleFileTools.contains(canonical) else { return nil }
         guard let data = argumentsJson.data(using: .utf8),
-              let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+              let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             return nil
         }
+        // Same repair the dispatcher applied, so `file_path` (or `bash`-style spellings) still
+        // yield a diff card and a checkpoint target.
+        let dict = ToolCallRepair.normalizeArguments(tool: canonical, parsed)
         let keys = ["path", "filename", "filepath", "file"]
         guard let raw = keys.compactMap({ dict[$0] as? String }).first(where: { !$0.isEmpty }) else {
             return nil
@@ -400,7 +406,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         let startTime = CFAbsoluteTimeGetCurrent()
         
         guard let data = argumentsJson.data(using: .utf8),
-              let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+              let rawDict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             return ToolExecutionResult(
                 success: false,
                 output: "",
@@ -410,6 +416,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         }
 
         let settings = PersistenceManager.shared.loadSettings()
+        let mcpAdvertisedNames = await MCPClientManager.shared.advertisedToolNames()
 
         // A tool promoted from a meta-tool catalog this turn: the model calls it directly, we
         // rewrite it back into the dispatcher call the server actually accepts.
@@ -425,7 +432,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 serverConfig: server,
                 serverIdentifier: server.name,
                 toolName: promoted.executeTool,
-                arguments: MCPCatalogPromote.dispatchArguments(for: promoted, raw: dict),
+                arguments: MCPCatalogPromote.dispatchArguments(for: promoted, raw: rawDict),
                 workspace: workspace
             )
             return Self.mcpResult(output, startTime: startTime)
@@ -446,7 +453,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                     serverConfig: server,
                     serverIdentifier: server.name,
                     toolName: parsed.toolName,
-                    arguments: dict,
+                    arguments: rawDict,
                     workspace: workspace
                 )
                 return Self.mcpResult(output, startTime: startTime)
@@ -454,6 +461,13 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 return Self.mcpFailure(message, startTime: startTime)
             }
         }
+
+        // One repair layer for what models actually emit: alias names (`read`, `bash`), wrapper
+        // prefixes, alternative argument keys, "true" for true. See ToolCallRepair. A real MCP tool
+        // of the same name wins over our loose aliases.
+        let advertisedSet = Set(mcpAdvertisedNames.values.flatMap { $0 })
+        let toolName = ToolCallRepair.resolve(toolName, mcpAdvertised: advertisedSet)
+        let dict = ToolCallRepair.normalizeArguments(tool: toolName, rawDict)
 
         switch toolName {
         case "file_read", "read_file":
@@ -1896,8 +1910,13 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 return Self.mcpResult(output, startTime: startTime)
             }
 
+            // Nothing owns it: a misspelled or invented built-in. Say what the nearest real tools
+            // are; the MCP-only wording sent models hunting through servers that don't exist.
+            let serverSummary = enabledServers.isEmpty
+                ? nil
+                : enabledServers.map { "\($0.name) (`\($0.id)`)" }.joined(separator: ", ")
             return Self.mcpFailure(
-                MCPToolRouting.unroutableToolMessage(tool: toolName, enabled: enabledServers),
+                ToolCallRepair.unknownToolMessage(toolName, mcpServerSummary: serverSummary),
                 startTime: startTime
             )
         }

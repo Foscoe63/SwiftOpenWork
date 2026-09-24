@@ -1910,38 +1910,8 @@ public final class AgentRunner {
     /// One name per tool, whichever alias the model used. Mirrors the alias groups
     /// `ToolExecutionEngine` dispatches on; a name not listed is its own canonical name.
     public nonisolated static func canonicalToolName(_ name: String) -> String {
-        let lower = name.lowercased()
-        return toolAliases[lower] ?? lower
+        ToolCallRepair.canonicalName(name)
     }
-
-    private nonisolated static let toolAliases: [String: String] = {
-        let groups: [[String]] = [
-            ["file_read", "read_file"],
-            ["file_write", "write_file", "create_file", "save_file"],
-            ["find_symbol", "symbol_search"],
-            ["grep", "search_code", "code_search"],
-            ["glob", "find_files"],
-            ["file_list", "list_files", "list_directory", "ls", "dir"],
-            ["file_copy", "copy_file", "cp"],
-            ["file_move", "move_file", "mv"],
-            ["file_delete", "delete_file", "rm"],
-            ["terminal_command", "run_command"],
-            ["edit_file", "file_edit"],
-            ["multi_edit", "edit_file_multi"],
-            ["get_current_date", "get_date", "current_date", "date"],
-            ["document_extract", "extract_document", "read_pdf_or_image"],
-            ["workspace_semantic_search", "search_workspace"],
-            ["screenshot_window", "screenshot_app"],
-            ["accessibility_tree", "ui_tree", "inspect_window"],
-            ["run_app", "launch_app"],
-            ["mcp_call", "call_mcp_tool"],
-        ]
-        var map: [String: String] = [:]
-        for group in groups {
-            for alias in group.dropFirst() { map[alias] = group[0] }
-        }
-        return map
-    }()
 
     /// A file read that succeeded this turn.
     public struct RecordedRead: Sendable, Equatable {

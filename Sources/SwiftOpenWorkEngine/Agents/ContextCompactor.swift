@@ -83,8 +83,8 @@ public enum ContextCompactor {
 
         for message in messages {
             for call in message.toolCalls {
-                let name = call.toolName.lowercased()
-                let args = arguments(call.argumentsJson)
+                let name = ToolCallRepair.canonicalName(call.toolName)
+                let args = ToolCallRepair.normalizeArguments(tool: name, arguments(call.argumentsJson))
 
                 if writeTools.contains(name) || editTools.contains(name) || deleteTools.contains(name) {
                     guard let path = (args["path"] ?? args["filename"] ?? args["filepath"] ?? args["file"]) as? String,

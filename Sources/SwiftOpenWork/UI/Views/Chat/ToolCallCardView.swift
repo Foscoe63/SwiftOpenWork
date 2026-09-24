@@ -29,7 +29,7 @@ public struct ToolCallCardView: View {
     }
 
     private var isFileMutatingTool: Bool {
-        let n = toolCall.toolName.lowercased()
+        let n = ToolCallRepair.canonicalName(toolCall.toolName)
         return ["file_write", "write_file", "edit_file", "file_edit", "multi_edit", "edit_file_multi",
                 "file_delete", "file_move", "file_copy", "rename_symbol", "revert_changes",
                 "setup_xcode_language_server"].contains(n)

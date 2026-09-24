@@ -125,7 +125,11 @@ public enum MultiEdit {
                 return nil
             }
             let all = (entry["replace_all"] ?? entry["replaceAll"]) as? Bool ?? false
-            edits.append(Edit(oldString: old, newString: new, replaceAll: all))
+            edits.append(Edit(
+                oldString: ToolCallRepair.stripLineNumberGutter(old),
+                newString: ToolCallRepair.stripLineNumberGutter(new),
+                replaceAll: all
+            ))
         }
         return edits.isEmpty ? nil : edits
     }
