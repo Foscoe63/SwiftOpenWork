@@ -598,14 +598,20 @@ public final class SubAgentAccumulator {
 
 /// Thread-safe collector for native tool calls emitted from provider stream callbacks
 /// (which often run off the MainActor).
-private final class AgentToolCallCollector: @unchecked Sendable {
+final class AgentToolCallCollector: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [ToolCallInfo] = []
 
+    /// Streaming providers send one call as a run of growing snapshots — the first often has an
+    /// empty `arguments` — all under the same id. The latest snapshot is the complete one, so an
+    /// id already held is *replaced*, keeping its position. This used to keep the first snapshot
+    /// and drop the rest, so a call streamed in fragments ran with empty or truncated arguments.
     func add(_ tc: ToolCallInfo) {
         lock.lock()
         defer { lock.unlock() }
-        if !items.contains(where: { $0.id == tc.id || ($0.toolName == tc.toolName && $0.argumentsJson == tc.argumentsJson) }) {
+        if let index = items.firstIndex(where: { $0.id == tc.id }) {
+            items[index] = tc
+        } else if !items.contains(where: { $0.toolName == tc.toolName && $0.argumentsJson == tc.argumentsJson }) {
             items.append(tc)
         }
     }
