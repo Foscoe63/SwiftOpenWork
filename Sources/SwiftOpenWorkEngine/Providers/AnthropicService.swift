@@ -128,6 +128,9 @@ public final class AnthropicService: LLMProviderClient, Sendable {
             topP: PersistenceManager.shared.loadSettings().defaultTopP,
             maxTokens: maxTokens
         )
+        // Thinking blocks go back only when this request thinks — see `AnthropicRequestPolicy`.
+        let replayThinking = AnthropicRequestPolicy.carriesThinking(shape, modelId: model.id)
+
         var formattedMessages: [[String: Any]] = []
         var blindImageCount = 0
         let pairing = ToolCallPairing(messages)
@@ -166,6 +169,11 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                 let calls = pairing.answeredCalls(of: msg)
                 if !calls.isEmpty {
                     var blocks: [[String: Any]] = []
+                    // The turn's thinking blocks, verbatim and first. Without them the model
+                    // restarts its reasoning after every tool result.
+                    if replayThinking {
+                        blocks += AnthropicRequestPolicy.replayBlocks(for: msg.thinkingBlocks, modelId: model.id)
+                    }
                     if !msg.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         blocks.append(["type": "text", "text": msg.content])
                     }
@@ -355,6 +363,8 @@ public final class AnthropicService: LLMProviderClient, Sendable {
         var currentToolUseId = ""
         var currentToolName = ""
         var currentToolArgs = ""
+        var thinkingCapture = ThinkingStreamCapture()
+
         for try await line in bytes.lines {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.hasPrefix("data:") else { continue }
@@ -363,6 +373,12 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
 
             let eventType = json["type"] as? String
+
+            // Thinking blocks are captured verbatim, from the same events, so they can go back
+            // with the tool results. The reasoning shown to the user is handled below, as before.
+            if let block = thinkingCapture.handle(json, modelId: model.id) {
+                onChunk(LLMStreamChunk(thinkingBlocks: [block]))
+            }
 
             if eventType == "error" {
                 // An overload or server fault mid-stream arrives as an event, not an HTTP status,

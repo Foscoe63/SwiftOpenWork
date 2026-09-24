@@ -624,6 +624,25 @@ final class AgentToolCallCollector: @unchecked Sendable {
 
 }
 
+/// Thread-safe collector for the thinking blocks one model response produced, in order.
+final class AgentThinkingBlockCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var blocks: [ThinkingBlock] = []
+
+    func add(_ block: ThinkingBlock) {
+        lock.lock()
+        defer { lock.unlock() }
+        blocks.append(block)
+    }
+
+    /// Nil when there were none, so the message stays as it always was.
+    func snapshot() -> [ThinkingBlock]? {
+        lock.lock()
+        defer { lock.unlock() }
+        return blocks.isEmpty ? nil : blocks
+    }
+}
+
 /// A thread-safe "every Nth call" gate, for work too costly to do per token.
 public final class StreamTickCounter: @unchecked Sendable {
     private let lock = NSLock()
@@ -1125,6 +1144,7 @@ public final class AgentRunner {
             // `Task { @MainActor in nativeEmittedToolCalls.append }` raced so tool calls were
             // often lost — the model looked "stuck" narrating without ever executing.
             let toolCallCollector = AgentToolCallCollector()
+            let thinkingCollector = AgentThinkingBlockCollector()
             accumulator.beginIteration()
             let textBridge = AgentStreamTextBridge()
             let turnTextBefore = accumulator.fullText
@@ -1157,6 +1177,9 @@ public final class AgentRunner {
                     ) { chunk in
                         for tc in chunk.toolCalls {
                             toolCallCollector.add(tc)
+                        }
+                        for block in chunk.thinkingBlocks {
+                            thinkingCollector.add(block)
                         }
                         textBridge.ingest(chunk)
                         let grewText = !chunk.deltaText.isEmpty
@@ -1360,7 +1383,10 @@ public final class AgentRunner {
                             toolName: $0.tool,
                             argumentsJson: Self.sanitizeToolArgumentsJson(toolName: $0.tool, argumentsJson: $0.args)
                         )
-                    }
+                    },
+                    // The model's own thinking for this step, verbatim: Claude needs it back with
+                    // the tool results or its reasoning starts over each round.
+                    thinkingBlocks: thinkingCollector.snapshot()
                 ))
                 // Hide "Let me check…" preamble once tools are underway.
                 accumulator.hideTurnNarration(beforeLength: turnTextBefore.count)

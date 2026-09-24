@@ -40,6 +40,47 @@ public enum AnthropicRequestPolicy {
         return adaptiveOnlyPrefixes.contains { id.hasPrefix($0) }
     }
 
+    /// Whether this request has thinking active, and so can carry thinking blocks back.
+    ///
+    /// Blocks are only sent when the request is in a thinking mode: adaptive-only models think
+    /// unless `disabled`, older ones only when `thinking` is `enabled`. Sending them to a request
+    /// that has thinking off is a mismatch the API answers by stripping them or worse, so they
+    /// stay home.
+    public static func carriesThinking(_ shape: Shape, modelId: String) -> Bool {
+        let type = shape.thinking?["type"] as? String
+        if isAdaptiveOnly(modelId) { return type != "disabled" }
+        return type == "enabled"
+    }
+
+    /// The content blocks to put *in front of* an assistant message's text and tool calls, or
+    /// none.
+    ///
+    /// All or nothing, and conservative on purpose — an altered or misplaced block is a 400,
+    /// while a missing one only costs the model its train of thought:
+    /// * every block must have been written by `modelId` (a block is readable only by the model
+    ///   that produced it, and some others);
+    /// * every block must have come before any text or tool call in its response, because that
+    ///   is the only position this app rebuilds;
+    /// * a thinking block needs its signature, a redacted one its payload.
+    public static func replayBlocks(for blocks: [ThinkingBlock]?, modelId: String) -> [[String: Any]] {
+        guard let blocks, !blocks.isEmpty else { return [] }
+        for block in blocks {
+            guard block.modelId == modelId, block.leading else { return [] }
+            switch block.kind {
+            case .thinking: if block.signature.isEmpty { return [] }
+            case .redacted: if block.data.isEmpty { return [] }
+            }
+        }
+        return blocks.map { block in
+            switch block.kind {
+            case .thinking:
+                return ["type": "thinking", "thinking": block.thinking, "signature": block.signature]
+            case .redacted:
+                return ["type": "redacted_thinking", "data": block.data]
+            }
+        }
+    }
+
     public static func shape(
         modelId: String,
         supportsReasoning: Bool,

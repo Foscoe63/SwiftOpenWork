@@ -255,6 +255,7 @@ public enum SubAgentExecutor {
 
                 let box = ConcurrentTextBox()
                 let calls = ToolCallBox()
+                let thinking = AgentThinkingBlockCollector()
                 // The deadline was only checked between rounds, so one slow round ran a sub-agent
                 // to 759s against a 600s limit. The round in flight is now cancelled at the deadline.
                 let requestMessages = messages
@@ -275,6 +276,7 @@ public enum SubAgentExecutor {
                             ) { chunk in
                                 if !chunk.deltaText.isEmpty { box.append(chunk.deltaText) }
                                 if !chunk.toolCalls.isEmpty { calls.add(chunk.toolCalls) }
+                                for block in chunk.thinkingBlocks { thinking.add(block) }
                             }
                         }
                     }
@@ -315,7 +317,8 @@ public enum SubAgentExecutor {
                     break
                 }
 
-                messages.append(ChatMessage(role: .assistant, content: text, toolCalls: pending))
+                // With the model's own thinking for this step, verbatim — see `ThinkingBlock`.
+                messages.append(ChatMessage(role: .assistant, content: text, toolCalls: pending, thinkingBlocks: thinking.snapshot()))
                 var repeatedOut = false
                 for call in pending {
                     toolCallsMade.append(call.toolName)
