@@ -53,7 +53,7 @@ Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibil
 
 | | Capability |
 |:---:|---|
-| 🔁 | Multi-turn ReAct with **native tool / function calling** (OpenAI, Ollama, in-process MLX) plus markdown / XML fallbacks |
+| 🔁 | Multi-turn ReAct with **native tool / function calling** (OpenAI, Anthropic, Ollama, in-process MLX) plus markdown / XML fallbacks |
 | 📁 | Filesystem — `file_read` (paginated, numbered), `file_write`, `edit_file`, `multi_edit` (several edits, all or nothing), `file_list`, `file_copy`, `file_move`, `file_delete` |
 | 🔎 | Code search — `grep` (regex → `path:line: text`), `glob` (`**/*.swift`), `find_symbol` (declarations only), `search_workspace` (BM25 index) |
 | 🧠 | **Code intelligence** (language servers) — `go_to_definition`, `find_references`, `symbol_info` (type, signature, docs), `code_diagnostics` (errors for one file in seconds), `document_symbols` (outline), `call_hierarchy` (callers / callees). Answers come from the compiler's index, so `find_references` lists uses of *that* declaration, not every word that matches |
@@ -70,6 +70,9 @@ Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibil
 | 🧮 | Utilities — `calculator`, `get_current_date`, `document_extract` |
 | 📧 | Optional Google — `gmail_*`, `google_calendar_*` |
 
+- **Tool calls are repaired, not rejected.** One layer maps the tool names and argument shapes models actually write (aliases, string-encoded JSON, text-format calls) onto the real tools. Approvals, plan mode and sub-agent path checks judge the *resolved* call, so an alias cannot get around them
+- **File tools fail closed.** `file_write` without content does not wipe the file, `file_delete` cannot remove the workspace, move/copy check the source first, and `edit_file` / `multi_edit` tolerate whitespace drift and say where a miss stopped matching
+- A shell command that times out has its whole process tree killed
 - Full JSON parameter schemas via `ToolSchemaCatalog` (critical for local-model tool use)
 - **Workspace context** in the system prompt — path, project type, layout, git branch and dirty count
 - **Per-repo instructions** — `SWIFTOPENWORK.md` / `AGENTS.md` / `CLAUDE.md` at the workspace root (`OPENWORK.md` from 1.1 is still read)
@@ -113,8 +116,8 @@ The code-intelligence tools run real language servers, started on first use and 
 - **Shared fairly** — chat turns, automations, Shortcuts and parallel sub-agents take turns on the one in-process model, first come first served. A queued turn says what it is waiting for, and the chat header names any background run. Two conversations keep their own KV caches, so taking turns does not re-prefill both
 - **Honest numbers** — the context meter shows the real window in use for local models (cached prefix included), each reply shows its measured decode speed, and multimodal checkpoints report the context window they actually declare (262k for Ornith and Qwen3.6, not a 131k fallback). Unloading a model now actually frees its memory
 - **KV cache reuse** — a continued conversation is appended to the live `ChatSession` rather than re-prefilled. Measured on a 48B model, time-to-first-token goes from 1.5s at three messages and climbing ~0.67s per exchange, to a flat 0.9s. Any rewrite of earlier history (compaction, a fork) rebuilds instead, because a cache describing text no longer in the conversation would keep steering the model invisibly
-- Optional servers: oMLX, mlx_lm, Osaurus, Ollama, LM Studio
-- Cloud & remote: OpenAI-compatible, Anthropic, Groq, OpenRouter, DeepSeek, Mistral, Gemini, custom endpoints
+- Optional servers: oMLX, mlx_lm, Osaurus, Ollama, LM Studio, and [Splash](https://github.com/incoai/splash) (`splash serve`, an OpenAI-compatible server on port 8000; needs an M3+ Mac with 36 GB+). LM Studio, llama.cpp and Splash each use their own configured URL, so they can run side by side
+- Cloud & remote: OpenAI-compatible, Anthropic (Claude 5 models use adaptive thinking; thinking blocks are kept across tool rounds), Groq, OpenRouter, DeepSeek, Mistral, Gemini, custom endpoints
 - Provider probing, model listing, Keychain-backed API keys
 
 ### Schedules & automations
@@ -365,7 +368,7 @@ invocation, so nothing global changes and no password is needed:
 ```bash
 Scripts/swift.sh build
 Scripts/swift.sh run SwiftOpenWork
-Scripts/swift.sh test           # 846 tests, in two bundles
+Scripts/swift.sh test           # 1,000+ tests, in two bundles
 Scripts/swift.sh test --filter WorkspaceContextTests
 ```
 
@@ -382,7 +385,7 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
 swift build
 swift run SwiftOpenWork
-swift test                      # 846 tests, in two bundles
+swift test                      # 1,000+ tests, in two bundles
 
 # Engine tests alone. This builds neither MLX nor the SwiftUI app:
 swift build --product SwiftOpenWorkEngineTests
