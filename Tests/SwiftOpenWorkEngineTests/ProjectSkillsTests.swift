@@ -151,6 +151,27 @@ final class ProjectSkillsTests: XCTestCase {
         XCTAssertTrue(block.contains("- **A**: Does A."))
     }
 
+    /// The block told the model to read "the path listed" and listed none, so it read the folder.
+    func testPromptBlockListsTheFileToRead() throws {
+        try writeSkill(".swiftopenwork/skills/a/SKILL.md", "---\nname: A\ndescription: Does A.\n---\n\nBody.")
+        let skills = ProjectSkills.load(workspacePath: root.path)
+        let block = ProjectSkills.promptBlock(skills)
+        let path = try XCTUnwrap(skills.first?.filePath)
+        XCTAssertTrue(block.contains("file: `\(path)`"), block)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path))
+    }
+
+    func testReadingASkillsFolderListsTheSkillFiles() throws {
+        try writeSkill(".swiftopenwork/skills/a/SKILL.md", "Body A")
+        try writeSkill(".swiftopenwork/skills/b/SKILL.md", "Body B")
+        let folder = ProjectSkills.folder(in: root.path)
+        let listing = ToolExecutionEngine.directoryListing(atPath: folder, displayPath: folder)
+        XCTAssertTrue(listing.contains("is a directory"))
+        XCTAssertTrue(listing.contains("a/  → SKILL.md"))
+        XCTAssertTrue(listing.contains("\(folder)/a/SKILL.md"), "the suggested path must be a file, not another folder")
+        XCTAssertFalse(listing.contains("binary"))
+    }
+
     func testPromptBlockIsEmptyWithoutSkills() {
         XCTAssertEqual(ProjectSkills.promptBlock([]), "")
     }

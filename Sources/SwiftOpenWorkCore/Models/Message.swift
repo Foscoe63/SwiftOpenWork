@@ -60,6 +60,10 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     /// Durable halt reason when a turn was stopped by budget / stuck breaker / round cap.
     public var haltReason: String?
     public var haltText: String?
+    /// The provider's own thinking blocks for this reply, verbatim, when it produced any and the
+    /// API needs them back (Claude, within a tool-use turn). Nil for every other reply — and for
+    /// every message saved before this existed, which decodes to nil.
+    public var thinkingBlocks: [ThinkingBlock]?
 
     public init(
         id: String = UUID().uuidString,
@@ -84,7 +88,8 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         completionTokens: Int = 0,
         notices: [String] = [],
         haltReason: String? = nil,
-        haltText: String? = nil
+        haltText: String? = nil,
+        thinkingBlocks: [ThinkingBlock]? = nil
     ) {
         self.id = id
         self.sessionId = sessionId
@@ -109,6 +114,7 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         self.notices = notices
         self.haltReason = haltReason
         self.haltText = haltText
+        self.thinkingBlocks = thinkingBlocks
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -116,7 +122,7 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         case agentId, agentName, agentAvatar, agentColor, modelId, providerId
         case timestamp, toolCalls, subAgentTasks, attachments
         case isStreaming, isError, promptTokens, completionTokens, generationTokensPerSecond
-        case notices, haltReason, haltText
+        case notices, haltReason, haltText, thinkingBlocks
     }
 
     public init(from decoder: Decoder) throws {
@@ -145,6 +151,7 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         self.notices = try container.decodeIfPresent([String].self, forKey: .notices) ?? []
         self.haltReason = try container.decodeIfPresent(String.self, forKey: .haltReason)
         self.haltText = try container.decodeIfPresent(String.self, forKey: .haltText)
+        self.thinkingBlocks = try container.decodeIfPresent([ThinkingBlock].self, forKey: .thinkingBlocks)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -173,5 +180,6 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         try container.encode(notices, forKey: .notices)
         try container.encodeIfPresent(haltReason, forKey: .haltReason)
         try container.encodeIfPresent(haltText, forKey: .haltText)
+        try container.encodeIfPresent(thinkingBlocks, forKey: .thinkingBlocks)
     }
 }

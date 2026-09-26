@@ -40,9 +40,16 @@ public enum SubAgentToolPolicy {
         ) else { return nil }
         guard let worktreePath else { return reason }
 
-        let args = arguments(argumentsJson)
+        // Judge the call the dispatcher will actually run. It resolves `write`, `mv` and the like
+        // to the real tool and fills `path`/`destination` from `file_path`/`dest`; a check on the
+        // model's own spelling let `{"source": "inside", "dest": "/outside"}` through as "inside".
+        let canonical = ToolCallRepair.builtInCanonical(toolName)
+        let toolName = canonical ?? toolName
+        let raw = arguments(argumentsJson)
+        let args = canonical.map { ToolCallRepair.normalizeArguments(tool: $0, raw) } ?? raw
         if fileEditTools.contains(toolName) {
-            let paths = targetPaths(toolName: toolName, arguments: args)
+            // Every path-like key in the call as sent *and* as normalised: all must be inside.
+            let paths = targetPaths(toolName: toolName, arguments: raw) + targetPaths(toolName: toolName, arguments: args)
             // `rename_symbol` may name no file: it then works across the workspace root, which
             // for a sub-agent is the worktree.
             if paths.isEmpty && toolName != "rename_symbol" { return reason }
@@ -57,14 +64,18 @@ public enum SubAgentToolPolicy {
 
     /// Every path a file tool's arguments name, under any of the keys the engine accepts.
     static func targetPaths(toolName: String, arguments: [String: Any]) -> [String] {
+        // Every spelling the dispatcher (via `ToolCallRepair`) will accept for a file argument.
+        let pathSpellings = ["path", "filename", "filepath", "file", "file_path", "filePath",
+                             "target_file", "absolute_path", "file_name"]
         let keys: [String]
         switch toolName {
         case "file_move", "move_file", "mv", "file_copy", "copy_file", "cp":
-            keys = ["source", "from", "path", "destination", "to", "target"]
+            keys = ["source", "from", "src", "source_path", "source_file",
+                    "destination", "to", "dst", "dest", "target", "destination_path", "target_path"] + pathSpellings
         case "rename_symbol":
-            keys = ["path", "file"]
+            keys = ["path", "file", "file_path"]
         default:
-            keys = ["path", "filename", "filepath", "file", "title"]
+            keys = pathSpellings + ["title"]
         }
         var paths = keys.compactMap { arguments[$0] as? String }.map { $0.trimmingCharacters(in: .whitespaces) }
         // multi_edit may carry per-edit paths.

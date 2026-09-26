@@ -249,15 +249,4 @@ public enum MCPToolRouting: Sendable {
         Available tools: \(known)\(more). Use one of those exact names — do not invent tool names.
         """
     }
-
-    /// No enabled server could be matched for a tool name the model invented or misspelled.
-    public static func unroutableToolMessage(tool: String, enabled: [MCPServerConfig]) -> String {
-        guard !enabled.isEmpty else { return noServersMessage() }
-        let names = enabled.map { "\($0.name) (`\($0.id)`)" }.joined(separator: ", ")
-        return """
-        No tool named '\(tool)' exists on any enabled MCP server, and it is not a built-in tool. \
-        Nothing was executed. Enabled MCP servers: \(names). Call a tool from your tool list by its \
-        exact name (MCP tools are named mcp__<serverId>__<tool>) — do not invent tool names.
-        """
-    }
 }

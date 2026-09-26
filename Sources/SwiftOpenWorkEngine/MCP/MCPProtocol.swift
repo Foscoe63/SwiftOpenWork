@@ -1167,7 +1167,12 @@ public actor MCPClientManager {
         }
 
         guard let resolvedServer = targetServer else {
-            return MCPToolRouting.unroutableToolMessage(tool: toolName, enabled: enabledServers)
+            // Same wording the dispatcher uses for an unknown tool — one definition, in
+            // `ToolCallRepair`, so the two paths cannot drift apart again.
+            let summary = enabledServers.isEmpty
+                ? nil
+                : enabledServers.map { "\($0.name) (`\($0.id)`)" }.joined(separator: ", ")
+            return ToolCallRepair.unknownToolMessage(toolName, mcpServerSummary: summary)
         }
 
         let sName = resolvedServer.name

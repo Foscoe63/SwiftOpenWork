@@ -371,7 +371,13 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             lock.withLock { entry.consumed = fingerprints }
         } else {
             if case .rebuild(let reason) = selection.decision, reason != "no cached session" {
-                onChunk(LLMStreamChunk(deltaNotice: "Context cache reset: \(reason)"))
+                // Say what changed, not only where: the cause is usually a folded tool result or
+                // a rewritten message, and the position alone cannot tell them apart.
+                let previous = lock.withLock { cachedChats.first { $0.key == key }?.consumed }
+                let detail = previous
+                    .flatMap { MLXSessionReuse.describeDivergence(consumed: $0, incoming: fingerprints) }
+                    .map { " — \($0)" } ?? ""
+                onChunk(LLMStreamChunk(deltaNotice: "Context cache reset: \(reason)\(detail)"))
             }
             let history = MLXSessionReuse.sessionHistory(
                 system: sanitizedInstructions.isEmpty ? nil : Chat.Message.system(sanitizedInstructions),

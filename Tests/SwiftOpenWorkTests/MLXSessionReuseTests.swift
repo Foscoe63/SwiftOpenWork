@@ -273,4 +273,25 @@ extension MLXSessionReuseTests {
         )
         XCTAssertEqual(list.map(\.id), ["3", "1"], "the oldest slot must go, not the one just used")
     }
+
+    // MARK: - Saying what changed
+
+    func testDivergenceNamesTheFoldedToolResult() {
+        let consumed = [msg("user", "fix it"), msg("assistant", ""), msg("user", "[Tool output]\n" + String(repeating: "x", count: 900))]
+        let incoming = [msg("user", "fix it"), msg("assistant", ""), msg("user", "[Earlier tool result compacted] xxxx…")]
+        let detail = MLXSessionReuse.describeDivergence(consumed: consumed, incoming: incoming)
+        XCTAssertEqual(reason(MLXSessionReuse.decide(cachedKey: key(), cachedConsumed: consumed, incomingKey: key(), incoming: incoming)),
+                       "history diverged at message 3", "the reason string itself is unchanged")
+        XCTAssertTrue(detail?.contains("message 3") ?? false, detail ?? "")
+        XCTAssertTrue(detail?.contains("Earlier tool result compacted") ?? false, detail ?? "")
+    }
+
+    func testDivergenceReportsARoleChange() {
+        let detail = MLXSessionReuse.describeDivergence(consumed: [msg("user", "a")], incoming: [msg("assistant", "a")])
+        XCTAssertEqual(detail, "message 1 changed role, from user to assistant")
+    }
+
+    func testNoDivergenceDescribesNothing() {
+        XCTAssertNil(MLXSessionReuse.describeDivergence(consumed: [msg("user", "a")], incoming: [msg("user", "a"), msg("user", "b")]))
+    }
 }

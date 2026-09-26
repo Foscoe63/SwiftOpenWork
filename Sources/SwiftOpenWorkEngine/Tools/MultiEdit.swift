@@ -24,7 +24,7 @@ public enum MultiEdit {
     public enum Failure: Error, Equatable, Sendable {
         case noEdits
         case emptyOldString(index: Int)
-        case notFound(index: Int, oldString: String)
+        case notFound(index: Int, oldString: String, hint: String)
         case ambiguous(index: Int, count: Int)
 
         /// Phrased for the model that has to fix it: what failed, which edit, and what to do.
@@ -34,9 +34,9 @@ public enum MultiEdit {
                 return "multi_edit requires at least one edit."
             case .emptyOldString(let index):
                 return "multi_edit: edit \(index + 1) has an empty old_string."
-            case .notFound(let index, let oldString):
+            case .notFound(let index, let oldString, let hint):
                 let preview = String(oldString.prefix(60)).replacingOccurrences(of: "\n", with: "⏎")
-                return "multi_edit: edit \(index + 1) did not match. Nothing was written — the file is unchanged. Looked for: \(preview)"
+                return "multi_edit: edit \(index + 1) did not match. Nothing was written — the file is unchanged. Looked for: \(preview)\(hint)"
             case .ambiguous(let index, let count):
                 return "multi_edit: edit \(index + 1) matched \(count) times. Nothing was written — the file is unchanged. Add surrounding context, or set replace_all for that edit."
             }
@@ -69,7 +69,12 @@ public enum MultiEdit {
             }
             let count = working.components(separatedBy: edit.oldString).count - 1
             if count == 0 {
-                return .failure(.notFound(index: index, oldString: edit.oldString))
+                if let m = EditMatcher.fuzzyMatch(old: edit.oldString, new: edit.newString, in: working) {
+                    working = working.replacingCharacters(in: m.range, with: m.replacement)
+                    replacements.append(1)
+                    continue
+                }
+                return .failure(.notFound(index: index, oldString: edit.oldString, hint: EditMatcher.missHint(old: edit.oldString, in: working)))
             }
             if count > 1 && !edit.replaceAll {
                 return .failure(.ambiguous(index: index, count: count))
@@ -120,8 +125,103 @@ public enum MultiEdit {
                 return nil
             }
             let all = (entry["replace_all"] ?? entry["replaceAll"]) as? Bool ?? false
-            edits.append(Edit(oldString: old, newString: new, replaceAll: all))
+            edits.append(Edit(
+                oldString: ToolCallRepair.stripLineNumberGutter(old),
+                newString: ToolCallRepair.stripLineNumberGutter(new),
+                replaceAll: all
+            ))
         }
         return edits.isEmpty ? nil : edits
+    }
+}
+
+/// Forgiving match for `old_string` when the exact text isn't in the file.
+///
+/// Models reconstruct code from memory or a truncated read, so the usual miss is not wrong content
+/// but wrong whitespace: a stray leading/trailing newline, different indentation, CRLF vs LF.
+/// Compares line by line with surrounding whitespace ignored; only a unique match is accepted.
+public enum EditMatcher {
+
+    public struct Match {
+        public var range: Range<String.Index>
+        /// `new` with its indentation and edge newlines adapted to the matched region.
+        public var replacement: String
+    }
+
+    private static func indent(of line: Substring) -> String {
+        String(line.prefix(while: { $0 == " " || $0 == "\t" }))
+    }
+
+    public static func fuzzyMatch(old: String, new: String, in contents: String) -> Match? {
+        var oldLines = old.replacingOccurrences(of: "\r\n", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: false)
+        while let f = oldLines.first, f.trimmingCharacters(in: .whitespaces).isEmpty { oldLines.removeFirst() }
+        while let l = oldLines.last, l.trimmingCharacters(in: .whitespaces).isEmpty { oldLines.removeLast() }
+        guard !oldLines.isEmpty else { return nil }
+        let wanted = oldLines.map { $0.trimmingCharacters(in: .whitespaces) }
+
+        // Content lines with their ranges (excluding line terminators).
+        var lines: [(text: Substring, range: Range<String.Index>)] = []
+        var start = contents.startIndex
+        while start < contents.endIndex {
+            let nl = contents[start...].firstIndex(where: { $0 == "\n" || $0 == "\r\n" }) ?? contents.endIndex
+            lines.append((contents[start..<nl], start..<nl))
+            start = nl < contents.endIndex ? contents.index(after: nl) : nl
+        }
+        guard lines.count >= wanted.count else { return nil }
+
+        var hits: [Int] = []
+        for i in 0...(lines.count - wanted.count) {
+            var ok = true
+            for j in 0..<wanted.count where lines[i + j].text.trimmingCharacters(in: .whitespaces) != wanted[j] {
+                ok = false
+                break
+            }
+            if ok { hits.append(i) }
+            if hits.count > 1 { return nil }
+        }
+        guard let first = hits.first else { return nil }
+        let range = lines[first].range.lowerBound..<lines[first + wanted.count - 1].range.upperBound
+
+        var newLines = new.replacingOccurrences(of: "\r\n", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        while let f = newLines.first, f.trimmingCharacters(in: .whitespaces).isEmpty { newLines.removeFirst() }
+        while let l = newLines.last, l.trimmingCharacters(in: .whitespaces).isEmpty { newLines.removeLast() }
+
+        let fileIndent = indent(of: lines[first].text)
+        let modelIndent = indent(of: oldLines[0])
+        if fileIndent != modelIndent {
+            newLines = newLines.map { line in
+                if line.isEmpty { return line }
+                let body = line.hasPrefix(modelIndent) ? String(line.dropFirst(modelIndent.count)) : line
+                return fileIndent + body
+            }
+        }
+        return Match(range: range, replacement: newLines.joined(separator: "\n"))
+    }
+
+    /// Why an edit missed, phrased so the model can correct itself instead of retrying blind.
+    ///
+    /// Anchors on the first line of `old`, then walks forward to the first line that stops
+    /// matching and shows expected vs actual there — the model usually got the opening right and
+    /// drifted later, and a bare "lines differ" leaves it guessing which.
+    public static func missHint(old: String, in contents: String) -> String {
+        let oldLines = old.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let anchor = oldLines.firstIndex(where: { !$0.isEmpty }) else { return "" }
+        let wanted = Array(oldLines[anchor...])
+        let fileLines = contents.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        guard let start = fileLines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == wanted[0] }) else {
+            return " The first line of old_string does not appear anywhere in the file — it may have changed since you last read it. Re-read the file before editing."
+        }
+        var k = 0
+        while k < wanted.count, start + k < fileLines.count,
+              fileLines[start + k].trimmingCharacters(in: .whitespaces) == wanted[k] { k += 1 }
+        let line = start + k + 1
+        let expected = k < wanted.count ? wanted[k] : ""
+        let actual = start + k < fileLines.count ? fileLines[start + k] : "(end of file)"
+        let end = min(fileLines.count, start + max(k, 0) + 3)
+        let context = fileLines[start..<end].joined(separator: "\n")
+        return " old_string matches the file from line \(start + 1) up to line \(line - 1), then diverges at line \(line): you wrote `\(expected)` but the file has `\(actual.trimmingCharacters(in: .whitespaces))`. Actual text from line \(start + 1):\n\(context)\nRe-read that region and copy it exactly, or use a shorter old_string that stops before the divergence."
     }
 }

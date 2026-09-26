@@ -50,7 +50,7 @@ public enum SessionChangeSummary {
 
         for message in messages {
             for call in message.toolCalls {
-                let name = call.toolName.lowercased()
+                let name = ToolCallRepair.canonicalName(call.toolName)
                 let isWrite = writeTools.contains(name)
                 let isEdit = editTools.contains(name)
                 let isDelete = deleteTools.contains(name)
@@ -84,7 +84,7 @@ public enum SessionChangeSummary {
               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             return nil
         }
-        return (dict["path"] ?? dict["filename"] ?? dict["filepath"] ?? dict["file"]) as? String
+        return (dict["path"] ?? dict["file_path"] ?? dict["filePath"] ?? dict["filename"] ?? dict["filepath"] ?? dict["file"]) as? String
     }
 
     private static func relative(_ path: String, to root: String) -> String {

@@ -57,6 +57,27 @@ final class SubAgentToolPolicyTests: XCTestCase {
         XCTAssertNotNil(reason("file_write", ["path": "link/new/x.txt", "content": "x"]), "a link out of the worktree is outside")
     }
 
+    /// The dispatcher accepts `src`/`dest`/`file_path` and resolves `write`/`mv`; the policy has to
+    /// judge the call as the dispatcher will run it, or an alternative spelling walks out of the
+    /// worktree unasked.
+    func testAlternativeSpellingsCannotEscapeTheWorktree() {
+        XCTAssertNotNil(reason("file_copy", ["source": "src/a.swift", "dest": outside + "/a.swift"]))
+        XCTAssertNotNil(reason("file_copy", ["source": "src/a.swift", "destination_path": outside + "/a.swift"]))
+        XCTAssertNotNil(reason("file_move", ["src": outside + "/secret", "destination": "src/secret"]))
+        XCTAssertNotNil(reason("mv", ["from": "src/a.swift", "dst": outside + "/a.swift"]))
+        XCTAssertNotNil(reason("write", ["file_path": outside + "/x.txt", "content": "x"]))
+        XCTAssertNotNil(reason("edit", ["file_path": "../elsewhere/x.txt", "old_string": "a", "new_string": "b"]))
+        XCTAssertNotNil(reason("delete", ["file_path": outside]))
+        // One key inside and another outside: the outside one counts.
+        XCTAssertNotNil(reason("edit_file", ["path": "src/a.swift", "file_path": outside + "/x", "old_string": "a", "new_string": "b"]))
+    }
+
+    func testAliasedEditsInsideTheWorktreeStillRun() {
+        XCTAssertNil(reason("write", ["file_path": "src/new.swift", "content": "x"]))
+        XCTAssertNil(reason("edit", ["file_path": worktree + "/src/a.swift", "old_string": "a", "new_string": "b"]))
+        XCTAssertNil(reason("mv", ["src": "src/a.swift", "dst": "src/b.swift"]))
+    }
+
     func testWithoutAWorktreeEveryEditIsRefused() {
         XCTAssertNotNil(reason("file_write", ["path": "src/new.swift", "content": "x"], worktree: .some(nil)))
         XCTAssertNotNil(reason("file_delete", ["path": "src/old.swift"], worktree: .some(nil)))

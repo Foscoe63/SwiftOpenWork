@@ -194,13 +194,18 @@ public enum ProjectSkills {
             let preview = skill.description.isEmpty
                 ? String(skill.content.prefix(160))
                 : skill.description
-            return "- **\(skill.name)**: \(preview)"
+            // The path is the whole point of this line. The block used to tell the model to
+            // `file_read` "the path listed" while listing none, so it guessed the folder and read
+            // a directory — which failed, was retried, and tripped the repeated-failure breaker.
+            guard let path = skill.filePath, !path.isEmpty else { return "- **\(skill.name)**: \(preview)" }
+            return "- **\(skill.name)**: \(preview)\n  file: `\(path)`"
         }
         return """
 
         ### Project skills (from `\(relativePath)`)
-        These ship with this repository and describe how work is done here. Read the file before
-        following one: `file_read` the path listed, do not act on the summary alone.
+        These ship with this repository and describe how work is done here. Before following one,
+        `file_read` the exact `file:` path shown under it — a skill is a single file, and the
+        folder itself is not readable. Do not act on the summary alone.
         \(lines.joined(separator: "\n"))
         """
     }

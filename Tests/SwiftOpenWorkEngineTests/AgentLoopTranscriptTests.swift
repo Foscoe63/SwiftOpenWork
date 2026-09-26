@@ -133,6 +133,31 @@ final class AgentLoopTranscriptTests: XCTestCase {
         XCTAssertEqual(ContextCompactor.foldOldToolResults(next), next)
     }
 
+    /// Each fold rewrites history and costs a local model a full re-read, so it has to earn it.
+    func testFoldingWaitsForContextPressure() {
+        let stamp = Date(timeIntervalSince1970: 0)
+        let eight = (0..<8).map {
+            ChatMessage(id: "t\($0)", sessionId: "s", role: .tool, content: String(repeating: "x", count: 900), timestamp: stamp)
+        }
+        let roomy = ContextCompactor.foldOldToolResults(eight, pressure: (estimatedTokens: 4_000, windowTokens: 128_000))
+        XCTAssertEqual(roomy, eight, "3% of the window: leave the transcript, and the cache, alone")
+
+        let tight = ContextCompactor.foldOldToolResults(eight, pressure: (estimatedTokens: 60_000, windowTokens: 128_000))
+        XCTAssertEqual(tight.prefix(4).filter { $0.content.contains("compacted") }.count, 4, "47% of the window: fold")
+
+        let unknownWindow = ContextCompactor.foldOldToolResults(eight, pressure: (estimatedTokens: 100, windowTokens: 0))
+        XCTAssertEqual(unknownWindow.prefix(4).filter { $0.content.contains("compacted") }.count, 4, "no window known: old behaviour")
+    }
+
+    func testEstimatedTokensCountsMessagesAndCallArguments() {
+        let call = ToolCallInfo(id: "c", toolName: "file_read", argumentsJson: String(repeating: "a", count: 291))
+        let messages = [
+            ChatMessage(sessionId: "s", role: .user, content: String(repeating: "u", count: 300)),
+            ChatMessage(sessionId: "s", role: .assistant, content: "", toolCalls: [call]),
+        ]
+        XCTAssertEqual(ContextCompactor.estimatedTokens(messages, extraCharacters: 300), (300 + 300 + 291 + 9) / 3)
+    }
+
     // MARK: - Call / result pairing
 
     func testResultsPairWithTheCallsInFrontOfThem() {

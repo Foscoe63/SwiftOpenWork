@@ -14,6 +14,8 @@ public struct LLMStreamChunk: Sendable {
     /// does today, and it is the provider where speed decides whether a model is usable.
     public var generationTokensPerSecond: Double?
     public var toolCalls: [ToolCallInfo]
+    /// Thinking blocks the provider finished this chunk, verbatim — see `ThinkingBlock`.
+    public var thinkingBlocks: [ThinkingBlock]
 
     public init(
         deltaText: String = "",
@@ -24,7 +26,8 @@ public struct LLMStreamChunk: Sendable {
         promptTokens: Int? = nil,
         completionTokens: Int? = nil,
         generationTokensPerSecond: Double? = nil,
-        toolCalls: [ToolCallInfo] = []
+        toolCalls: [ToolCallInfo] = [],
+        thinkingBlocks: [ThinkingBlock] = []
     ) {
         self.deltaText = deltaText
         self.deltaReasoning = deltaReasoning
@@ -35,6 +38,7 @@ public struct LLMStreamChunk: Sendable {
         self.completionTokens = completionTokens
         self.generationTokensPerSecond = generationTokensPerSecond
         self.toolCalls = toolCalls
+        self.thinkingBlocks = thinkingBlocks
     }
 }
 
