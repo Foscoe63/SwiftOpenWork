@@ -306,6 +306,19 @@ public final class PersistenceManager: Sendable {
                 ]
             ),
             ModelProvider(
+                id: "splash-local",
+                name: "Splash (Apple Silicon Local)",
+                type: .local,
+                kind: .splash,
+                baseUrl: "http://127.0.0.1:8000/v1",
+                apiKey: "",
+                isEnabled: false,
+                models: [
+                    ModelInfo(id: "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M", name: "Qwen3.8 27B (Splash)", providerId: "splash-local", contextWindow: 131072, supportsVision: true, supportsReasoning: true, isDefault: true, speedTier: "Balanced"),
+                    ModelInfo(id: "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_M", name: "Qwen3.6 35B A3B (Splash)", providerId: "splash-local", contextWindow: 131072, supportsVision: true, supportsReasoning: true, speedTier: "Fast")
+                ]
+            ),
+            ModelProvider(
                 id: "openai-cloud",
                 name: "OpenAI",
                 type: .cloud,
@@ -405,6 +418,14 @@ public final class PersistenceManager: Sendable {
                 loaded[i].name = "Apple Silicon (Built-in)"
                 modified = true
             }
+        }
+        // Providers added after a user's providers.json was first written. Only a missing id is
+        // added (disabled, as seeded); one the user has edited or removed-and-re-added is untouched.
+        let splashSeedId = "splash-local"
+        if !loaded.contains(where: { $0.id == splashSeedId || $0.kind == .splash }),
+           let splash = defaultProviders.first(where: { $0.id == splashSeedId }) {
+            loaded.append(splash)
+            modified = true
         }
         if modified {
             saveProviders(loaded)

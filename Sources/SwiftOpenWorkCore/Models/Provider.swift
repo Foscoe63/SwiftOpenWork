@@ -57,6 +57,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable 
     case vmlx = "vmlx"
     case lmstudio = "lmstudio"
     case llamacpp = "llamacpp"
+    case splash = "splash"
     case openai = "openai"
     case anthropic = "anthropic"
     case openrouter = "openrouter"
@@ -75,6 +76,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable 
         case .vmlx: return "vMLX (Apple Silicon Vision/LLM)"
         case .lmstudio: return "LM Studio (Local)"
         case .llamacpp: return "Llama.cpp (Local)"
+        case .splash: return "Splash (Apple Silicon Local)"
         case .openai: return "OpenAI"
         case .anthropic: return "Anthropic Claude"
         case .openrouter: return "OpenRouter"
@@ -93,6 +95,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable 
         case .vmlx: return "http://127.0.0.1:8080/v1"
         case .lmstudio: return "http://127.0.0.1:1234/v1"
         case .llamacpp: return "http://127.0.0.1:8080/v1"
+        case .splash: return "http://127.0.0.1:8000/v1"
         case .openai: return "https://api.openai.com/v1"
         case .anthropic: return "https://api.anthropic.com/v1"
         case .openrouter: return "https://openrouter.ai/api/v1"
@@ -106,7 +109,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable 
 
     public var type: ProviderType {
         switch self {
-        case .ollama, .omlx, .vmlx, .lmstudio, .llamacpp:
+        case .ollama, .omlx, .vmlx, .lmstudio, .llamacpp, .splash:
             return .local
         default:
             return .cloud
@@ -120,6 +123,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable 
         case .vmlx: return "eye.circle.fill"
         case .lmstudio: return "cpu"
         case .llamacpp: return "terminal"
+        case .splash: return "bolt.horizontal.fill"
         case .openai: return "sparkles"
         case .anthropic: return "brain"
         case .openrouter: return "network"
