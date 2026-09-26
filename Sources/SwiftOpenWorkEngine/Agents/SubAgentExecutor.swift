@@ -255,6 +255,7 @@ public enum SubAgentExecutor {
 
                 let box = ConcurrentTextBox()
                 let calls = ToolCallBox()
+                let thinking = AgentThinkingBlockCollector()
                 // The deadline was only checked between rounds, so one slow round ran a sub-agent
                 // to 759s against a 600s limit. The round in flight is now cancelled at the deadline.
                 let requestMessages = messages
@@ -275,6 +276,7 @@ public enum SubAgentExecutor {
                             ) { chunk in
                                 if !chunk.deltaText.isEmpty { box.append(chunk.deltaText) }
                                 if !chunk.toolCalls.isEmpty { calls.add(chunk.toolCalls) }
+                                for block in chunk.thinkingBlocks { thinking.add(block) }
                             }
                         }
                     }
@@ -315,7 +317,8 @@ public enum SubAgentExecutor {
                     break
                 }
 
-                messages.append(ChatMessage(role: .assistant, content: text, toolCalls: pending))
+                // With the model's own thinking for this step, verbatim — see `ThinkingBlock`.
+                messages.append(ChatMessage(role: .assistant, content: text, toolCalls: pending, thinkingBlocks: thinking.snapshot()))
                 var repeatedOut = false
                 for call in pending {
                     toolCallsMade.append(call.toolName)
@@ -426,9 +429,11 @@ public enum SubAgentExecutor {
     /// The file a writing call targets, or nil for any other call.
     public static func writeTarget(toolName: String, argumentsJson: String) -> String? {
         let writers: Set<String> = ["file_write", "edit_file", "multi_edit", "file_copy", "file_move"]
-        guard writers.contains(AgentRunner.canonicalToolName(toolName)),
+        let canonical = AgentRunner.canonicalToolName(toolName)
+        guard writers.contains(canonical),
               let data = argumentsJson.data(using: .utf8),
-              let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+              let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        let dict = ToolCallRepair.normalizeArguments(tool: canonical, parsed)
         for key in ["path", "filename", "filepath", "file", "file_path", "destination", "to"] {
             if let value = dict[key] as? String, !value.isEmpty { return value }
         }

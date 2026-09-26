@@ -314,10 +314,9 @@ public final class PersistenceManager: Sendable {
                 apiKey: "",
                 isEnabled: true,
                 models: [
-                    ModelInfo(id: "gpt-4o", name: "GPT-4o (Omni)", providerId: "openai-cloud", contextWindow: 128000, supportsVision: true, supportsReasoning: false, isDefault: true, speedTier: "Fast", costPer1kPrompt: 0.005, costPer1kCompletion: 0.015),
-                    ModelInfo(id: "gpt-4o-mini", name: "GPT-4o Mini", providerId: "openai-cloud", contextWindow: 128000, supportsVision: true, supportsReasoning: false, speedTier: "Fast", costPer1kPrompt: 0.00015, costPer1kCompletion: 0.0006),
-                    ModelInfo(id: "o1", name: "o1 Reasoning", providerId: "openai-cloud", contextWindow: 200000, supportsVision: true, supportsReasoning: true, speedTier: "Powerful", costPer1kPrompt: 0.015, costPer1kCompletion: 0.06),
-                    ModelInfo(id: "o3-mini", name: "o3-mini", providerId: "openai-cloud", contextWindow: 200000, supportsVision: false, supportsReasoning: true, speedTier: "Fast", costPer1kPrompt: 0.0011, costPer1kCompletion: 0.0044)
+                    KnownModels.applying(to: ModelInfo(id: "gpt-6-sol", name: KnownModels.spec(for: "gpt-6-sol")?.displayName ?? "gpt-6-sol", providerId: "openai-cloud", supportsVision: true, isDefault: true, speedTier: "Powerful")),
+                    KnownModels.applying(to: ModelInfo(id: "gpt-6-astra", name: KnownModels.spec(for: "gpt-6-astra")?.displayName ?? "gpt-6-astra", providerId: "openai-cloud", supportsVision: true, speedTier: "Powerful")),
+                    KnownModels.applying(to: ModelInfo(id: "gpt-6-luna", name: KnownModels.spec(for: "gpt-6-luna")?.displayName ?? "gpt-6-luna", providerId: "openai-cloud", supportsVision: true, speedTier: "Fast"))
                 ]
             ),
             ModelProvider(
@@ -329,9 +328,9 @@ public final class PersistenceManager: Sendable {
                 apiKey: "",
                 isEnabled: true,
                 models: [
-                    ModelInfo(id: "claude-3-7-sonnet-20250219", name: "Claude 3.7 Sonnet (Hybrid Reasoning)", providerId: "anthropic-cloud", contextWindow: 200000, supportsVision: true, supportsReasoning: true, isDefault: true, speedTier: "Powerful", costPer1kPrompt: 0.003, costPer1kCompletion: 0.015),
-                    ModelInfo(id: "claude-3-5-sonnet-20241022", name: "Claude 3.5 Sonnet", providerId: "anthropic-cloud", contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Powerful", costPer1kPrompt: 0.003, costPer1kCompletion: 0.015),
-                    ModelInfo(id: "claude-3-5-haiku-20241022", name: "Claude 3.5 Haiku", providerId: "anthropic-cloud", contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Fast", costPer1kPrompt: 0.0008, costPer1kCompletion: 0.004)
+                    KnownModels.applying(to: ModelInfo(id: "claude-sonnet-5", name: KnownModels.spec(for: "claude-sonnet-5")?.displayName ?? "claude-sonnet-5", providerId: "anthropic-cloud", supportsVision: true, supportsReasoning: true, isDefault: true, speedTier: "Powerful")),
+                    KnownModels.applying(to: ModelInfo(id: "claude-opus-5-5", name: KnownModels.spec(for: "claude-opus-5-5")?.displayName ?? "claude-opus-5-5", providerId: "anthropic-cloud", supportsVision: true, supportsReasoning: true, speedTier: "Powerful")),
+                    KnownModels.applying(to: ModelInfo(id: "claude-haiku-4-5-20251001", name: KnownModels.spec(for: "claude-haiku-4-5-20251001")?.displayName ?? "claude-haiku-4-5-20251001", providerId: "anthropic-cloud", supportsVision: true, supportsReasoning: true, speedTier: "Fast"))
                 ]
             ),
             ModelProvider(
@@ -406,6 +405,7 @@ public final class PersistenceManager: Sendable {
                 modified = true
             }
         }
+        if KnownModels.refreshStaleSeeds(in: &loaded, defaults: defaultProviders) { modified = true }
         if modified {
             saveProviders(loaded)
         }

@@ -185,7 +185,7 @@ public final class OpenAIService: LLMProviderClient, Sendable {
     private func makeModelInfo(id: String, name: String?, ownedBy: String?, providerId: String) -> ModelInfo {
         let isReasoning = id.contains("r1") || id.contains("o1") || id.contains("o3") || id.contains("reason")
         let displayName = name ?? id.components(separatedBy: "/").last ?? id
-        return ModelInfo(
+        return KnownModels.applying(to: ModelInfo(
             id: id,
             name: displayName,
             providerId: providerId,
@@ -196,7 +196,7 @@ public final class OpenAIService: LLMProviderClient, Sendable {
             supportsTools: id.contains("coder") || id.contains("gpt") || id.contains("claude") || id.contains("qwen"),
             description: "Provider model (\(ownedBy ?? "standard"))",
             speedTier: isReasoning ? "Powerful" : "Fast"
-        )
+        ))
     }
 
     public func streamChat(
@@ -471,7 +471,8 @@ public final class OpenAIService: LLMProviderClient, Sendable {
         }
 
         // Track accumulating tool calls across streaming deltas
-        var pendingToolCalls: [Int: (id: String, name: String, args: String)] = [:]
+        var toolCalls = ToolCallStreamAssembler()
+        var finalizedToolCalls = false
 
         AppLog.verbose(.stream, "POST \(url.absoluteString) model=\(model.id) tools=\(tools.filter(\.isEnabled).count)")
 
@@ -482,22 +483,25 @@ public final class OpenAIService: LLMProviderClient, Sendable {
             // What "Verbose Logging" promises by name: the raw SSE payloads.
             AppLog.verbose(.stream, "SSE \(AppLog.truncated(payload))")
             if payload == "[DONE]" {
-                // Finalize any pending streamed tool calls
-                var finalizedTools: [ToolCallInfo] = []
-                for (_, tc) in pendingToolCalls {
-                    finalizedTools.append(ToolCallInfo(
-                        id: tc.id.isEmpty ? UUID().uuidString : tc.id,
-                        toolName: tc.name,
-                        argumentsJson: tc.args.isEmpty ? "{}" : tc.args,
-                        status: .running
-                    ))
-                }
-                onChunk(LLMStreamChunk(isFinished: true, toolCalls: finalizedTools))
+                // Finalize any pending streamed tool calls, in the order they were made.
+                finalizedToolCalls = true
+                onChunk(LLMStreamChunk(isFinished: true, toolCalls: toolCalls.assembled()))
                 break
             }
             guard let data = payload.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
             
+            // A usage-only chunk (`"choices": []`) is how servers report token counts when they
+            // report them separately; it was skipped, so the context meter and cost never saw it.
+            if let choices = json["choices"] as? [[String: Any]], choices.isEmpty,
+               let usage = json["usage"] as? [String: Any] {
+                onChunk(LLMStreamChunk(
+                    promptTokens: usage["prompt_tokens"] as? Int,
+                    completionTokens: usage["completion_tokens"] as? Int
+                ))
+                continue
+            }
+
             if let choices = json["choices"] as? [[String: Any]], let first = choices.first {
                 let finishReason = first["finish_reason"] as? String
                 var text = ""
@@ -511,31 +515,8 @@ public final class OpenAIService: LLMProviderClient, Sendable {
                     }
 
                     // Native tool_calls delta parsing
-                    if let tcArray = delta["tool_calls"] as? [[String: Any]] {
-                        for (idx, tc) in tcArray.enumerated() {
-                            let callIndex = tc["index"] as? Int ?? idx
-                            let callId = tc["id"] as? String ?? ""
-                            var functionName = ""
-                            var argsDelta = ""
-
-                            if let fn = tc["function"] as? [String: Any] {
-                                functionName = fn["name"] as? String ?? ""
-                                argsDelta = fn["arguments"] as? String ?? ""
-                            }
-
-                            let prev = pendingToolCalls[callIndex] ?? (id: callId, name: functionName, args: "")
-                            let updatedId = callId.isEmpty ? prev.id : callId
-                            let updatedName = functionName.isEmpty ? prev.name : functionName
-                            let updatedArgs = prev.args + argsDelta
-                            pendingToolCalls[callIndex] = (id: updatedId, name: updatedName, args: updatedArgs)
-
-                            deltaToolCalls.append(ToolCallInfo(
-                                id: updatedId.isEmpty ? UUID().uuidString : updatedId,
-                                toolName: updatedName,
-                                argumentsJson: updatedArgs,
-                                status: .running
-                            ))
-                        }
+                    if let fragments = delta["tool_calls"] as? [[String: Any]] {
+                        deltaToolCalls = toolCalls.ingest(fragments)
                     }
                 }
                 
@@ -553,6 +534,12 @@ public final class OpenAIService: LLMProviderClient, Sendable {
                     toolCalls: deltaToolCalls
                 ))
             }
+        }
+
+        // Servers that end the stream without `[DONE]` (finish_reason, then close) left their
+        // calls unannounced.
+        if !finalizedToolCalls, !toolCalls.isEmpty {
+            onChunk(LLMStreamChunk(isFinished: true, toolCalls: toolCalls.assembled()))
         }
     }
 }

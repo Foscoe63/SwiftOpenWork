@@ -598,14 +598,20 @@ public final class SubAgentAccumulator {
 
 /// Thread-safe collector for native tool calls emitted from provider stream callbacks
 /// (which often run off the MainActor).
-private final class AgentToolCallCollector: @unchecked Sendable {
+final class AgentToolCallCollector: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [ToolCallInfo] = []
 
+    /// Streaming providers send one call as a run of growing snapshots — the first often has an
+    /// empty `arguments` — all under the same id. The latest snapshot is the complete one, so an
+    /// id already held is *replaced*, keeping its position. This used to keep the first snapshot
+    /// and drop the rest, so a call streamed in fragments ran with empty or truncated arguments.
     func add(_ tc: ToolCallInfo) {
         lock.lock()
         defer { lock.unlock() }
-        if !items.contains(where: { $0.id == tc.id || ($0.toolName == tc.toolName && $0.argumentsJson == tc.argumentsJson) }) {
+        if let index = items.firstIndex(where: { $0.id == tc.id }) {
+            items[index] = tc
+        } else if !items.contains(where: { $0.toolName == tc.toolName && $0.argumentsJson == tc.argumentsJson }) {
             items.append(tc)
         }
     }
@@ -616,6 +622,25 @@ private final class AgentToolCallCollector: @unchecked Sendable {
         return items
     }
 
+}
+
+/// Thread-safe collector for the thinking blocks one model response produced, in order.
+final class AgentThinkingBlockCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var blocks: [ThinkingBlock] = []
+
+    func add(_ block: ThinkingBlock) {
+        lock.lock()
+        defer { lock.unlock() }
+        blocks.append(block)
+    }
+
+    /// Nil when there were none, so the message stays as it always was.
+    func snapshot() -> [ThinkingBlock]? {
+        lock.lock()
+        defer { lock.unlock() }
+        return blocks.isEmpty ? nil : blocks
+    }
 }
 
 /// A thread-safe "every Nth call" gate, for work too costly to do per token.
@@ -974,6 +999,8 @@ public final class AgentRunner {
         var turnPromptTokens = 0
         var turnCompletionTokens = 0
         var identicalToolCounts: [String: Int] = [:]
+        /// Signatures of calls parsed from the model's text and already sent to run this turn.
+        var textCallsAlreadyRun = Set<String>()
         var askUserStreak = 0
         var halted = false
         var finishedNaturally = false
@@ -1035,6 +1062,21 @@ public final class AgentRunner {
                Never start a dev server with terminal_command — it is killed after two minutes.
                Before changing a function's signature or behaviour, find_references shows every
                caller; code_diagnostics checks one edited file in seconds.
+            Editing well is most of the job:
+               - Read the region immediately before you edit it; file_read prefixes every line with
+                 its number and a tab — that prefix is not part of the file, so leave it out of
+                 old_string.
+               - Keep old_string short (2-6 lines) but unique, copied exactly from what you just read.
+                 Use multi_edit for several changes to one file, and file_write only for new files
+                 or full rewrites.
+               - If an edit fails, the error says where your old_string stopped matching. Re-read that
+                 region and copy it — do not retry variations from memory, and do not guess line
+                 numbers.
+               - If the same error survives two attempts, stop patching. Re-read the error and the
+                 surrounding code, and change approach.
+               - Swift: "the compiler is unable to type-check this expression in reasonable time"
+                 means one expression is too complex. Break it into separate `let` values with
+                 explicit types; do not restructure the code around it.
             1. Do not narrate ("I will check…" / "Let me…"). Call the tool immediately, then answer.
             2. Prefer native tool calls. Markdown fallback only if needed:
             ```tool_call
@@ -1054,7 +1096,18 @@ public final class AgentRunner {
 
             iteration += 1
 
-            workingMessages = ContextCompactor.foldOldToolResults(workingMessages)
+            // Only under real context pressure: every fold rewrites history, and a local model's
+            // KV cache cannot continue through a rewrite, so each one is a full re-read. See
+            // `ContextCompactor.foldOldToolResults`.
+            workingMessages = ContextCompactor.foldOldToolResults(
+                workingMessages,
+                pressure: (
+                    estimatedTokens: ContextCompactor.estimatedTokens(
+                        workingMessages, extraCharacters: systemPromptWithTools.count
+                    ),
+                    windowTokens: model.contextWindow
+                )
+            )
 
             // A milestone reached this iteration — a green build or test run, a clean tree — means
             // the work behind it is settled. Compacting here trades detail for room at the
@@ -1091,6 +1144,7 @@ public final class AgentRunner {
             // `Task { @MainActor in nativeEmittedToolCalls.append }` raced so tool calls were
             // often lost — the model looked "stuck" narrating without ever executing.
             let toolCallCollector = AgentToolCallCollector()
+            let thinkingCollector = AgentThinkingBlockCollector()
             accumulator.beginIteration()
             let textBridge = AgentStreamTextBridge()
             let turnTextBefore = accumulator.fullText
@@ -1123,6 +1177,9 @@ public final class AgentRunner {
                     ) { chunk in
                         for tc in chunk.toolCalls {
                             toolCallCollector.add(tc)
+                        }
+                        for block in chunk.thinkingBlocks {
+                            thinkingCollector.add(block)
                         }
                         textBridge.ingest(chunk)
                         let grewText = !chunk.deltaText.isEmpty
@@ -1217,11 +1274,21 @@ public final class AgentRunner {
                 }
             } else {
                 let newlyGeneratedDelta = String(accumulator.fullText.dropFirst(turnTextBefore.count))
-                var parsedMarkdownCalls = parseToolCalls(from: newlyGeneratedDelta)
-                if parsedMarkdownCalls.isEmpty && !accumulator.fullText.isEmpty {
-                    parsedMarkdownCalls = parseToolCalls(from: accumulator.fullText)
+                let knownMCP = Set((await MCPClientManager.shared.advertisedToolNames()).values.flatMap { $0 })
+                var parsedMarkdownCalls = parseToolCalls(from: newlyGeneratedDelta, knownMCP: knownMCP)
+                // Fall back to the whole turn only when this step produced no text at all (the
+                // accumulator can be reconciled to a shorter string mid-turn). `fullText` keeps the
+                // raw call syntax of every earlier step, so parsing it in any other case replayed
+                // calls that had already run — an edit applied twice fails "old_string not found",
+                // and a replayed file_write overwrites newer content with older.
+                if parsedMarkdownCalls.isEmpty,
+                   newlyGeneratedDelta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   !accumulator.fullText.isEmpty {
+                    parsedMarkdownCalls = parseToolCalls(from: accumulator.fullText, knownMCP: knownMCP)
+                        .filter { !textCallsAlreadyRun.contains(Self.callSignature($0.tool, $0.args)) }
                 }
                 for parsed in parsedMarkdownCalls {
+                    textCallsAlreadyRun.insert(Self.callSignature(parsed.tool, parsed.args))
                     pendingCallsToExecute.append((id: UUID().uuidString, tool: parsed.tool, args: parsed.args))
                 }
             }
@@ -1316,7 +1383,10 @@ public final class AgentRunner {
                             toolName: $0.tool,
                             argumentsJson: Self.sanitizeToolArgumentsJson(toolName: $0.tool, argumentsJson: $0.args)
                         )
-                    }
+                    },
+                    // The model's own thinking for this step, verbatim: Claude needs it back with
+                    // the tool results or its reasoning starts over each round.
+                    thinkingBlocks: thinkingCollector.snapshot()
                 ))
                 // Hide "Let me check…" preamble once tools are underway.
                 accumulator.hideTurnNarration(beforeLength: turnTextBefore.count)
@@ -1468,6 +1538,14 @@ public final class AgentRunner {
                             host.showToast("Plan mode exited")
                         }
                         resultOutput = "Plan mode exited."
+                    } else if planModeActive, ToolCallRepair.isBlockedInPlanMode(toolName) {
+                        // The tool list is filtered in plan mode, but a model can still name a tool
+                        // it was not offered — and the dispatcher resolves aliases such as `bash`
+                        // and `write`. Enforce it here, where the call would actually run.
+                        resultSuccess = false
+                        resultError = "blocked in plan mode"
+                        resultOutput = "Error: plan mode is on, so `\(toolName)` (it changes files or runs commands) was not run. Propose your plan, then call `exit_plan_mode` once the user approves."
+                        accumulator.appendNotice("Blocked `\(toolName)` in plan mode.")
                     } else if let note = Self.unchangedReadNote(
                         toolName: toolName, argumentsJson: argsJson, workspaceRoot: workspace.folderPath,
                         log: readLog, transcript: workingMessages
@@ -1895,38 +1973,8 @@ public final class AgentRunner {
     /// One name per tool, whichever alias the model used. Mirrors the alias groups
     /// `ToolExecutionEngine` dispatches on; a name not listed is its own canonical name.
     public nonisolated static func canonicalToolName(_ name: String) -> String {
-        let lower = name.lowercased()
-        return toolAliases[lower] ?? lower
+        ToolCallRepair.canonicalName(name)
     }
-
-    private nonisolated static let toolAliases: [String: String] = {
-        let groups: [[String]] = [
-            ["file_read", "read_file"],
-            ["file_write", "write_file", "create_file", "save_file"],
-            ["find_symbol", "symbol_search"],
-            ["grep", "search_code", "code_search"],
-            ["glob", "find_files"],
-            ["file_list", "list_files", "list_directory", "ls", "dir"],
-            ["file_copy", "copy_file", "cp"],
-            ["file_move", "move_file", "mv"],
-            ["file_delete", "delete_file", "rm"],
-            ["terminal_command", "run_command"],
-            ["edit_file", "file_edit"],
-            ["multi_edit", "edit_file_multi"],
-            ["get_current_date", "get_date", "current_date", "date"],
-            ["document_extract", "extract_document", "read_pdf_or_image"],
-            ["workspace_semantic_search", "search_workspace"],
-            ["screenshot_window", "screenshot_app"],
-            ["accessibility_tree", "ui_tree", "inspect_window"],
-            ["run_app", "launch_app"],
-            ["mcp_call", "call_mcp_tool"],
-        ]
-        var map: [String: String] = [:]
-        for group in groups {
-            for alias in group.dropFirst() { map[alias] = group[0] }
-        }
-        return map
-    }()
 
     /// A file read that succeeded this turn.
     public struct RecordedRead: Sendable, Equatable {
@@ -1979,19 +2027,9 @@ public final class AgentRunner {
 
     /// Internal rather than private so tests can prove a newly added writing tool is blocked here.
     public static func filterToolsForPlanMode(_ tools: [Tool]) -> [Tool] {
-        let blocked: Set<String> = [
-            "file_write", "write_file", "create_file", "save_file",
-            "file_delete", "delete_file", "rm",
-            "file_move", "move_file", "mv",
-            "file_copy", "copy_file", "cp",
-            "edit_file", "file_edit", "multi_edit", "edit_file_multi", "rename_symbol",
-            "preview_start", "run_app", "launch_app", "git_commit", "worktree_create", "worktree_remove",
-            "setup_xcode_language_server",
-            "terminal_command", "run_command"
-        ]
         var filtered = tools.filter { tool in
             if tool.name == "exit_plan_mode" || tool.name == "ask_user" { return true }
-            if blocked.contains(tool.name) { return false }
+            if ToolCallRepair.isBlockedInPlanMode(tool.name) { return false }
             if MCPNamespacedTool.isNamespaced(tool.name) {
                 // Plan mode allows reads only, and classification is fail-closed: an MCP tool we
                 // cannot positively identify as a read stays out.
@@ -2048,7 +2086,7 @@ public final class AgentRunner {
     /// Approving a fetch from a public site allows that site for the rest of the chat. Local
     /// addresses are never remembered: they ask every time.
     static func rememberApprovedFetch(toolName: String, argumentsJson: String, sessionId: String) {
-        guard toolName == "fetch_url", !sessionId.isEmpty,
+        guard ToolCallRepair.builtInCanonical(toolName) == "fetch_url", !sessionId.isEmpty,
               let url = fetchURL(argumentsJson: argumentsJson),
               let host = WebFetchPolicy.normalizedHost(url),
               !WebFetchPolicy.isLocal(host: host) else { return }
@@ -2075,6 +2113,19 @@ public final class AgentRunner {
         sessionId: String = "",
         workspaceRoot: String = ""
     ) -> String? {
+        // Decide on what the call *is*, not on how the model spelled it — and on the arguments the
+        // dispatcher will actually use. `delete` and `remove` resolve to file_delete, and `read`
+        // with a `file_path` reads that path; a check on the raw name and keys would wave both
+        // through unprompted.
+        let canonical = ToolCallRepair.builtInCanonical(toolName)
+        let toolName = canonical ?? toolName
+        var argumentsJson = argumentsJson
+        if let canonical, let data = argumentsJson.data(using: .utf8),
+           let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+           let normalizedData = try? JSONSerialization.data(withJSONObject: ToolCallRepair.normalizeArguments(tool: canonical, parsed)),
+           let normalized = String(data: normalizedData, encoding: .utf8) {
+            argumentsJson = normalized
+        }
         switch toolName {
         case "ask_user":
             return nil
@@ -2212,135 +2263,14 @@ public final class AgentRunner {
     }
 
 
-    private func parseToolCalls(from text: String) -> [(tool: String, args: String)] {
-        var calls: [(tool: String, args: String)] = []
-        
-        // Helper to normalize parsed dictionary into (tool, args)
-        func addCall(from dict: [String: Any]) {
-            // Case 1: GrizzyClaw / MCP style: {"mcp": "server_name", "tool": "tool_name", "arguments": {...}}
-            if let mcpServer = dict["mcp"] as? String ?? dict["server"] as? String {
-                let mcpTool = dict["tool"] as? String ?? dict["action"] as? String ?? dict["name"] as? String ?? "query"
-                let mcpArgs = (dict["arguments"] as? [String: Any]) ?? (dict["parameters"] as? [String: Any]) ?? (dict["args"] as? [String: Any]) ?? [:]
-                let wrapper: [String: Any] = [
-                    "server": mcpServer,
-                    "tool": mcpTool,
-                    "arguments": mcpArgs
-                ]
-                let paramsData = (try? JSONSerialization.data(withJSONObject: wrapper)) ?? Data()
-                let paramsStr = String(data: paramsData, encoding: .utf8) ?? "{}"
-                calls.append((tool: "mcp_call", args: paramsStr))
-                return
-            }
-
-            // Case 2: Standard {"tool": "...", "parameters": {...}} or {"name": "...", "arguments": {...}}
-            if let tool = (dict["tool"] as? String) ?? (dict["name"] as? String) {
-                let params = (dict["parameters"] as? [String: Any]) ?? (dict["arguments"] as? [String: Any]) ?? (dict["args"] as? [String: Any]) ?? [:]
-                let paramsData = (try? JSONSerialization.data(withJSONObject: params)) ?? Data()
-                let paramsStr = String(data: paramsData, encoding: .utf8) ?? "{}"
-                calls.append((tool: tool, args: paramsStr))
-            }
-        }
-
-        // 1. Match TOOL_CALL = { ... } format (from GrizzyClaw)
-        let toolCallAssignPattern = "TOOL_CALL\\s*=\\s*(\\{[\\s\\S]*?\\})"
-        if let regex = try? NSRegularExpression(pattern: toolCallAssignPattern, options: []) {
-            let nsString = text as NSString
-            let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
-            for match in matches {
-                if match.numberOfRanges > 1 {
-                    let jsonString = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    if let data = jsonString.data(using: .utf8),
-                       let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                        addCall(from: dict)
-                    }
-                }
-            }
-        }
-
-        // 2. Match Markdown code blocks with JSON: ```tool_call {"tool": "...", "parameters": {...}} ``` or ```json or ```
-        let markdownPattern = "```(?:tool_call|json)?\\s*(?:\\r?\\n)?\\s*(\\{[\\s\\S]*?\\})(?:\\s*(?:\\r?\\n)?```|$)"
-        if let regex = try? NSRegularExpression(pattern: markdownPattern, options: []) {
-            let nsString = text as NSString
-            let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
-            for match in matches {
-                if match.numberOfRanges > 1 {
-                    let jsonString = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    if let data = jsonString.data(using: .utf8),
-                       let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                        addCall(from: dict)
-                    }
-                }
-            }
-        }
-        
-        // 3. Fallback: Match naked JSON containing {"tool": "...", "parameters": ...} or {"mcp": "...", "tool": ...}
-        if calls.isEmpty {
-            let nakedJsonPattern = "(\\{\\s*\"(?:tool|name|mcp|server)\"\\s*:\\s*\"[^\"]+\"[\\s\\S]*?\\})"
-            if let regex = try? NSRegularExpression(pattern: nakedJsonPattern, options: []) {
-                let nsString = text as NSString
-                let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
-                for match in matches {
-                    if match.numberOfRanges > 1 {
-                        let jsonString = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        if let data = jsonString.data(using: .utf8),
-                           let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                            addCall(from: dict)
-                        }
-                    }
-                }
-            }
-        }
-        
-        // 4. Match Qwen / XML style tool calls: <tool_call>\n<function=name>\n<parameter=key>\nval\n</parameter>\n</tool_call>
-        let xmlPattern = "<tool_call>[\\s\\S]*?<function=([a-zA-Z0-9_-]+)>([\\s\\S]*?)(?:</tool_call>|$)"
-        if let xmlRegex = try? NSRegularExpression(pattern: xmlPattern, options: []) {
-            let nsString = text as NSString
-            let matches = xmlRegex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
-            for match in matches {
-                guard match.numberOfRanges >= 3 else { continue }
-                let functionName = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                let paramsBody = nsString.substring(with: match.range(at: 2))
-                
-                var paramsDict: [String: Any] = [:]
-                let paramTagPattern = "<parameter=([a-zA-Z0-9_-]+)>([\\s\\S]*?)(?:</parameter>|$)"
-                if let paramRegex = try? NSRegularExpression(pattern: paramTagPattern, options: []) {
-                    let paramNs = paramsBody as NSString
-                    let paramMatches = paramRegex.matches(in: paramsBody, options: [], range: NSRange(location: 0, length: paramNs.length))
-                    for pMatch in paramMatches {
-                        if pMatch.numberOfRanges >= 3 {
-                            let pKey = paramNs.substring(with: pMatch.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                            var pVal = paramNs.substring(with: pMatch.range(at: 2))
-                            if pVal.hasPrefix("\n") { pVal.removeFirst() }
-                            if pVal.hasSuffix("\n") { pVal.removeLast() }
-                            paramsDict[pKey] = pVal
-                        }
-                    }
-                }
-                
-                let paramsData = (try? JSONSerialization.data(withJSONObject: paramsDict)) ?? Data()
-                let paramsStr = String(data: paramsData, encoding: .utf8) ?? "{}"
-                calls.append((tool: functionName, args: paramsStr))
-            }
-        }
-        
-        // 5. Match Loose / Inline tool invocations like `tool_name(param="value")` or `file_list(path="/Volumes/...")`
-        if calls.isEmpty {
-            let funcCallPattern = "([a-zA-Z0-9_-]+)\\s*\\(\\s*([a-zA-Z0-9_-]+)\\s*=\\s*[\"']([^\"']+)[\"']\\s*\\)"
-            if let regex = try? NSRegularExpression(pattern: funcCallPattern, options: []) {
-                let nsString = text as NSString
-                let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
-                for match in matches {
-                    if match.numberOfRanges >= 4 {
-                        let tool = nsString.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        let key = nsString.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        let val = nsString.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        let dict: [String: Any] = ["tool": tool, "parameters": [key: val]]
-                        addCall(from: dict)
-                    }
-                }
-            }
-        }
-
-        return calls
+    /// Tool calls the model wrote as text. See `TextToolCallParser` for what is and isn't accepted.
+    private func parseToolCalls(from text: String, knownMCP: Set<String>) -> [(tool: String, args: String)] {
+        TextToolCallParser.parse(text) { name in
+            let canonical = ToolCallRepair.canonicalName(name)
+            return ToolCallRepair.builtInNames.contains(canonical)
+                || canonical == "mcp_call"
+                || name.hasPrefix("mcp__")
+                || knownMCP.contains(name)
+        }.map { (tool: $0.tool, args: $0.args) }
     }
 }

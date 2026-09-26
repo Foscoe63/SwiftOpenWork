@@ -52,8 +52,10 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                 if let parsed = try? JSONDecoder().decode(AnthropicModelsResponse.self, from: data),
                    let data = parsed.data, !data.isEmpty {
                     return data.map { m in
-                        let isReasoning = m.id.contains("3-7") || m.id.contains("r1") || m.id.contains("thinking")
-                        return ModelInfo(
+                        // Every Claude 3.7+ model can think; only the older 3.0/3.5 line cannot.
+                        let isLegacy = m.id.contains("claude-3-opus") || m.id.contains("3-5-") || m.id.contains("claude-3-haiku")
+                        let isReasoning = !isLegacy
+                        let info = ModelInfo(
                             id: m.id,
                             name: m.display_name ?? m.id,
                             providerId: provider.id,
@@ -63,22 +65,34 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                             supportsStreaming: true,
                             supportsTools: true,
                             description: "Anthropic Claude Model",
-                            isDefault: m.id.contains("3-7") || m.id.contains("3-5-sonnet"),
+                            isDefault: m.id.contains("sonnet-5"),
                             speedTier: m.id.contains("haiku") ? "Fast" : "Powerful",
                             costPer1kPrompt: m.id.contains("haiku") ? 0.0008 : 0.003,
                             costPer1kCompletion: m.id.contains("haiku") ? 0.004 : 0.015
                         )
+                        // Context and price from the shared table when the model is one we know;
+                        // the heuristics above only stand in for models it doesn't list.
+                        return KnownModels.applying(to: info)
                     }
                 }
             }
         }
 
+        // Offline fallback when `/models` cannot be reached.
         return [
-            ModelInfo(id: "claude-3-7-sonnet-20250219", name: "Claude 3.7 Sonnet (Hybrid)", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: true, isDefault: true, speedTier: "Powerful", costPer1kPrompt: 0.003, costPer1kCompletion: 0.015),
-            ModelInfo(id: "claude-3-5-sonnet-20241022", name: "Claude 3.5 Sonnet", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Powerful", costPer1kPrompt: 0.003, costPer1kCompletion: 0.015),
-            ModelInfo(id: "claude-3-5-haiku-20241022", name: "Claude 3.5 Haiku", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Fast", costPer1kPrompt: 0.0008, costPer1kCompletion: 0.004),
-            ModelInfo(id: "claude-3-opus-20240229", name: "Claude 3 Opus", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Powerful", costPer1kPrompt: 0.015, costPer1kCompletion: 0.075)
-        ]
+            ("claude-sonnet-5", true), ("claude-opus-5-5", false), ("claude-fable-5-1", false),
+            ("claude-haiku-4-5-20251001", false),
+        ].map { id, isDefault in
+            KnownModels.applying(to: ModelInfo(
+                id: id,
+                name: KnownModels.spec(for: id)?.displayName ?? id,
+                providerId: provider.id,
+                supportsVision: true,
+                supportsReasoning: true,
+                isDefault: isDefault,
+                speedTier: id.contains("haiku") ? "Fast" : "Powerful"
+            ))
+        }
     }
 
     public func streamChat(
@@ -103,6 +117,19 @@ public final class AnthropicService: LLMProviderClient, Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(provider.apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+
+        // What this model accepts differs by generation — see `AnthropicRequestPolicy`. The old
+        // shape (`thinking: enabled` + `temperature`) is a 400 on the current Claude 5 models.
+        let shape = AnthropicRequestPolicy.shape(
+            modelId: model.id,
+            supportsReasoning: model.supportsReasoning,
+            effort: reasoningEffort,
+            temperature: temperature,
+            topP: PersistenceManager.shared.loadSettings().defaultTopP,
+            maxTokens: maxTokens
+        )
+        // Thinking blocks go back only when this request thinks — see `AnthropicRequestPolicy`.
+        let replayThinking = AnthropicRequestPolicy.carriesThinking(shape, modelId: model.id)
 
         var formattedMessages: [[String: Any]] = []
         var blindImageCount = 0
@@ -142,6 +169,11 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                 let calls = pairing.answeredCalls(of: msg)
                 if !calls.isEmpty {
                     var blocks: [[String: Any]] = []
+                    // The turn's thinking blocks, verbatim and first. Without them the model
+                    // restarts its reasoning after every tool result.
+                    if replayThinking {
+                        blocks += AnthropicRequestPolicy.replayBlocks(for: msg.thinkingBlocks, modelId: model.id)
+                    }
                     if !msg.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         blocks.append(["type": "text", "text": msg.content])
                     }
@@ -178,21 +210,10 @@ public final class AnthropicService: LLMProviderClient, Sendable {
             "system": systemPrompt
         ]
 
-        if model.supportsReasoning && reasoningEffort != .off {
-            let budgetTokens = reasoningEffort == .high ? 4096 : (reasoningEffort == .medium ? 2048 : 1024)
-            body["thinking"] = [
-                "type": "enabled",
-                "budget_tokens": budgetTokens
-            ]
-        } else {
-            body["temperature"] = temperature
-            // Only outside the thinking branch: the Anthropic API rejects top_p alongside
-            // extended thinking, and requires temperature 1 there.
-            let topP = PersistenceManager.shared.loadSettings().defaultTopP
-            if topP > 0, topP < 1.0 {
-                body["top_p"] = topP
-            }
-        }
+        if let thinking = shape.thinking { body["thinking"] = thinking }
+        if let outputConfig = shape.outputConfig { body["output_config"] = outputConfig }
+        if let temperature = shape.temperature { body["temperature"] = temperature }
+        if let topP = shape.topP { body["top_p"] = topP }
 
         // Add native tools in Anthropic schema { name: "...", description: "...", input_schema: {...} }
         if !tools.isEmpty {
@@ -342,6 +363,7 @@ public final class AnthropicService: LLMProviderClient, Sendable {
         var currentToolUseId = ""
         var currentToolName = ""
         var currentToolArgs = ""
+        var thinkingCapture = ThinkingStreamCapture()
 
         for try await line in bytes.lines {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -351,6 +373,37 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
 
             let eventType = json["type"] as? String
+
+            // Thinking blocks are captured verbatim, from the same events, so they can go back
+            // with the tool results. The reasoning shown to the user is handled below, as before.
+            if let block = thinkingCapture.handle(json, modelId: model.id) {
+                onChunk(LLMStreamChunk(thinkingBlocks: [block]))
+            }
+
+            if eventType == "error" {
+                // An overload or server fault mid-stream arrives as an event, not an HTTP status,
+                // and was skipped — the reply just stopped, with nothing saying why.
+                let detail = (json["error"] as? [String: Any])?["message"] as? String ?? "the stream reported an error"
+                let kind = (json["error"] as? [String: Any])?["type"] as? String ?? "error"
+                throw NSError(domain: "AnthropicService", code: 500, userInfo: [
+                    NSLocalizedDescriptionKey: "Anthropic stream error (\(kind)): \(detail)"
+                ])
+            }
+
+            // Token counts, so the context meter and session cost have something to show. Input
+            // arrives in `message_start`; output in `message_delta`. Cached input counts as input:
+            // it occupies the window whether or not it was billed at the discounted rate.
+            if eventType == "message_start",
+               let usage = (json["message"] as? [String: Any])?["usage"] as? [String: Any] {
+                let input = (usage["input_tokens"] as? Int ?? 0)
+                    + (usage["cache_creation_input_tokens"] as? Int ?? 0)
+                    + (usage["cache_read_input_tokens"] as? Int ?? 0)
+                onChunk(LLMStreamChunk(promptTokens: input))
+            } else if eventType == "message_delta",
+                      let usage = json["usage"] as? [String: Any],
+                      let output = usage["output_tokens"] as? Int {
+                onChunk(LLMStreamChunk(completionTokens: output))
+            }
 
             if eventType == "content_block_start" {
                 if let contentBlock = json["content_block"] as? [String: Any],
