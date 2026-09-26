@@ -14,7 +14,7 @@ public final class ProviderRouter: Sendable {
             return OllamaService.shared
         case .anthropic:
             return AnthropicService.shared
-        case .openai, .groq, .openrouter, .deepseek, .lmstudio, .llamacpp, .mistral, .gemini, .custom:
+        case .openai, .groq, .openrouter, .deepseek, .lmstudio, .llamacpp, .splash, .mistral, .gemini, .custom:
             return OpenAIService.shared
         }
     }
@@ -93,8 +93,12 @@ public final class ProviderRouter: Sendable {
             }
         }
 
-        // Other local OpenAI-compatible backends (LM Studio, llama.cpp, etc.)
-        if activeProvider.type == .local {
+        // Other local OpenAI-compatible backends. LM Studio, llama.cpp and Splash each have their
+        // own configured endpoint, so they go straight to it: the launcher below probes port 8000
+        // first and would rewrite the URL to whichever server answers, sending LM Studio traffic
+        // to Splash (or the reverse) when both are running.
+        let usesConfiguredEndpoint = [ProviderKind.lmstudio, .llamacpp, .splash].contains(activeProvider.kind)
+        if activeProvider.type == .local && !usesConfiguredEndpoint {
             let res = await LocalInferenceRegistry.serverLauncher?.ensureServerRunning(modelId: model.id, settings: nil)
                 ?? (success: false, message: "No local server launcher is registered in this build.", activePort: 0)
             if !res.success {
