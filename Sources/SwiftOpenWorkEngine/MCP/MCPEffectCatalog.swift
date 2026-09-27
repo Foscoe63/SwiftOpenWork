@@ -52,6 +52,26 @@ public enum MCPEffectCatalog: Sendable {
         "enable", "disable", "start", "stop", "restart", "sync",
         "drop", "truncate", "alter", "set",
         "click", "type", "press", "drag", "tap",
+        // Verbs that were missing: a tool named `add_sub_issue` or `save_note` has none of the
+        // words above, so on a server with a table it was read as "absent from the write list,
+        // therefore a read".
+        "add", "append", "save", "share", "deploy", "trigger", "dispatch", "import", "upsert",
+        "mark", "invite", "apply", "transfer", "star", "unstar", "subscribe", "unsubscribe",
+        "follow", "unfollow", "fork", "attach", "detach", "dismiss", "accept", "decline",
+        "notify", "remember", "store", "retain", "pay", "buy",
+    ]
+
+    /// Verbs that are also ordinary nouns, so `get_commit`, `list_workflow_run` and
+    /// `get_merge_request` are not mutations. They count only when the name does not begin with
+    /// a read word — and never in a name that joins two actions (`get_or_create_…`).
+    static let nounLikeVerbs: Set<String> = [
+        "commit", "run", "close", "lock", "start", "stop", "sync", "schedule", "merge",
+        "push", "post", "put", "copy", "move", "type", "click", "drag", "tap", "press",
+    ]
+
+    static let readLeadWords: Set<String> = [
+        "get", "list", "search", "read", "fetch", "find", "show", "describe", "view", "count",
+        "check", "query", "lookup", "inspect",
     ]
 
     /// Lowercased word tokens of a tool name, splitting on separators *and* camelCase, so both
@@ -84,7 +104,15 @@ public enum MCPEffectCatalog: Sendable {
 
     /// True when any token of the name is a mutating verb.
     public static func nameSuggestsWrite(_ toolName: String) -> Bool {
-        nameTokens(toolName).contains { mutatingVerbs.contains($0) }
+        let tokens = nameTokens(toolName)
+        // "get_commit": a read word up front and no second action in the name — nouns that are
+        // also verbs do not turn it into a write. Anything joined ("get_or_create", "list_and_
+        // archive") is judged on every word.
+        if let first = tokens.first, readLeadWords.contains(first),
+           !tokens.contains("and"), !tokens.contains("or") {
+            return tokens.dropFirst().contains { mutatingVerbs.contains($0) && !nounLikeVerbs.contains($0) }
+        }
+        return tokens.contains { mutatingVerbs.contains($0) }
     }
 
     public static let entries: [Entry] = [
@@ -197,12 +225,24 @@ public enum MCPEffectCatalog: Sendable {
         ),
     ]
 
+    /// Hints so common that a substring hit is more likely a coincidence than a match — a server
+    /// called "Profiles" is not a filesystem. These must match as whole words.
+    private static let wholeWordHints: Set<String> = ["files", "memory", "calendar"]
+
+    private static func hint(_ hint: String, matches text: String) -> Bool {
+        guard wholeWordHints.contains(hint) else { return text.contains(hint) }
+        func words(_ raw: String) -> String {
+            "-" + raw.map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined() + "-"
+        }
+        return words(text).contains("-\(hint)-")
+    }
+
     public static func entry(for server: MCPServerConfig) -> Entry? {
         let name = server.name.lowercased()
         let command = ([server.command] + server.args).joined(separator: " ").lowercased()
         let url = server.url.lowercased()
         return entries.first { entry in
-            entry.nameHints.contains { name.contains($0) || url.contains($0) }
+            entry.nameHints.contains { hint($0, matches: name) || hint($0, matches: url) }
                 || entry.commandHints.contains { command.contains($0) }
         }
     }
