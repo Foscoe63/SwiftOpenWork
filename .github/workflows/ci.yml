@@ -36,14 +36,23 @@ jobs:
           xcodebuild -version
           xcrun swift --version
 
-      # The package graph is large (MLX, swift-nio, transformers); a cold resolve plus
-      # Metal kernel compilation dominates the run.
-      - name: Cache SwiftPM checkouts
+      # The package graph is large (MLX, swift-nio, transformers); a cold resolve plus Metal
+      # kernel compilation dominates the run. This used to cache only the checked-out package
+      # *sources* (SourcePackages), so every run still recompiled every dependency from scratch —
+      # the expensive part. Caching the whole derived-data tree (Build/Intermediates.noindex too)
+      # lets a run with an unchanged Package.resolved restore already-compiled dependency object
+      # files and skip straight to compiling this repo's own, always-changed sources.
+      #
+      # Safe to bust by hand (Actions tab → Caches) if a run ever looks suspiciously green or red
+      # for no reason traceable to the diff — Xcode's own incremental-build hashing normally
+      # prevents a stale artifact from masking a real change, but a corrupted cache entry is not
+      # impossible.
+      - name: Cache SwiftPM checkouts & build products
         uses: actions/cache@v4
         with:
           path: |
             ~/Library/Caches/org.swift.swiftpm
-            .build/ci/SourcePackages
+            .build/ci
           key: spm-${{ runner.os }}-${{ hashFiles('SwiftOpenWork.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
             spm-${{ runner.os }}-
