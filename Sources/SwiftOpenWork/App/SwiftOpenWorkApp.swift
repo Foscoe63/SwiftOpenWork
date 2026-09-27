@@ -42,8 +42,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         NativeMLXService.shared.prepareForExit()
         // Language servers would exit on their own when stdin closes; this makes it certain.
         LiveConnections.terminateAll()
-        // MCP servers are child processes (often `npx` wrappers); left alone they outlive the app.
-        MCPProcessRegistry.terminateAllNow()
     }
 }
 

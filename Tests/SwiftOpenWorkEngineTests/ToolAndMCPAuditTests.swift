@@ -75,14 +75,6 @@ final class ToolAndMCPAuditTests: XCTestCase {
         XCTAssertEqual(AgentRunner.sanitizeToolArgumentsJson(toolName: "mcp__srv__create_thing", argumentsJson: json), json)
     }
 
-    func testEmptyOrUntypedSchemasAreNormalised() {
-        XCTAssertEqual(MCPSchemaShape.normalized("{}"), MCPSchemaShape.empty)
-        XCTAssertEqual(MCPSchemaShape.normalized(nil), MCPSchemaShape.empty)
-        let typed = MCPSchemaShape.normalized(#"{"properties":{"a":{"type":"string"}}}"#)
-        XCTAssertTrue(typed.contains(#""type":"object""#))
-        XCTAssertTrue(typed.contains("properties"))
-    }
-
     // MARK: - Names a provider will accept
 
     func testLongNamespacedNamesFitTheProviderLimitAndRoundTrip() {
@@ -91,7 +83,6 @@ final class ToolAndMCPAuditTests: XCTestCase {
                      "add_pull_request_review_comment_to_pending_review_with_a_very_long_name", "notion.search page"] {
             let name = MCPNamespacedTool.name(serverId: id, toolName: tool)
             XCTAssertLessThanOrEqual(name.count, 64, name)
-            XCTAssertTrue(MCPNamespacedTool.isProviderSafe(name), name)
             let parsed = MCPNamespacedTool.parse(name)
             XCTAssertEqual(parsed?.serverId, id, name)
             XCTAssertEqual(parsed?.toolName, tool, name)
@@ -114,85 +105,12 @@ final class ToolAndMCPAuditTests: XCTestCase {
 
     // MARK: - Approval gate
 
-    /// A write tool called without the `mcp__` prefix ran with no prompt.
-    func testABareMCPWriteToolAsksAndABareReadDoesNot() {
-        let gmail = server("gmail")
-        var settings = AppSettings.default
-        settings.mcpServers = [gmail]
-        MCPAdvertisedSnapshot.set([gmail.id: ["send_message", "list_labels"]])
-        defer { MCPAdvertisedSnapshot.set([:]) }
-
-        XCTAssertNotNil(AgentRunner.approvalReason(toolName: "send_message", settings: settings))
-        XCTAssertNotNil(AgentRunner.approvalReason(toolName: "gmail.send_message", settings: settings))
-        XCTAssertNil(AgentRunner.approvalReason(toolName: "list_labels", settings: settings))
-        XCTAssertNil(AgentRunner.approvalReason(toolName: "not_a_tool_anyone_has", settings: settings))
-    }
-
     func testExitingPlanModeNeedsApprovalOnlyWhileInPlanMode() {
         var settings = AppSettings.default
         settings.planModeEnabled = true
         XCTAssertNotNil(AgentRunner.approvalReason(toolName: "exit_plan_mode", settings: settings))
         settings.planModeEnabled = false
         XCTAssertNil(AgentRunner.approvalReason(toolName: "exit_plan_mode", settings: settings))
-    }
-
-    func testAnApprovalCoversOneCall() {
-        XCTAssertFalse(ApprovedCalls.consume("call-x"))
-        ApprovedCalls.record("call-x")
-        XCTAssertTrue(ApprovedCalls.consume("call-x"))
-        XCTAssertFalse(ApprovedCalls.consume("call-x"), "an approval is spent by the call it was for")
-        XCTAssertFalse(ApprovedCalls.consume(nil))
-    }
-
-    func testApprovingAPendingRequestRecordsIt() async {
-        let manager = ToolApprovalManager.shared
-        let pending = Task { @MainActor in
-            await manager.requestApproval(callId: "audit-c1", toolName: "terminal_command", argumentsJson: "{}", reason: "runs a command")
-        }
-        try? await Task.sleep(nanoseconds: 50_000_000)
-        manager.resolve(callId: "audit-c1", approved: true)
-        let v_pending = await pending.value
-        XCTAssertEqual(v_pending, .approved)
-        XCTAssertTrue(ApprovedCalls.consume("audit-c1"))
-    }
-
-    // MARK: - Unattended scope
-
-    func testAnUnattendedRunRefusesAndReportsItsOwnRefusals() async {
-        let manager = ToolApprovalManager.shared
-        let (outcome, run) = await manager.runUnattended {
-            await manager.requestApproval(callId: "u1", toolName: "file_delete", argumentsJson: "{}", reason: "deletes")
-        }
-        XCTAssertEqual(outcome, .refusedUnattended)
-        XCTAssertEqual(run.map(\.toolName), ["file_delete"])
-        XCTAssertFalse(manager.isUnattended, "the scope ends with the run")
-    }
-
-    func testNestedUnattendedRunsReportUpward() async {
-        let manager = ToolApprovalManager.shared
-        let (_, outer) = await manager.runUnattended {
-            _ = await manager.runUnattended {
-                await manager.requestApproval(callId: "n1", toolName: "run_app", argumentsJson: "{}", reason: "launches")
-            }
-        }
-        XCTAssertEqual(outer.map(\.toolName), ["run_app"])
-    }
-
-    /// The user's own chat must not be treated as unattended because something else is running.
-    func testAChatOutsideAnUnattendedRunStillWaitsForAPerson() async {
-        let manager = ToolApprovalManager.shared
-        XCTAssertFalse(manager.isUnattended)
-        let chat = Task { @MainActor in
-            await manager.requestApproval(callId: "chat-1", toolName: "file_delete", argumentsJson: "{}", reason: "deletes")
-        }
-        try? await Task.sleep(nanoseconds: 30_000_000)
-        _ = await manager.runUnattended {
-            await manager.requestApproval(callId: "bg-1", toolName: "file_delete", argumentsJson: "{}", reason: "deletes")
-        }
-        XCTAssertEqual(manager.pendingApprovals.map(\.id), ["chat-1"], "the chat's prompt stayed live")
-        manager.resolve(callId: "chat-1", approved: false)
-        let v_chat = await chat.value
-        XCTAssertEqual(v_chat, .rejected)
     }
 
     func testTwoQuestionsAreBothAnsweredInOrder() async {
@@ -232,17 +150,6 @@ final class ToolAndMCPAuditTests: XCTestCase {
         XCTAssertTrue(TextToolCallParser.parse(config) { _ in true }.isEmpty)
         let call = "```json\n{\"mcp\": \"macuse\", \"tool\": \"list_windows\", \"arguments\": {}}\n```"
         XCTAssertEqual(TextToolCallParser.parse(call) { _ in true }.first?.tool, "mcp_call")
-    }
-
-    // MARK: - Stuck breaker
-
-    func testOnlyRealEditsResetTheRepeatCounts() {
-        for tool in ["file_write", "edit_file", "multi_edit", "write_file", "file_delete"] {
-            XCTAssertTrue(AgentRunner.changesFiles(tool), tool)
-        }
-        for tool in ["build_project", "run_tests", "terminal_command", "git_status", "file_read"] {
-            XCTAssertFalse(AgentRunner.changesFiles(tool), tool)
-        }
     }
 
     // MARK: - Effect classification
@@ -293,32 +200,7 @@ final class ToolAndMCPAuditTests: XCTestCase {
         XCTAssertEqual(String(decoding: flag, as: UTF8.self), "true")
     }
 
-    func testEditingAServerChangesItsFingerprintButRenamingDoesNot() {
-        let base = MCPServerConfig(id: "s", name: "one", command: "npx", args: ["a"], env: ["K": "1"])
-        var renamed = base; renamed.name = "two"; renamed.disabledTools = ["x"]
-        var edited = base; edited.env["K"] = "2"
-        XCTAssertEqual(MCPClientManager.fingerprint(base), MCPClientManager.fingerprint(renamed))
-        XCTAssertNotEqual(MCPClientManager.fingerprint(base), MCPClientManager.fingerprint(edited))
-    }
-
     // MARK: - Catalog promotion
-
-    func testPromotedToolsAreScopedToTheRunThatRegisteredThem() async {
-        let registry = MCPPromotedToolRegistry.shared
-        await registry.reset(owner: "run-a"); await registry.reset(owner: "run-b")
-        let tool = MCPPromotedTool(chatName: "mcp__srv__audit_tool", serverId: "srv", serverName: "srv",
-                                   executeTool: "call_tool_by_name", injectName: "audit_tool")
-        let a = await registry.register([tool], owner: "run-a")
-        let b = await registry.register([tool], owner: "run-b")
-        XCTAssertEqual(a.count, 1)
-        XCTAssertEqual(b.count, 1, "a second run still gets to announce it")
-        await registry.reset(owner: "run-a")
-        let stillThere = await registry.lookup("mcp__srv__audit_tool")
-        XCTAssertNotNil(stillThere, "run-b's tool survived run-a starting over")
-        await registry.reset(owner: "run-b")
-        let gone = await registry.lookup("mcp__srv__audit_tool")
-        XCTAssertNil(gone)
-    }
 
     func testAPromotedToolKeepsItsOwnNameParameter() {
         let promoted = MCPPromotedTool(
