@@ -175,6 +175,8 @@ public struct MainView: View {
             ProvidersView(appState: appState)
         case .automations:
             AutomationsView(appState: appState)
+        case .loops:
+            LoopsView(appState: appState)
         case .watchFolders:
             WatchFoldersView(appState: appState)
         case .artifacts:

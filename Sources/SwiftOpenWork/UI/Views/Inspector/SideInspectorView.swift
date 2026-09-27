@@ -36,6 +36,8 @@ public struct SideInspectorView: View {
                 }
             case .artifacts:
                 ArtifactsPanelView(appState: appState)
+            case .files:
+                FilesPanelView(appState: appState)
             case .tools:
                 ToolsPanelView(appState: appState)
             case .terminal:

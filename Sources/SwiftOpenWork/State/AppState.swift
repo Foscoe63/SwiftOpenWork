@@ -13,6 +13,7 @@ public enum NavigationDestination: String, CaseIterable, Identifiable {
     case agents = "agents"
     case providers = "providers"
     case automations = "automations"
+    case loops = "loops"
     case watchFolders = "watchFolders"
     case artifacts = "artifacts"
     case memory = "memory"
@@ -29,6 +30,7 @@ public enum NavigationDestination: String, CaseIterable, Identifiable {
         case .agents: return "AI Agents"
         case .providers: return "Model Providers"
         case .automations: return "Automations"
+        case .loops: return "Loops"
         case .watchFolders: return "Watch Folders"
         case .artifacts: return "Artifacts & Files"
         case .memory: return "Memory & Knowledge"
@@ -45,6 +47,7 @@ public enum NavigationDestination: String, CaseIterable, Identifiable {
         case .agents: return "person.3.sequence.fill"
         case .providers: return "server.rack"
         case .automations: return "bolt.badge.clock.fill"
+        case .loops: return "repeat"
         case .watchFolders: return "eye.circle.fill"
         case .artifacts: return "folder.fill"
         case .memory: return "brain.head.profile"
@@ -62,6 +65,7 @@ public enum InspectorTab: String, CaseIterable, Identifiable {
     case subagents = "subagents"
     case comms = "comms"
     case artifacts = "artifacts"
+    case files = "files"
     case tools = "tools"
     case terminal = "terminal"
 
@@ -76,6 +80,7 @@ public enum InspectorTab: String, CaseIterable, Identifiable {
         // which made it the smallest text in a row of equal-width tabs.
         case .comms: return "Messages"
         case .artifacts: return "Artifacts"
+        case .files: return "Files"
         case .tools: return "Tools"
         case .terminal: return "Terminal"
         }
@@ -88,6 +93,7 @@ public enum InspectorTab: String, CaseIterable, Identifiable {
         case .subagents: return "point.3.connected.trianglepath.dotted"
         case .comms: return "bubble.left.and.exclamationmark.bubble.right.fill"
         case .artifacts: return "doc.text.fill"
+        case .files: return "folder.fill"
         case .tools: return "wrench.and.screwdriver.fill"
         case .terminal: return "terminal.fill"
         }
@@ -161,11 +167,17 @@ public final class AppState: ObservableObject {
     @Published public var plugins: [AppExtensionPlugin] = []
     @Published public var memories: [MemoryItem] = []
     @Published public var automations: [Automation] = []
+    @Published public var loops: [AgentLoop] = []
     @Published public var watchItems: [WatchItem] = []
     @Published public var artifacts: [AutomationArtifact] = []
     @Published public var settings: AppSettings = AppSettings.default {
         didSet {
             persistence.saveSettings(settings)
+            // A server that was edited, disabled or deleted must stop running with its old config.
+            if oldValue.mcpServers != settings.mcpServers {
+                let servers = settings.mcpServers
+                Task { await MCPClientManager.shared.reconcile(with: servers) }
+            }
             // Switching the Agent Messages log off while its tab is selected would leave the
             // inspector on a tab that is no longer in the tab bar. Corrected here rather than in
             // the view, so nothing publishes a change during a view update.
@@ -235,6 +247,7 @@ public final class AppState: ObservableObject {
         loadAll()
         EngineHosting.host = self
         recoverInterruptedAutomationRuns()
+        recoverInterruptedLoops()
         mlxLoadedObserver = MLXLoadedModelsObserver { [weak self] in
             self?.refreshLoadedMLXModels()
         }
@@ -265,6 +278,7 @@ public final class AppState: ObservableObject {
         self.plugins = persistence.loadPlugins()
         self.memories = persistence.loadMemories()
         self.automations = persistence.loadAutomations()
+        self.loops = persistence.loadLoops()
         self.watchItems = persistence.loadWatchItems()
         self.artifacts = persistence.loadArtifacts()
 
@@ -2194,6 +2208,37 @@ public final class AppState: ObservableObject {
             sessions = recovered.sessions
             persistence.saveSessions(sessions)
         }
+    }
+
+    /// A loop left `running` by a quit has nothing driving it. Say so instead of showing a spinner
+    /// on a run that no longer exists.
+    func recoverInterruptedLoops() {
+        var changed = false
+        for index in loops.indices where loops[index].state == .running {
+            loops[index].state = .idle
+            loops[index].lastOutcome = "Did not finish: the app quit while this loop was running."
+            for s in loops[index].steps.indices where loops[index].steps[s].state == .working || loops[index].steps[s].state == .checking {
+                loops[index].steps[s].state = .pending
+            }
+            changed = true
+        }
+        if changed { persistence.saveLoops(loops) }
+    }
+
+    /// Insert or replace a loop, and write it to disk.
+    public func saveLoop(_ loop: AgentLoop) {
+        if let index = loops.firstIndex(where: { $0.id == loop.id }) {
+            loops[index] = loop
+        } else {
+            loops.insert(loop, at: 0)
+        }
+        persistence.saveLoops(loops)
+    }
+
+    public func deleteLoop(_ loop: AgentLoop) {
+        LoopRunner.shared.stop(loopId: loop.id, appState: self)
+        loops.removeAll { $0.id == loop.id }
+        persistence.saveLoops(loops)
     }
 
     /// Pure, so the rule is testable without the real data directory the test host runs on.

@@ -26,6 +26,7 @@ public struct AppSidebar: View {
                     navButton(for: .agents, count: appState.agents.count)
                     navButton(for: .providers, count: appState.providers.filter { $0.isEnabled }.count)
                     navButton(for: .automations, count: appState.automations.filter { $0.isEnabled }.count)
+                    navButton(for: .loops, count: appState.loops.filter { $0.state == .running }.count)
                     navButton(for: .watchFolders, count: appState.watchItems.filter { $0.isEnabled }.count)
                     // No badge: this row opens a browser over the workspace folder, but
                     // `appState.artifacts` holds `AutomationArtifact` records, which are shown

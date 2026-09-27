@@ -65,6 +65,64 @@ public enum WorkspaceFileScanner {
         return results
     }
 
+    /// One row of a workspace file/folder tree. `path` is workspace-relative, matching the
+    /// strings `listFiles` returns, so the two can address the same file interchangeably.
+    public struct FileNode: Identifiable, Hashable, Sendable {
+        public var id: String { path }
+        public var path: String
+        public var name: String
+        public var isDirectory: Bool
+        /// `nil` for a file; an empty array for a directory with nothing shown in it.
+        public var children: [FileNode]?
+    }
+
+    /// The same walk as `listFiles`, but keeping directory structure instead of flattening to a
+    /// file list — for a tree view where folders need to be visible and expandable, not just the
+    /// files under them.
+    public static func listTree(
+        at root: String,
+        maxDepth: Int = defaultMaxDepth,
+        maxEntries: Int = defaultMaxEntries
+    ) -> [FileNode] {
+        let fm = FileManager.default
+        var entryCount = 0
+
+        func walk(_ directory: String, prefix: String, depth: Int) -> [FileNode] {
+            guard depth <= maxDepth, entryCount < maxEntries else { return [] }
+            guard let names = try? fm.contentsOfDirectory(atPath: directory) else { return [] }
+
+            var nodes: [FileNode] = []
+            for name in names.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }) {
+                guard entryCount < maxEntries else { break }
+                guard !name.hasPrefix(".") else { continue }
+
+                let full = (directory as NSString).appendingPathComponent(name)
+                let relative = prefix.isEmpty ? name : "\(prefix)/\(name)"
+
+                var isDirectory: ObjCBool = false
+                guard fm.fileExists(atPath: full, isDirectory: &isDirectory) else { continue }
+
+                if isDirectory.boolValue {
+                    guard !skippedDirectories.contains(name) else { continue }
+                    nodes.append(FileNode(
+                        path: relative, name: name, isDirectory: true,
+                        children: walk(full, prefix: relative, depth: depth + 1)
+                    ))
+                } else {
+                    entryCount += 1
+                    nodes.append(FileNode(path: relative, name: name, isDirectory: false, children: nil))
+                }
+            }
+            // Folders first, then files, each alphabetical — matches Finder's default sort.
+            return nodes.sorted { lhs, rhs in
+                if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+        }
+
+        return walk(root, prefix: "", depth: 1)
+    }
+
     /// What the editor is allowed to do with a file.
     public enum Content: Equatable {
         /// Decoded as UTF-8. Safe to show and to save.

@@ -42,6 +42,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         NativeMLXService.shared.prepareForExit()
         // Language servers would exit on their own when stdin closes; this makes it certain.
         LiveConnections.terminateAll()
+        // MCP servers are child processes (often `npx` wrappers); left alone they outlive the app.
+        MCPProcessRegistry.terminateAllNow()
     }
 }
 
@@ -64,6 +66,12 @@ public struct SwiftOpenWorkApp: App {
                     // Schedules only exist if something is watching the clock. Started here
                     // rather than in `AppDelegate` because it needs the populated `AppState`.
                     AutomationScheduler.shared.start(appState: appState)
+                    LoopRunner.shared.startScheduler(appState: appState)
+                    // Connect MCP servers now, in the background, so the first turn — and the first
+                    // scheduled run — has their tools instead of being told they are still warming.
+                    if !AppIdentity.isHostedByTests {
+                        Task { await MCPClientManager.shared.warmAllInBackground(perServerTimeout: .seconds(45)) }
+                    }
                     UpdateChecker.runAutomaticCheckIfDue(appState: appState)
                     WindowLayoutStore.observeMainWindowAutosave()
                     // Delay so SwiftUI finishes applying its initial frame first, then we override.

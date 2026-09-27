@@ -2416,8 +2416,10 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         }
     }
 
-    /// Why a delete target must not be removed, or nil when it may be.
-    static func refusedDeleteTarget(_ fullPath: String, workspaceRoot: String) -> String? {
+    /// Why a delete target must not be removed, or nil when it may be. Public so UI-driven
+    /// deletes (the Files panel) can reuse the same refusal the `file_delete` tool applies,
+    /// instead of reimplementing it.
+    public static func refusedDeleteTarget(_ fullPath: String, workspaceRoot: String) -> String? {
         let target = (fullPath as NSString).standardizingPath
         let root = (workspaceRoot as NSString).standardizingPath
         let home = NSHomeDirectory()
