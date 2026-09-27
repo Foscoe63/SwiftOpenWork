@@ -470,6 +470,9 @@ public final class PersistenceManager: Sendable {
             "file_read", "file_write", "terminal_command", "web_search",
             "calculator", "agent_spawn", "agent_message"
         ]
+        // The lead/research seeds shipped with the memory tools for a while — an untouched
+        // agents.json from that window still has them, so that shape also counts as "never
+        // chosen" even now that the tools ship disabled by default.
         let withMemory = base.union(["memory_store", "memory_recall"])
         let stored = Set(ids)
         return stored == base || stored == withMemory
@@ -535,6 +538,14 @@ public final class PersistenceManager: Sendable {
             }
         }
 
+        // Role-matched tool allowlists and repaired seed names, once. Gated so an agent whose
+        // allowlist the user later clears on purpose ("everything") is not refilled every launch.
+        let profilesKey = "agentRoleProfilesApplied.v1"
+        if !UserDefaults.standard.bool(forKey: profilesKey) {
+            if AgentRoleProfiles.migrate(&items) { modified = true }
+            UserDefaults.standard.set(true, forKey: profilesKey)
+        }
+
         // Sanitize any invalid or obsolete SF symbols loaded from user's disk cache
         for i in 0..<items.count {
             if items[i].avatar == "person.crop.circle.badge.sparkables" || items[i].avatar == "person.crop.circle.badge.sparkles" {
@@ -573,6 +584,7 @@ public final class PersistenceManager: Sendable {
                 reasoningEffort: .medium,
                 parentAgentId: nil,
                 subAgentIds: ["coder-agent", "research-agent", "reviewer-agent"],
+                allowedToolIds: AgentRoleProfiles.toolsByAgentId["lead-assistant"] ?? [],
                 canSpawnSubAgents: true,
                 maxSubAgentDepth: 3,
                 autoDelegate: true,
@@ -599,6 +611,7 @@ public final class PersistenceManager: Sendable {
                 maxTokens: 8192,
                 parentAgentId: "lead-assistant",
                 subAgentIds: [],
+                allowedToolIds: AgentRoleProfiles.toolsByAgentId["coder-agent"] ?? [],
                 canSpawnSubAgents: true,
                 maxSubAgentDepth: 2,
                 autoDelegate: false,
@@ -623,6 +636,7 @@ public final class PersistenceManager: Sendable {
                 maxTokens: 4096,
                 parentAgentId: "lead-assistant",
                 subAgentIds: [],
+                allowedToolIds: AgentRoleProfiles.toolsByAgentId["research-agent"] ?? [],
                 canSpawnSubAgents: false,
                 canCommunicateWithOthers: true,
                 tags: ["Research", "Analysis", "Documentation"],
@@ -646,6 +660,7 @@ public final class PersistenceManager: Sendable {
                 reasoningEffort: .high,
                 parentAgentId: "lead-assistant",
                 subAgentIds: [],
+                allowedToolIds: AgentRoleProfiles.toolsByAgentId["reviewer-agent"] ?? [],
                 canSpawnSubAgents: false,
                 canCommunicateWithOthers: true,
                 tags: ["Review", "Security", "Quality"],
@@ -668,6 +683,7 @@ public final class PersistenceManager: Sendable {
                 maxTokens: 4096,
                 parentAgentId: nil,
                 subAgentIds: ["coder-agent"],
+                allowedToolIds: AgentRoleProfiles.toolsByAgentId["architect-agent"] ?? [],
                 canSpawnSubAgents: true,
                 maxSubAgentDepth: 2,
                 autoDelegate: true,
@@ -884,8 +900,10 @@ public final class PersistenceManager: Sendable {
             Tool(id: "image_analyze", name: "image_analyze", displayName: "Read Text In Image", description: "Extract text from a screenshot or image with Apple Vision OCR. Text only — it does not describe what the image depicts.", category: .mediaVision, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "image_analyze")),
             Tool(id: "agent_spawn", name: "agent_spawn", displayName: "Spawn Sub-Agent", description: "Launches a specialized child sub-agent to execute a sub-task autonomously", category: .agents, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "agent_spawn")),
             Tool(id: "agent_message", name: "agent_message", displayName: "Message Agent", description: "Sends an inter-agent message or query to another agent in the network", category: .agents, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "agent_message")),
-            Tool(id: "memory_store", name: "memory_store", displayName: "Save to Memory", description: "Saves a persistent fact, preference, or context item to the workspace memory", category: .system, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "memory_store")),
-            Tool(id: "memory_recall", name: "memory_recall", displayName: "Recall Memory", description: "Retrieves stored memories by search term or category", category: .system, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "memory_recall")),
+            // Off by default: a flat substring-match store. Enable it only when no MCP memory
+            // server (e.g. a semantic one) is configured instead.
+            Tool(id: "memory_store", name: "memory_store", displayName: "Save to Memory", description: "Saves a persistent fact, preference, or context item to the workspace memory", category: .system, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "memory_store"), isEnabled: false),
+            Tool(id: "memory_recall", name: "memory_recall", displayName: "Recall Memory", description: "Retrieves stored memories by search term or category", category: .system, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "memory_recall"), isEnabled: false),
             Tool(id: "gmail_list", name: "gmail_list", displayName: "List Gmail Messages", description: "Lists recent Gmail messages matching a search query (requires Google OAuth credentials in Settings → Extensions)", category: .web, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "gmail_list"), isEnabled: false, requiresApproval: false),
             Tool(id: "gmail_search", name: "gmail_search", displayName: "Search Gmail", description: "Searches Gmail with a Gmail query string (e.g. from:boss newer_than:7d)", category: .web, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "gmail_search"), isEnabled: false, requiresApproval: false),
             Tool(id: "google_calendar_list", name: "google_calendar_list", displayName: "List Google Calendar", description: "Lists upcoming events from the primary Google Calendar", category: .web, parametersJsonSchema: ToolSchemaCatalog.schemaJSON(for: "google_calendar_list"), isEnabled: false, requiresApproval: false),
@@ -1003,9 +1021,23 @@ public final class PersistenceManager: Sendable {
         storage.save(automations, to: "automations.json")
     }
 
+    // MARK: - Loops
+    public func loadLoops() -> [AgentLoop] {
+        storage.load([AgentLoop].self, from: "loops.json") ?? []
+    }
+
+    public func saveLoops(_ loops: [AgentLoop]) {
+        storage.save(loops, to: "loops.json")
+    }
+
     // MARK: - Skills
     public func loadSkills() -> [Skill] {
-        if let items = storage.load([Skill].self, from: "skills.json"), !items.isEmpty {
+        if var items = storage.load([Skill].self, from: "skills.json"), !items.isEmpty {
+            let key = "roleSkillsAdded.v1"
+            if !UserDefaults.standard.bool(forKey: key) {
+                if AgentRoleProfiles.addMissingSkills(to: &items) { saveSkills(items) }
+                UserDefaults.standard.set(true, forKey: key)
+            }
             return items
         }
         let defaults: [Skill] = [
@@ -1052,8 +1084,9 @@ public final class PersistenceManager: Sendable {
                 source: .builtIn
             )
         ]
-        saveSkills(defaults)
-        return defaults
+        let seeded = defaults + AgentRoleProfiles.extraSkills
+        saveSkills(seeded)
+        return seeded
     }
 
     public func saveSkills(_ skills: [Skill]) {

@@ -989,8 +989,9 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                     )
                 }
             case .alwaysAsk:
-                // The agent loop must obtain interactive user approval before a call reaches
-                // execute() under this policy; treat one that arrives here anyway as unapproved.
+                // The agent loop obtains interactive approval before a call reaches execute()
+                // and records it in `ApprovedCalls`; one that arrives without it is unapproved.
+                if ApprovedCalls.consume(callId) { break }
                 return ToolExecutionResult(
                     success: false,
                     output: "",

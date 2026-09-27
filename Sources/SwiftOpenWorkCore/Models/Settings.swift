@@ -259,6 +259,11 @@ public struct AppSettings: Codable, Hashable, Sendable {
     /// Honouring it literally would delete a working feature from every existing install.
     public static let currentSchemaVersion = 2
 
+    /// Filesystem, fetch, memory, git and MacUse access are already native tools
+    /// (`file_read`/`file_write`/etc., `fetch_url`/`web_search`, `memory_store`/`memory_recall`,
+    /// `git_status`/`git_diff`/`git_commit`/etc., `screenshot_window`/`accessibility_tree`/
+    /// `run_app`), so these ship disabled — they're an opt-in alternative, not something a fresh
+    /// install needs on to have the capability.
     public static var defaultMCPServers: [MCPServerConfig] {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let workspaceMain = (home as NSString).appendingPathComponent(AppIdentity.workspacesRelativePath + "/Main")
