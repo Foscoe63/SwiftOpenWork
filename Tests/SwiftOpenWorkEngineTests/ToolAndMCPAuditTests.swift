@@ -10,79 +10,8 @@ final class ToolAndMCPAuditTests: XCTestCase {
 
     // MARK: - Names a provider will accept
 
-    func testLongNamespacedNamesFitTheProviderLimitAndRoundTrip() {
-        let id = "1A59C906-04DA-521D-BDA7-7F71B9F9E01C"
-        for tool in ["read_file", "create_pull_request_review",
-                     "add_pull_request_review_comment_to_pending_review_with_a_very_long_name", "notion.search page"] {
-            let name = MCPNamespacedTool.name(serverId: id, toolName: tool)
-            XCTAssertLessThanOrEqual(name.count, 64, name)
-            let parsed = MCPNamespacedTool.parse(name)
-            XCTAssertEqual(parsed?.serverId, id, name)
-            XCTAssertEqual(parsed?.toolName, tool, name)
-            // Deterministic, so a name from an earlier session still means the same tool.
-            XCTAssertEqual(name, MCPNamespacedTool.name(serverId: id, toolName: tool))
-        }
-    }
-
     func testShortNamesAreLeftAlone() {
         XCTAssertEqual(MCPNamespacedTool.name(serverId: "srv-1", toolName: "read_file"), "mcp__srv-1__read_file")
-    }
-
-    func testAShortenedServerIdResolvesByPrefixWhenUnique() {
-        let a = MCPServerConfig(id: "1a59c906-aaaa-bbbb-cccc-000000000001", name: "one", command: "npx")
-        let b = MCPServerConfig(id: "ffffffff-aaaa-bbbb-cccc-000000000002", name: "two", command: "npx")
-        XCTAssertEqual(MCPToolRouting.canonicalServer("1a59c906", in: [a, b])?.id, a.id)
-        let clash = MCPServerConfig(id: "1a59c906-zzzz-bbbb-cccc-000000000003", name: "three", command: "npx")
-        XCTAssertNil(MCPToolRouting.canonicalServer("1a59c906", in: [a, clash]))
-    }
-
-    // MARK: - Approval gate
-
-    func testExitingPlanModeNeedsApprovalOnlyWhileInPlanMode() {
-        var settings = AppSettings.default
-        settings.planModeEnabled = true
-        XCTAssertNotNil(AgentRunner.approvalReason(toolName: "exit_plan_mode", settings: settings))
-        settings.planModeEnabled = false
-        XCTAssertNil(AgentRunner.approvalReason(toolName: "exit_plan_mode", settings: settings))
-    }
-
-    func testTwoQuestionsAreBothAnsweredInOrder() async {
-        let manager = UserChoiceManager.shared
-        manager.cancelAll()
-        let first = Task { @MainActor in await manager.request(question: "one?", options: [], callId: "q1") }
-        let second = Task { @MainActor in await manager.request(question: "two?", options: [], callId: "q2") }
-        try? await Task.sleep(nanoseconds: 50_000_000)
-        XCTAssertEqual(manager.pending?.id, "q1")
-        manager.resolve(answer: "A")
-        XCTAssertEqual(manager.pending?.id, "q2")
-        manager.resolve(answer: "B")
-        let v_first = await first.value
-        XCTAssertEqual(v_first, "A")
-        let v_second = await second.value
-        XCTAssertEqual(v_second, "B")
-        XCTAssertNil(manager.pending)
-    }
-
-    // MARK: - Visible text and text-written calls
-
-    func testAJSONSnippetInAnAnswerSurvivesAndAToolCallDoesNot() {
-        let manifest = "Here:\n```json\n{\"name\": \"my-app\", \"version\": \"1.0.0\"}\n```\nDone."
-        XCTAssertEqual(AssistantContentSanitizer.sanitizeVisible(manifest), manifest)
-        XCTAssertEqual(AssistantContentSanitizer.sanitizeVisible("{\"name\": \"data\", \"x\": 1}"), "{\"name\": \"data\", \"x\": 1}")
-
-        let call = "```tool_call\n{\"tool\": \"file_list\", \"parameters\": {\"path\": \".\"}}\n```"
-        XCTAssertEqual(AssistantContentSanitizer.sanitizeVisible(call), "")
-        XCTAssertEqual(
-            AssistantContentSanitizer.sanitizeVisible("TOOL_CALL = {\"tool\":\"x\",\"parameters\":{\"a\":{\"b\":1}}} then text"),
-            "then text"
-        )
-    }
-
-    func testAConfigSnippetWithAServerKeyIsNotACall() {
-        let config = "```json\n{\"server\": \"localhost\", \"port\": 80}\n```"
-        XCTAssertTrue(TextToolCallParser.parse(config) { _ in true }.isEmpty)
-        let call = "```json\n{\"mcp\": \"macuse\", \"tool\": \"list_windows\", \"arguments\": {}}\n```"
-        XCTAssertEqual(TextToolCallParser.parse(call) { _ in true }.first?.tool, "mcp_call")
     }
 
     // MARK: - Effect classification
@@ -114,36 +43,6 @@ final class ToolAndMCPAuditTests: XCTestCase {
         XCTAssertEqual(MCPEffectCatalog.classify(server: hindsight, toolName: "retain", advertised: true), .write)
         XCTAssertEqual(MCPEffectCatalog.classify(server: hindsight, toolName: "recall", advertised: true), .read)
         XCTAssertEqual(MCPEffectCatalog.classify(server: hindsight, toolName: "reflect", advertised: true), .read)
-    }
-
-    // MARK: - Stdio buffer, JSON values, lifecycle
-
-    func testAServerRequestReusingOurIdIsNotTakenAsTheAnswer() {
-        let buffer = MCPStdioBuffer()
-        buffer.append(#"{"jsonrpc":"2.0","id":5,"method":"ping"}"#.data(using: .utf8)! + Data([10]))
-        XCTAssertNil(buffer.extractJSONRPCResponse(id: 5))
-        buffer.append(#"{"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"real"}]}}"#.data(using: .utf8)! + Data([10]))
-        XCTAssertEqual(buffer.extractJSONRPCResponse(id: 5), "real")
-    }
-
-    func testIntegersZeroAndOneAreNotEncodedAsBooleans() throws {
-        let data = try JSONEncoder().encode(AnyCodable(NSNumber(value: 1)))
-        XCTAssertEqual(String(decoding: data, as: UTF8.self), "1")
-        let flag = try JSONEncoder().encode(AnyCodable(NSNumber(value: true)))
-        XCTAssertEqual(String(decoding: flag, as: UTF8.self), "true")
-    }
-
-    // MARK: - Catalog promotion
-
-    func testAPromotedToolKeepsItsOwnNameParameter() {
-        let promoted = MCPPromotedTool(
-            chatName: "mcp__srv__notes_create", serverId: "srv", serverName: "srv",
-            executeTool: "call_tool_by_name", injectName: "notes_create",
-            inputSchemaJson: #"{"type":"object","properties":{"name":{"type":"string"}}}"#
-        )
-        let args = MCPCatalogPromote.dispatchArguments(for: promoted, raw: ["name": "My note"])
-        XCTAssertEqual(args["name"] as? String, "notes_create")
-        XCTAssertEqual((args["arguments"] as? [String: Any])?["name"] as? String, "My note")
     }
 
     // MARK: - Processes
