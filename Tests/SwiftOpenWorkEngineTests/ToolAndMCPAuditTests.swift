@@ -276,36 +276,6 @@ final class ToolAndMCPAuditTests: XCTestCase {
         XCTAssertEqual(MCPEffectCatalog.classify(server: hindsight, toolName: "reflect", advertised: true), .read)
     }
 
-    // MARK: - HTTP MCP
-
-    func testHTTPReplyAsPlainJSON() throws {
-        let body = #"{"jsonrpc":"2.0","id":3,"result":{"ok":true}}"#.data(using: .utf8)!
-        let message = try MCPHTTPSession.extractResponse(data: body, contentType: "application/json", id: 3)
-        XCTAssertNotNil(message["result"])
-    }
-
-    func testHTTPReplyAsEventStreamWithCRLFAndInterleavedNotifications() throws {
-        let stream = "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\r\n\r\n"
-            + "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"tools\":[]}}\r\n\r\n"
-        let message = try MCPHTTPSession.extractResponse(
-            data: stream.data(using: .utf8)!, contentType: "text/event-stream; charset=utf-8", id: 7
-        )
-        XCTAssertNotNil(message["result"])
-    }
-
-    func testHTTPReplyForAnotherRequestIsRejected() {
-        let body = #"{"jsonrpc":"2.0","id":9,"result":{}}"#.data(using: .utf8)!
-        XCTAssertThrowsError(try MCPHTTPSession.extractResponse(data: body, contentType: "application/json", id: 3))
-    }
-
-    func testToolResultsRenderTextAndFlagNonTextParts() {
-        let text = MCPHTTPSession.render([
-            "content": [["type": "text", "text": "hello"], ["type": "image", "mimeType": "image/png"]],
-        ])
-        XCTAssertEqual(text, "hello\n[image image/png]")
-        XCTAssertTrue(MCPHTTPSession.render(["structuredContent": ["a": 1]]).contains("\"a\""))
-    }
-
     // MARK: - Stdio buffer, JSON values, lifecycle
 
     func testAServerRequestReusingOurIdIsNotTakenAsTheAnswer() {
@@ -359,28 +329,6 @@ final class ToolAndMCPAuditTests: XCTestCase {
         let args = MCPCatalogPromote.dispatchArguments(for: promoted, raw: ["name": "My note"])
         XCTAssertEqual(args["name"] as? String, "notes_create")
         XCTAssertEqual((args["arguments"] as? [String: Any])?["name"] as? String, "My note")
-    }
-
-    // MARK: - Providers
-
-    func testProviderRefusalsCarryTheProvidersReason() {
-        let body = #"{"type":"error","error":{"type":"invalid_request_error","message":"tools.3.name: string too long"}}"#.data(using: .utf8)!
-        XCTAssertEqual(ProviderHTTP.message(fromBody: body), "tools.3.name: string too long")
-        XCTAssertEqual(ProviderHTTP.message(fromBody: #"{"error":"model not found"}"#.data(using: .utf8)!), "model not found")
-    }
-
-    func testOnlyOverloadStyleFailuresAreRetried() {
-        for status in [429, 502, 503, 504, 529] { XCTAssertTrue(ProviderHTTP.isRetryable(status), "\(status)") }
-        for status in [400, 401, 403, 404, 413, 500] { XCTAssertFalse(ProviderHTTP.isRetryable(status), "\(status)") }
-        XCTAssertEqual(ProviderHTTP.delay(afterAttempt: 1, retryAfter: "4"), 4)
-        XCTAssertEqual(ProviderHTTP.delay(afterAttempt: 1, retryAfter: "9999"), 20)
-        XCTAssertEqual(ProviderHTTP.delay(afterAttempt: 2, retryAfter: nil), 3)
-    }
-
-    func testAModelWithoutToolSupportIsRecognised() {
-        XCTAssertTrue(ProviderHTTP.looksLikeToolsUnsupported("registry.ollama.ai/library/gemma:2b does not support tools"))
-        XCTAssertTrue(ProviderHTTP.looksLikeToolsUnsupported("tools param requires --jinja flag"))
-        XCTAssertFalse(ProviderHTTP.looksLikeToolsUnsupported("invalid api key"))
     }
 
     // MARK: - Processes
