@@ -5,18 +5,18 @@ final class SmokeTests: XCTestCase {
 
     func testNavigationDestinationCaseCountAndOrder() {
         let expected: [NavigationDestination] = [
-            .chat, .localModels, .agents, .providers, .automations,
+            .chat, .localModels, .agents, .providers, .automations, .loops,
             .watchFolders, .artifacts, .memory, .tools, .dashboard, .settings
         ]
-        XCTAssertEqual(NavigationDestination.allCases.count, 11, "NavigationDestination should have exactly 11 cases")
+        XCTAssertEqual(NavigationDestination.allCases.count, 12, "NavigationDestination should have exactly 12 cases")
         XCTAssertEqual(NavigationDestination.allCases, expected, "NavigationDestination cases should match expected order")
     }
 
     func testInspectorTabCaseCountAndOrder() {
         let expected: [InspectorTab] = [
-            .editor, .preview, .subagents, .comms, .artifacts, .tools, .terminal
+            .editor, .preview, .subagents, .comms, .artifacts, .files, .tools, .terminal
         ]
-        XCTAssertEqual(InspectorTab.allCases.count, 7, "InspectorTab should have exactly 7 cases")
+        XCTAssertEqual(InspectorTab.allCases.count, 8, "InspectorTab should have exactly 8 cases")
         XCTAssertEqual(InspectorTab.allCases, expected, "InspectorTab cases should match expected order")
     }
 
