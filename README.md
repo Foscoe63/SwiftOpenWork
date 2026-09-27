@@ -135,9 +135,27 @@ The code-intelligence tools run real language servers, started on first use and 
 - Create / edit / Run Now / History / Export / Pause / Resume / Delete
 - Watch folders with filesystem triggers and artifact synthesis
 
+### Loops
+
+A different shape of automation from the above: not one prompt on a schedule, but a **multi-step,
+self-verifying workflow** the agent runs against a workspace until it actually passes.
+
+- Each step is a work prompt, an optional shell command that checks the result, and an optional
+  check turn — a failed check retries the step (up to its own attempt limit) before the loop
+  advances
+- An optional **goal check** runs after the last step; failing it sends the loop back to pass 1,
+  up to a configured number of passes
+- Runs on a simple minutes interval, or on demand from the Loops sidebar — Run / Stop per loop,
+  with live per-step status and a link into the underlying session to read exactly what happened
+- Backed by the same headless execution path as Automations and Shortcuts, so tool use, approvals
+  and sandboxing behave identically — a loop is not a separate, less-audited way to run the agent
+- A loop interrupted by quitting the app is recovered as "did not finish" on next launch, not left
+  showing a spinner for a run that no longer exists
+
 ### Editor and live preview
 
 - **Code editor** in the inspector (⇧⌘E) and in Artifacts & Files — tabs, syntax highlighting for 20+ languages (strings and comments are lexed properly, so a `//` inside a string stays a string), line numbers, current-line highlight, find (⌘F), go to line (⌘L), toggle comment (⌘/), indent and outdent (⌘] / ⌘[), auto-indent that opens `{}` pairs, and **Tab completion** from the file's own words, the workspace's declarations and the language's keywords. After a typing pause, **ghost-text** from the idle local model (never queued behind an agent turn, never swapping the resident checkpoint). **⌘-click** a name to jump to its declaration; ⇧⌘O opens any workspace file
+- **Files tab in the inspector** — the workspace's real file/folder tree (folders included, not just a flat file list), alongside Editor/Preview/Tools. New File, New Folder and Delete in its toolbar, and a click opens the file in the inspector's Editor tab. Create and delete resolve through the same workspace-boundary check the `file_write`/`file_delete` tools use, so nothing in the tree can create or delete outside the workspace root or remove the root itself
 - **Inline AI suggestions** — pause typing and the model proposes the rest of the line (or the block it opens) as grey ghost text; ⇥ accepts it as one undo step, esc or moving the cursor dismisses it, and typing what it says keeps the rest. Measured on Ornith-1.5-35B: about 0.8–1.1s per suggestion once the model is loaded. It never waits in line: when an agent turn or automation holds the local model, no suggestion is made. By default it uses your chat model only when that runs on this Mac; a cloud model is used only if you pick one (editor status bar or Settings)
 - **Built for an agent editing the same files.** A clean tab follows the agent's writes and says it reloaded. A tab with unsaved edits is never overwritten: a banner offers Compare, Take Disk Version or Keep Mine, and Save refuses until you choose. Line endings (LF/CRLF) and indentation are kept as the file had them. The composer warns when a file has unsaved edits, because the agent reads what is on disk
 - **Everything opens where you are** — build and test errors, `+N/−N` diffs on tool cards, and console errors from the preview open the file at the line
@@ -239,7 +257,7 @@ SwiftOpenWork/
     │   ├── Agents/          # AgentRunner, SubAgentExecutor, approvals,
     │   │                    # ContextCompactor, ContextMeter,
     │   │                    # TurnCompletionNotifier
-    │   ├── Automations/     # AutomationSchedule, CronExpression
+    │   ├── Automations/     # AutomationSchedule, CronExpression, LoopCheckCommand
     │   ├── Editor/          # EditorWorkspace, ProjectSearchModel, syntax
     │   │                    # highlighter, ghost-text
     │   ├── Preview/         # DevServerManager, PreviewController, PreviewLauncher,
@@ -261,12 +279,13 @@ SwiftOpenWork/
         ├── App/             # Entry, App Intents, window frame persistence,
         │                    # LocalInferenceWiring
         ├── State/           # AppState (the EngineHost), AutomationScheduler,
-        │                    # HeadlessAgentTurn
+        │                    # LoopRunner, HeadlessAgentTurn
         └── UI/
             ├── Navigation/  # Sidebar, Spotlight
             ├── Theme/ · Components/
-            └── Views/       # Chat, LocalModels, Agents, Automations,
-                             # Editor, Preview, Settings, Inspector, Dashboard, …
+            └── Views/       # Chat, LocalModels, Agents, Automations, Loops,
+                             # Editor, Preview, Settings, Inspector (incl. Files
+                             # tab), Dashboard, …
 ```
 
 ### Modules
@@ -320,6 +339,7 @@ MCP layers pass it in and out of actors. The rules that make that compile:
 | 👥 | AI Agents |
 | 🖥️ | Model Providers |
 | ⚡ | Automations (Schedules) |
+| 🔁 | Loops |
 | 👁️ | Watch Folders |
 | 📂 | Artifacts & Files |
 | 🧠 | Memory & Knowledge |
