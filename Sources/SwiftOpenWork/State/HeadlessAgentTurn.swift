@@ -54,12 +54,14 @@ public enum HeadlessAgentTurn {
         title: String,
         appState: AppState,
         agentId: String? = nil,
+        workspace workspaceOverride: Workspace? = nil,
         onSessionStarted: ((String) -> Void)? = nil
     ) async -> Result {
         let agent = appState.agents.first { $0.id == agentId } ?? appState.currentAgent
         let provider = appState.currentProvider
         let model = appState.currentModel
-        let workspace = appState.currentWorkspace
+        // A loop runs in its own folder, which need not be the one the window has open.
+        let workspace = workspaceOverride ?? appState.currentWorkspace
 
         // Same rule as an on-screen turn: a switched-off local provider must not be replaced by
         // a cloud one. This path matters more, not less — a Shortcut or a Siri phrase runs with
