@@ -173,11 +173,6 @@ public final class AppState: ObservableObject {
     @Published public var settings: AppSettings = AppSettings.default {
         didSet {
             persistence.saveSettings(settings)
-            // A server that was edited, disabled or deleted must stop running with its old config.
-            if oldValue.mcpServers != settings.mcpServers {
-                let servers = settings.mcpServers
-                Task { await MCPClientManager.shared.reconcile(with: servers) }
-            }
             // Switching the Agent Messages log off while its tab is selected would leave the
             // inspector on a tab that is no longer in the tab bar. Corrected here rather than in
             // the view, so nothing publishes a change during a view update.
