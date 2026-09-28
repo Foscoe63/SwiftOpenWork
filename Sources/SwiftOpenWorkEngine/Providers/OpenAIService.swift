@@ -305,15 +305,23 @@ public final class OpenAIService: LLMProviderClient, Sendable {
             "stream": true,
             "temperature": temperature,
             "max_tokens": maxTokens,
-            "presence_penalty": presencePenalty,
-            "frequency_penalty": frequencyPenalty
         ]
 
-        // Top-P reached only the in-process MLX path; the slider on the Sampling card did nothing
-        // for any OpenAI-compatible endpoint. Sent only when the user has moved it off 1.0, since
-        // 1.0 is a no-op and OpenAI advises against steering with temperature and top_p together.
-        if loadedSettings.defaultTopP > 0, loadedSettings.defaultTopP < 1.0 {
-            body["top_p"] = loadedSettings.defaultTopP
+        // Splash's decode path is fixed speculative decoding (a DFlash draft verified against the
+        // target model's own logits), so it has no way to honor a post-hoc logit transform —
+        // presence/frequency penalties and top_p all get rejected with HTTP 400 ("the requested
+        // logits or output transformation is not supported"). Sampling there is temperature only.
+        if provider.kind != .splash {
+            body["presence_penalty"] = presencePenalty
+            body["frequency_penalty"] = frequencyPenalty
+
+            // Top-P reached only the in-process MLX path; the slider on the Sampling card did
+            // nothing for any OpenAI-compatible endpoint. Sent only when the user has moved it off
+            // 1.0, since 1.0 is a no-op and OpenAI advises against steering with temperature and
+            // top_p together.
+            if loadedSettings.defaultTopP > 0, loadedSettings.defaultTopP < 1.0 {
+                body["top_p"] = loadedSettings.defaultTopP
+            }
         }
 
         if model.supportsReasoning && reasoningEffort != .off {
