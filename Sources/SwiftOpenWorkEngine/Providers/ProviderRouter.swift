@@ -101,6 +101,12 @@ public final class ProviderRouter: Sendable {
             let settings = PersistenceManager.shared.loadSettings()
             let result = await SplashServerManager.shared.ensureRunning(modelId: model.id, baseUrl: activeProvider.baseUrl, settings: settings)
             if !result.success {
+                // Stop cancels this task while `ensureRunning` is still polling for Splash to come
+                // up; that surfaces as an ordinary failure, not a `CancellationError`, so it has to
+                // be recognized here rather than assumed to always mean a real Splash problem.
+                if Task.isCancelled {
+                    throw CancellationError()
+                }
                 onChunk(LLMStreamChunk(
                     deltaText: "\n\n⚠️ **Splash Error:** \(result.message)",
                     isFinished: true

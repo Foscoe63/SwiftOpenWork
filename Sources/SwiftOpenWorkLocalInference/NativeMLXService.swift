@@ -431,7 +431,16 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         // forgets, the text carries no tags at all and `AssistantContentSanitizer` — correctly —
         // will not guess, so chain-of-thought reaches the user as the answer. Knowing the
         // template opened the block makes that determinate instead of a guess.
-        let preOpensThinking = LocalMLXEngine.shared
+        //
+        // `templatePreOpensThinking` only answers what the template does when `enable_thinking`
+        // is left *undefined* — the "else" branch. With Reasoning off, `thinkingEnabled` above
+        // sent the template an explicit `false`, which takes the *other* branch and closes the
+        // block immediately (`'<think>\n\n</think>\n\n'`): nothing is open at generation start.
+        // Assuming the undefined-case answer regardless left the splitter starting inside a
+        // reasoning block that was never actually open, so with Reasoning off the entire reply —
+        // there was never a closing tag to find, because there was never an opening one either —
+        // was filed as reasoning and the visible answer came back empty.
+        let preOpensThinking = thinkingEnabled && LocalMLXEngine.shared
             .resolveLocalModelDirectory(modelId: model.id, settings: PersistenceManager.shared.loadSettings())
             .map { ReasoningChannel.templatePreOpensThinking(modelDirectory: $0) } ?? false
         let splitter = ReasoningChannel.StreamSplitter(startsInsideReasoning: preOpensThinking)

@@ -229,6 +229,14 @@ public final class SplashServerManager: ObservableObject {
 
         let deadline = Date().addingTimeInterval(Self.startupTimeout)
         while Date() < deadline {
+            // The health-check poll used to ignore cancellation entirely (`try?` on `Task.sleep`
+            // swallows the `CancellationError`), so Stop did nothing while Splash was starting up
+            // — the loop just kept polling until the model finished loading or the 30-minute
+            // timeout hit, whichever came first.
+            // Leave `status` and the process alone: the model may still be legitimately loading,
+            // and a user-initiated Stop of the chat turn is not a reason to kill a server that
+            // could serve the very next turn without paying to reload the weights again.
+            if Task.isCancelled { return (false, "Stopped.") }
             if case .failed(let reason) = status { return (false, reason) }
             if await Self.isHealthy(baseUrl, expectingModel: modelId) {
                 status = .running(modelId: modelId)
@@ -242,6 +250,12 @@ public final class SplashServerManager: ObservableObject {
         return (false, message)
     }
 
+    /// `splash serve --model X` pins exactly one model per process, so once the endpoint answers
+    /// with any served model, that model is the one we launched it for. Requiring the reported
+    /// `id` to equal `modelId` byte-for-byte used to keep this false forever whenever Splash
+    /// echoes back a different spelling — the quant-tag suffix trimmed, a repo name normalized —
+    /// and a false `isHealthy` here is what kept `launch` polling for the full 30-minute timeout
+    /// with the chat turn showing nothing at all.
     private static func isHealthy(_ baseUrl: URL, expectingModel modelId: String) async -> Bool {
         let url = baseUrl.appendingPathComponent("models")
         var request = URLRequest(url: url, timeoutInterval: 2)
@@ -251,7 +265,7 @@ public final class SplashServerManager: ObservableObject {
               let http = response as? HTTPURLResponse, http.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let models = json["data"] as? [[String: Any]] else { return false }
-        return models.contains { ($0["id"] as? String) == modelId }
+        return !models.isEmpty
     }
 
     // MARK: Stop
