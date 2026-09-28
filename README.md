@@ -116,8 +116,9 @@ The code-intelligence tools run real language servers, started on first use and 
 - **Shared fairly** — chat turns, automations, Shortcuts and parallel sub-agents take turns on the one in-process model, first come first served. A queued turn says what it is waiting for, and the chat header names any background run. Two conversations keep their own KV caches, so taking turns does not re-prefill both
 - **Honest numbers** — the context meter shows the real window in use for local models (cached prefix included), each reply shows its measured decode speed, and multimodal checkpoints report the context window they actually declare (262k for Ornith and Qwen3.6, not a 131k fallback). Unloading a model now actually frees its memory
 - **KV cache reuse** — a continued conversation is appended to the live `ChatSession` rather than re-prefilled. Measured on a 48B model, time-to-first-token goes from 1.5s at three messages and climbing ~0.67s per exchange, to a flat 0.9s. Any rewrite of earlier history (compaction, a fork) rebuilds instead, because a cache describing text no longer in the conversation would keep steering the model invisibly
-- Optional servers: oMLX, mlx_lm, Osaurus, Ollama, LM Studio, and [Splash](https://github.com/incoai/splash) (`splash serve`, an OpenAI-compatible server on port 8000; needs an M3+ Mac with 36 GB+). LM Studio, llama.cpp and Splash each use their own configured URL, so they can run side by side
+- Optional servers: oMLX, mlx_lm, Osaurus, Ollama, LM Studio, and [Splash](https://github.com/incoai/splash) — **managed automatically**, the same "no terminal" experience as the built-in MLX engine: SwiftOpenWork detects the `splash` binary, installs it with Homebrew on request, launches `splash serve` for the selected model and restarts it on a model change (it pins one model per process, so there is no in-place swap; needs an M3+ Mac with 36 GB+). LM Studio and llama.cpp each use their own configured URL, so they can run side by side with Splash
 - Cloud & remote: OpenAI-compatible, Anthropic (Claude 5 models use adaptive thinking; thinking blocks are kept across tool rounds), Groq, OpenRouter, DeepSeek, Mistral, Gemini, custom endpoints
+- **Retries and honest failures on every HTTP provider** — a 429/502/503/504/529 is retried with backoff (honouring `Retry-After`), while a malformed request or bad key fails immediately with the response body attached instead of a bare status code; a reply cut off by the max-token limit or a refusal says so inline rather than surfacing as a JSON-parsing error
 - Provider probing, model listing, Keychain-backed API keys
 
 ### Schedules & automations
@@ -202,7 +203,7 @@ SwiftOpenWork speaks the [Model Context Protocol](https://modelcontextprotocol.i
 | 📋 | “What MCP servers are available?” answers from config + live status — **no tool thrash** |
 | 🩺 | Settings → Skills & MCP shows connected / error / tool counts; **Test** probes a server |
 | 🔒 | Stock servers ship **disabled** — enable only what you trust |
-| 🌍 | Remote HTTP MCP with clearer 401 messaging and optional bearer token (`MCP_TOKEN` / headers) |
+| 🌍 | Remote MCP over **Streamable HTTP** — a real `initialize` handshake, session-id tracking, `text/event-stream` replies, and `isError` results surfaced as failures, not silent successes. Clearer 401 messaging and an optional bearer token (`MCP_TOKEN` / headers); a server that still only speaks the older SSE transport gets a message saying so instead of a bare 404/405 |
 
 ### Dispatcher servers and catalog promotion
 

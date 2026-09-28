@@ -26,11 +26,13 @@ public enum ProvidersViewTab: String, CaseIterable, Identifiable {
 
 public struct ProvidersView: View {
     @ObservedObject var appState: AppState
+    @ObservedObject private var splash = SplashServerManager.shared
     @State private var selectedTab: ProvidersViewTab = .localModels
     @State private var showingAddProvider = false
     @State private var editingProvider: ModelProvider? = nil
     @State private var pullModelName: String = "llama3:latest"
     @State private var fetchingProviderIds: Set<String> = []
+    @State private var showingSplashLog = false
 
     public init(appState: AppState) {
         self.appState = appState
@@ -346,6 +348,7 @@ public struct ProvidersView: View {
     private func providerCard(provider: ModelProvider) -> some View {
         let isCurrentProvider = appState.selectedProviderId == provider.id
         let isFetching = fetchingProviderIds.contains(provider.id)
+        let activeModelId = isCurrentProvider ? appState.selectedModelId : (provider.models.first(where: { $0.isDefault })?.id ?? provider.models.first?.id ?? "")
 
         return VStack(alignment: .leading, spacing: 12) {
             // Top Row: Icon, Name, Type Badge, Enabled Switch
@@ -413,8 +416,6 @@ public struct ProvidersView: View {
                         .foregroundColor(.secondary)
                         .padding(.vertical, 2)
                 } else {
-                    let activeModelId = isCurrentProvider ? appState.selectedModelId : (provider.models.first(where: { $0.isDefault })?.id ?? provider.models.first?.id ?? "")
-                    
                     Menu {
                         ForEach(provider.models) { m in
                             Button {
@@ -464,29 +465,55 @@ public struct ProvidersView: View {
                 }
             }
 
+            if provider.kind == .splash {
+                splashControls
+            }
+
             // Actions Row: Fetch Models & Configure
             HStack(spacing: 8) {
-                Button {
-                    fetchModelsForProvider(provider)
-                } label: {
-                    HStack(spacing: 4) {
-                        if isFetching {
-                            ProgressView().scaleEffect(0.5)
-                        } else {
-                            Image(systemName: "arrow.triangle.2.circlepath")
+                // Splash pins one model per process and reports only whichever one is currently
+                // resident at /v1/models — there is no catalog endpoint to fetch a model list from,
+                // so "Fetch Models" always just failed to connect (nothing had started the process)
+                // and would have returned a single-item list even if it had. The seeded default
+                // models are the curated catalog here, same reasoning as splashControls above.
+                if provider.kind != .splash {
+                    Button {
+                        fetchModelsForProvider(provider)
+                    } label: {
+                        HStack(spacing: 4) {
+                            if isFetching {
+                                ProgressView().scaleEffect(0.5)
+                            } else {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                            }
+                            Text(isFetching ? "Fetching..." : "Fetch Models")
                         }
-                        Text(isFetching ? "Fetching..." : "Fetch Models")
+                        .font(.system(size: 11))
                     }
-                    .font(.system(size: 11))
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isFetching)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(isFetching)
 
                 Button("Test Ping") {
                     Task {
-                        let ok = (try? await ProviderRouter.shared.client(for: provider).testConnection(provider: provider)) ?? false
-                        appState.showToast(ok ? "\(provider.name): Connected!" : "\(provider.name): Connection Failed")
+                        // Splash isn't a server the user starts themselves — it's a subprocess
+                        // SplashServerManager owns, so testing it means starting it (or confirming
+                        // it's already running for this model), not just GETting its base URL like
+                        // every other provider. A plain testConnection() always failed here because
+                        // nothing was ever listening on the port yet.
+                        if provider.kind == .splash {
+                            let modelId = provider.models.first(where: { $0.id == activeModelId })?.id ?? provider.models.first?.id ?? ""
+                            guard !modelId.isEmpty else {
+                                appState.showToast("\(provider.name): Add a model before testing.")
+                                return
+                            }
+                            let result = await SplashServerManager.shared.ensureRunning(modelId: modelId, baseUrl: provider.baseUrl, settings: appState.settings)
+                            appState.showToast(result.success ? "\(provider.name): Connected!" : "\(provider.name): \(result.message)")
+                        } else {
+                            let ok = (try? await ProviderRouter.shared.client(for: provider).testConnection(provider: provider)) ?? false
+                            appState.showToast(ok ? "\(provider.name): Connected!" : "\(provider.name): Connection Failed")
+                        }
                     }
                 }
                 .buttonStyle(.bordered)
@@ -523,6 +550,93 @@ public struct ProvidersView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(isCurrentProvider ? ThemeColors.accent(for: appState.settings.accentColor).opacity(0.6) : ThemeColors.border(for: appState.settings.theme), lineWidth: isCurrentProvider ? 1.5 : 1)
         )
+    }
+
+    // MARK: - Splash controls
+    //
+    // Splash (github.com/incoai/splash) is a `splash serve` subprocess SwiftOpenWork owns, not a
+    // server the user starts themselves — the model picker starts/restarts it on demand through
+    // `SplashServerManager`/`ProviderRouter`. This is just status + manual install/stop for the
+    // provider card; there is no separate "Splash Models" screen (see LocalModelsView, which is
+    // specific to the MLX/HuggingFace download flow and doesn't fit Splash's shape).
+
+    @ViewBuilder
+    private var splashControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Circle().fill(splashStatusColor).frame(width: 7, height: 7)
+                Text(splash.status.label)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundColor(splashStatusColor)
+                Spacer()
+                Button("View Log") { showingSplashLog = true }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+            }
+
+            switch splash.status {
+            case .notInstalled:
+                splashInstallButton
+            case .failed(let reason):
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(reason)
+                        .font(.system(size: 10.5))
+                        .foregroundColor(.red)
+                        .lineLimit(2)
+                    splashInstallButton
+                }
+            case .installing, .starting:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(splash.status.label)
+                        .font(.system(size: 10.5))
+                        .foregroundColor(.secondary)
+                }
+            case .running:
+                Button("Stop") { splash.stop() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .foregroundColor(.red)
+            case .stopped:
+                Text("Starts automatically when you send a message on a Splash model.")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(8)
+        .background(ThemeColors.bg(for: appState.settings.theme))
+        .cornerRadius(6)
+        .popover(isPresented: $showingSplashLog) {
+            ScrollView {
+                Text(splash.logTail(400).isEmpty ? "No output yet." : splash.logTail(400))
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .textSelection(.enabled)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(width: 520, height: 320)
+        }
+    }
+
+    private var splashInstallButton: some View {
+        Button {
+            Task { _ = await splash.install() }
+        } label: {
+            Label("Install Splash (Homebrew)", systemImage: "shippingbox")
+                .font(.system(size: 11))
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.small)
+        .disabled(splash.status == .installing)
+    }
+
+    private var splashStatusColor: Color {
+        switch splash.status {
+        case .running: return .green
+        case .starting, .installing: return .orange
+        case .failed: return .red
+        case .notInstalled, .stopped: return .secondary
+        }
     }
 
     private func fetchModelsForProvider(_ provider: ModelProvider) {

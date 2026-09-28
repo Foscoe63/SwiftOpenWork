@@ -208,18 +208,20 @@ private struct PreviewPanel: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            if tab.currentURL == nil {
-                startPanel
-            } else {
-                page
+            Group {
+                if tab.currentURL == nil {
+                    startPanel
+                } else {
+                    page
+                }
             }
+            .simultaneousGesture(TapGesture().onEnded { onFocus() })
         }
         .overlay(
             RoundedRectangle(cornerRadius: 2)
                 .stroke(ThemeColors.accent(for: appState.settings.accentColor).opacity(showsFocusRing ? 0.7 : 0), lineWidth: 1.5)
                 .allowsHitTesting(false)
         )
-        .simultaneousGesture(TapGesture().onEnded { onFocus() })
         .onAppear { [appState] in
             // `tab` belongs to `PreviewSessions.shared`, so it outlives this view and the
             // callback stored on it must not pin AppState — hence `weak` on the inner closure.

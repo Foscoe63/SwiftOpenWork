@@ -1,5 +1,6 @@
 import Foundation
 import SwiftOpenWorkCore
+import SwiftOpenWorkStorage
 
 public final class ProviderRouter: Sendable {
     public static let shared = ProviderRouter()
@@ -93,11 +94,46 @@ public final class ProviderRouter: Sendable {
             }
         }
 
-        // Other local OpenAI-compatible backends. LM Studio, llama.cpp and Splash each have their
-        // own configured endpoint, so they go straight to it: the launcher below probes port 8000
-        // first and would rewrite the URL to whichever server answers, sending LM Studio traffic
-        // to Splash (or the reverse) when both are running.
-        let usesConfiguredEndpoint = [ProviderKind.lmstudio, .llamacpp, .splash].contains(activeProvider.kind)
+        // Splash (github.com/incoai/splash) is a managed subprocess, not something the user starts
+        // themselves: SwiftOpenWorkEngine.SplashServerManager owns launching, restarting on a model
+        // change, and stopping it — the same "no terminal" experience as the built-in MLX engine.
+        if activeProvider.kind == .splash {
+            let settings = PersistenceManager.shared.loadSettings()
+            let result = await SplashServerManager.shared.ensureRunning(modelId: model.id, baseUrl: activeProvider.baseUrl, settings: settings)
+            if !result.success {
+                onChunk(LLMStreamChunk(
+                    deltaText: "\n\n⚠️ **Splash Error:** \(result.message)",
+                    isFinished: true
+                ))
+                throw NSError(domain: "ProviderRouter", code: 2, userInfo: [NSLocalizedDescriptionKey: result.message])
+            }
+            let selectedClient = client(for: activeProvider)
+            do {
+                try await selectedClient.streamChat(
+                    provider: activeProvider,
+                    model: model,
+                    systemPrompt: systemPrompt,
+                    messages: messages,
+                    temperature: temperature,
+                    maxTokens: maxTokens,
+                    reasoningEffort: reasoningEffort,
+                    tools: tools,
+                    onChunk: onChunk
+                )
+                return
+            } catch {
+                onChunk(LLMStreamChunk(
+                    deltaText: "\n\n⚠️ **Splash Error:** \(error.localizedDescription)",
+                    isFinished: true
+                ))
+                throw error
+            }
+        }
+
+        // Other local OpenAI-compatible backends. LM Studio and llama.cpp each have their own
+        // configured endpoint, so they go straight to it: the launcher below probes port 8000 first
+        // and would rewrite the URL to whichever server answers.
+        let usesConfiguredEndpoint = [ProviderKind.lmstudio, .llamacpp].contains(activeProvider.kind)
         if activeProvider.type == .local && !usesConfiguredEndpoint {
             let res = await LocalInferenceRegistry.serverLauncher?.ensureServerRunning(modelId: model.id, settings: nil)
                 ?? (success: false, message: "No local server launcher is registered in this build.", activePort: 0)

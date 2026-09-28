@@ -500,19 +500,16 @@ public enum AssistantContentSanitizer {
     public static func sanitizeVisible(_ raw: String) -> String {
         var cleaned = stripControlTokens(raw)
 
-        // Remove TOOL_CALL = { ... }
-        let assignPattern = "TOOL_CALL\\s*=\\s*\\{[\\s\\S]*?\\}"
-        if let regex = try? NSRegularExpression(pattern: assignPattern, options: []) {
-            let range = NSRange(location: 0, length: (cleaned as NSString).length)
-            cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
-        }
+        // Remove TOOL_CALL = { ... } — to the *matching* brace, so a call with an object-valued
+        // argument does not leave its tail behind.
+        cleaned = removeToolCallAssignments(from: cleaned)
 
-        // Remove ```tool_call ... ``` or ```json with tool definitions
+        // Remove ```tool_call ... ``` or ```json fences that hold a tool call. A fence is removed
+        // only when what is inside really is one: this matched any block whose first key was
+        // "name", so an answer showing a `package.json` lost it — and the loss was fed back to
+        // the model as its own history.
         let codeBlockPattern = "```(?:tool_call|json)?\\s*(?:\\r?\\n)?\\s*\\{\\s*\"(?:tool|name|mcp|server)\"[\\s\\S]*?\\}\\s*(?:\\r?\\n)?```"
-        if let regex = try? NSRegularExpression(pattern: codeBlockPattern, options: []) {
-            let range = NSRange(location: 0, length: (cleaned as NSString).length)
-            cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
-        }
+        cleaned = removeMatches(of: codeBlockPattern, in: cleaned) { looksLikeToolCall($0) }
 
         // Remove XML tool calls <tool_call>...</tool_call>
         let xmlPattern = "<tool_call>[\\s\\S]*?(?:</tool_call>|$)"
@@ -521,12 +518,10 @@ public enum AssistantContentSanitizer {
             cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
         }
 
-        // Remove raw naked tool JSON if it was the entirety or beginning of a line
+        // Remove raw naked tool JSON if it was the entirety or beginning of a line — again only
+        // when it is a tool call rather than data that happens to start with `"name"`.
         let nakedPattern = "(?m)^\\s*\\{\\s*\"(?:tool|name|mcp|server)\"\\s*:[\\s\\S]*?\\}\\s*$"
-        if let regex = try? NSRegularExpression(pattern: nakedPattern, options: []) {
-            let range = NSRange(location: 0, length: (cleaned as NSString).length)
-            cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "")
-        }
+        cleaned = removeMatches(of: nakedPattern, in: cleaned) { looksLikeToolCall($0) }
 
         // Remove leftover think tag crumbs and filler intent lines.
         let crumbPattern = "(?i)</?think>|</?thinking>|</?redacted_reasoning>"
@@ -543,6 +538,83 @@ public enum AssistantContentSanitizer {
 
         cleaned = dedupeRepeatedParagraphs(cleaned)
         return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Whether `text` — a fenced block or a bare object — is a tool call the model wrote as text.
+    ///
+    /// A tool call names a tool and (except for `{"tool": "x"}`) carries arguments. Data that
+    /// merely has a `name` — a manifest, a config, an API response — does not.
+    static func looksLikeToolCall(_ text: String) -> Bool {
+        guard let open = text.firstIndex(of: "{"), let close = text.lastIndex(of: "}"), open < close else { return false }
+        let body = String(text[open...close])
+        guard let data = body.data(using: .utf8),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            // Not valid JSON (single quotes, a trailing comma): decide on the words in it.
+            return body.contains("\"parameters\"") || body.contains("\"arguments\"") || body.contains("\"tool\"")
+        }
+        let argumentKeys = ["parameters", "arguments", "args", "input"]
+        let hasArguments = argumentKeys.contains { object[$0] != nil }
+        if object["tool"] is String { return true }
+        if let function = object["function"] as? [String: Any], function["name"] is String { return true }
+        if object["mcp"] is String { return true }
+        if object["server"] is String, object["action"] != nil { return true }
+        if object["name"] is String, hasArguments { return true }
+        return false
+    }
+
+    /// Removes each regex match for which `shouldRemove(matchedText)` holds.
+    private static func removeMatches(of pattern: String, in text: String, where shouldRemove: (String) -> Bool) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return text }
+        let ns = text as NSString
+        var result = text
+        // Back to front, so earlier ranges stay valid as later ones are removed.
+        for match in regex.matches(in: text, options: [], range: NSRange(location: 0, length: ns.length)).reversed() {
+            guard shouldRemove(ns.substring(with: match.range)),
+                  let range = Range(match.range, in: result) else { continue }
+            result.removeSubrange(range)
+        }
+        return result
+    }
+
+    /// `TOOL_CALL = {…}` up to the brace that closes it (string-aware).
+    private static func removeToolCallAssignments(from text: String) -> String {
+        var result = text
+        var search = result.startIndex
+        while let anchor = result.range(of: "TOOL_CALL", range: search..<result.endIndex) {
+            var cursor = anchor.upperBound
+            while cursor < result.endIndex, result[cursor] == "=" || result[cursor].isWhitespace { cursor = result.index(after: cursor) }
+            guard cursor < result.endIndex, result[cursor] == "{", let end = closingBrace(in: result, from: cursor) else {
+                search = anchor.upperBound
+                continue
+            }
+            result.removeSubrange(anchor.lowerBound...end)
+            search = min(anchor.lowerBound, result.endIndex)
+        }
+        return result
+    }
+
+    private static func closingBrace(in text: String, from start: String.Index) -> String.Index? {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var index = start
+        while index < text.endIndex {
+            let ch = text[index]
+            if inString {
+                if escaped { escaped = false }
+                else if ch == "\\" { escaped = true }
+                else if ch == "\"" { inString = false }
+            } else if ch == "\"" {
+                inString = true
+            } else if ch == "{" {
+                depth += 1
+            } else if ch == "}" {
+                depth -= 1
+                if depth == 0 { return index }
+            }
+            index = text.index(after: index)
+        }
+        return nil
     }
 
     /// Collapses consecutive near-duplicate paragraphs (common with leaked monologue).
@@ -846,7 +918,15 @@ public final class AgentRunner {
         let maxIterations = max(1, loadedSettings.maxAutonomousIterations)
         let maxTurnTokens = max(1, loadedSettings.maxTurnTokens)
         var planModeActive = loadedSettings.planModeEnabled
-        var availableTools = PersistenceManager.shared.loadTools().filter { $0.isEnabled }
+        let allCatalogTools = PersistenceManager.shared.loadTools()
+        var availableTools = allCatalogTools.filter { $0.isEnabled }
+        // Switching a tool off in Settings only hid it from the list. The dispatcher resolves
+        // aliases and runs any name it is given, so a model that called it anyway — a weaker local
+        // model, or a call written as text — got it. Enforced where the call would run.
+        // A name counts only if no enabled tool shares its canonical form (`read_file` off must not
+        // switch `file_read` off with it).
+        let disabledToolNames = Set(allCatalogTools.filter { !$0.isEnabled }.map { Self.canonicalToolName($0.name) })
+            .subtracting(allCatalogTools.filter(\.isEnabled).map { Self.canonicalToolName($0.name) })
         _ = ToolSchemaCatalog.ensureParityTools(in: &availableTools)
 
         // Casual / inventory turns must not wait on npx cold starts.
@@ -1019,7 +1099,7 @@ public final class AgentRunner {
 
         // Promotion is turn-scoped: a catalog harvested against an earlier server set must not
         // leak into this turn as callable tools that no longer resolve.
-        await MCPPromotedToolRegistry.shared.reset()
+        await MCPPromotedToolRegistry.shared.reset(owner: session.id)
 
         // System prompt with modern tool-calling instructions (supports both native API tools & markdown ReAct schemas)
         let systemPromptWithTools: String
@@ -1197,13 +1277,19 @@ public final class AgentRunner {
                 }
                 stopper.attach(streamTask)
                 do {
-                    try await streamTask.value
+                    // `streamTask` is unstructured, so cancelling this run did not reach it: Stop
+                    // left the model generating (and billing) until it finished by itself.
+                    try await withTaskCancellationHandler {
+                        try await streamTask.value
+                    } onCancel: {
+                        streamTask.cancel()
+                    }
                 } catch {
                     // Cancelling a stream surfaces differently per transport — `CancellationError`
                     // in-process, `URLError.cancelled` over HTTP. If we asked for the stop, none of
                     // them is a failure, and reporting one would blame the provider for our own
                     // decision. Anything else is a real error and rethrows.
-                    guard stopper.stoppedReason != nil else { throw error }
+                    guard stopper.stoppedReason != nil || Task.isCancelled else { throw error }
                 }
             } catch {
                 let snap = textBridge.snapshot()
@@ -1226,6 +1312,14 @@ public final class AgentRunner {
                 completionTokens: snap.completionTokens
             )
             await Task.yield()
+
+            // The user pressed Stop while the model was generating. Say so and end the turn; the
+            // partial text is kept, and no tool call from a half-finished step is run.
+            if Task.isCancelled, stopper.stoppedReason == nil {
+                accumulator.setHalt(reason: "stopped", text: "Generation stopped.")
+                halted = true
+                break
+            }
 
             if stopper.stoppedReason != nil || accumulator.isLoopDetected {
                 // Say so. A silently truncated repetitive answer looks like the model simply
@@ -1506,6 +1600,12 @@ public final class AgentRunner {
                         resultSuccess = false
                         resultError = "ask_user streak capped at 5. Stop asking and proceed with best judgment or finish."
                         resultOutput = resultError!
+                    } else if ToolApprovalManager.shared.isUnattended {
+                        // A run started from a schedule, Shortcut or Loop has no one to answer.
+                        // Waiting would hold the run — and the scheduler behind it — forever.
+                        resultSuccess = false
+                        resultError = "no one is available to answer"
+                        resultOutput = "Error: this run is unattended, so nobody can answer questions. Do not ask again: choose the most reasonable option yourself, say which you chose, and continue."
                     } else {
                         let parsed = Self.parseAskUserArgs(argsJson)
                         let answer = await UserChoiceManager.shared.request(
@@ -1530,6 +1630,21 @@ public final class AgentRunner {
                                 availableTools.append(t)
                             }
                         }
+                        // Tools promoted from a meta-tool catalog earlier this turn are still
+                        // callable; the reload above dropped them from the list.
+                        for promoted in await MCPPromotedToolRegistry.shared.all(owner: session.id) {
+                            let server = loadedSettings.mcpServers.first { $0.id == promoted.serverId }
+                            let effect = MCPEffectCatalog.classifyNested(server: server, nestedToolName: promoted.injectName)
+                            let model = MCPCatalogPromote.toolModel(for: promoted, effect: effect)
+                            if !availableTools.contains(where: { $0.name == model.name }) {
+                                availableTools.append(model)
+                            }
+                        }
+                        // The reload also brought back the agent tools this agent was not offered.
+                        availableTools.removeAll { tool in
+                            (tool.name == "agent_spawn" && !canDelegate)
+                                || (tool.name == "agent_message" && !agent.canCommunicateWithOthers)
+                        }
                         accumulator.appendNotice("Plan mode exited.")
                         if let host = EngineHosting.host {
                             var liveSettings = host.settings
@@ -1546,6 +1661,12 @@ public final class AgentRunner {
                         resultError = "blocked in plan mode"
                         resultOutput = "Error: plan mode is on, so `\(toolName)` (it changes files or runs commands) was not run. Propose your plan, then call `exit_plan_mode` once the user approves."
                         accumulator.appendNotice("Blocked `\(toolName)` in plan mode.")
+                    } else if !MCPNamespacedTool.isNamespaced(toolName),
+                              disabledToolNames.contains(Self.canonicalToolName(toolName)) {
+                        resultSuccess = false
+                        resultError = "tool is switched off"
+                        resultOutput = "Error: `\(toolName)` is switched off in Settings → Tools, so it was not run. Use another tool, or tell the user it is unavailable."
+                        accumulator.appendNotice("Blocked `\(toolName)`: switched off in Settings.")
                     } else if let note = Self.unchangedReadNote(
                         toolName: toolName, argumentsJson: argsJson, workspaceRoot: workspace.folderPath,
                         log: readLog, transcript: workingMessages
@@ -1667,6 +1788,15 @@ public final class AgentRunner {
                     )
                 }
 
+                // A change to the files ends the sameness. `build_project {}` after an edit is not
+                // the same call as `build_project {}` before it, and counting them together halted a
+                // fix-build-fix turn at the twelfth build. Only real edits reset the counts; a
+                // repeated shell command changes nothing the model can rely on.
+                if resultSuccess, Self.changesFiles(toolName) {
+                    identicalToolCounts.removeAll()
+                    repeatedFailures.removeAll()
+                }
+
                 // Track identical failures so the branch above can refuse the third one.
                 let repeatKey = Self.callSignature(toolName, argsJson)
                 if resultSuccess {
@@ -1726,7 +1856,7 @@ public final class AgentRunner {
                         resultText: resultOutput
                     ).filter { MCPToolGate.isToolEnabled(server: server, toolName: $0.injectName) }
 
-                    let newcomers = await MCPPromotedToolRegistry.shared.register(harvested)
+                    let newcomers = await MCPPromotedToolRegistry.shared.register(harvested, owner: session.id)
                     if !newcomers.isEmpty {
                         for promoted in newcomers {
                             let effect = MCPEffectCatalog.classifyNested(
@@ -1738,7 +1868,7 @@ public final class AgentRunner {
                                 availableTools.append(model)
                             }
                         }
-                        let names = newcomers.prefix(8).map(\.injectName).joined(separator: ", ")
+                        let names = newcomers.prefix(8).map(\.chatName).joined(separator: ", ")
                         let more = newcomers.count > 8 ? " (+\(newcomers.count - 8) more)" : ""
                         accumulator.appendNotice("Promoted \(newcomers.count) \(server.name) tools to direct calls.")
                         notesAfterResults.append(
@@ -1747,8 +1877,8 @@ public final class AgentRunner {
                                 role: .user,
                                 content: """
                                 \(newcomers.count) tools on \(server.name) are now directly callable \
-                                this turn: \(names)\(more). Call them by their full \
-                                `mcp__\(server.id)__<tool>` name with that tool's own arguments — \
+                                this turn: \(names)\(more). Call them by exactly those \
+                                names, with each tool's own arguments — \
                                 do not wrap them in \(dispatcher) again.
                                 """
                             )
@@ -1919,6 +2049,17 @@ public final class AgentRunner {
         agent.canSpawnSubAgents
             && settings.allowSubAgentCreation
             && max(0, settings.maxGlobalSubAgentDepth) > 0
+    }
+
+    /// Tools whose success changes the workspace, and so makes an earlier identical call new again.
+    public nonisolated static func changesFiles(_ toolName: String) -> Bool {
+        switch canonicalToolName(toolName) {
+        case "file_write", "edit_file", "multi_edit", "file_delete", "file_move", "file_copy",
+             "rename_symbol", "revert_changes", "git_commit":
+            return true
+        default:
+            return false
+        }
     }
 
     /// How many times the same call may fail before the loop stops running it.
@@ -2129,6 +2270,13 @@ public final class AgentRunner {
         switch toolName {
         case "ask_user":
             return nil
+        case "exit_plan_mode":
+            // Plan mode is the user's guard against the agent changing things before they have
+            // seen a plan. The instructions say to exit "after approval", but nothing checked, so
+            // the model could lift the guard itself and persist that to settings.
+            return settings.planModeEnabled
+                ? "Ends plan mode, after which the agent may change files and run commands."
+                : nil
         case "file_read", "read_file", "document_extract", "extract_document", "read_pdf_or_image":
             let args = jsonArguments(argumentsJson)
             let path = ["path", "filename", "filepath", "file"].lazy.compactMap { args[$0] as? String }.first ?? ""
@@ -2180,32 +2328,63 @@ public final class AgentRunner {
                     return "Runs an unidentified Model Context Protocol (MCP) tool."
                 }
                 let server = settings.mcpServers.first { $0.id == parsed.serverId }
-                let leaf = parsed.toolName
-
-                // Meta-tools say nothing about what they do — `call_tool_by_name` is a read when
-                // it lists mailboxes and a write when it sends mail. Classify the nested target.
-                if leaf == "call_tool_by_name" || leaf == "call_tool" {
-                    let nested = macUseNestedToolName(from: argumentsJson)
-                    if MCPEffectCatalog.classifyNested(server: server, nestedToolName: nested) == .read {
-                        return nil
-                    }
-                    let label = nested.map { "'\($0)'" } ?? "an unnamed tool"
-                    return "Runs \(label) on MCP server '\(server?.name ?? parsed.serverId)', which may change apps or data on this Mac."
-                }
-
-                if MCPEffectCatalog.classify(server: server, toolName: leaf, advertised: true) == .read {
-                    return nil
-                }
-                return "Runs '\(leaf)' on MCP server '\(server?.name ?? parsed.serverId)', which may change apps or data on this Mac."
+                return mcpApprovalReason(
+                    server: server, serverLabel: server?.name ?? parsed.serverId,
+                    leaf: parsed.toolName, argumentsJson: argumentsJson
+                )
             }
             if toolName == "mcp_call" || toolName == "call_mcp_tool" {
                 return "Runs a Model Context Protocol (MCP) tool."
+            }
+            // A bare or dotted MCP name (`send_message`, `github.create_issue`). The executor
+            // resolves these to a server and runs them, so the approval check has to resolve them
+            // the same way — it used to look only at `mcp__`-prefixed names, and a write tool
+            // called without the prefix ran with no prompt.
+            // Built-ins are handled above; one that reaches here only shares a name with an MCP
+            // tool, and the executor runs the built-in.
+            guard canonical == nil else { return nil }
+            let enabled = settings.mcpServers.filter(\.isEnabled)
+            guard !enabled.isEmpty else { return nil }
+            let advertised = MCPAdvertisedSnapshot.current
+            let dotted = toolName.components(separatedBy: ".")
+            if dotted.count == 2, !dotted[0].isEmpty, !dotted[1].isEmpty {
+                if case .resolved(let server) = MCPToolRouting.resolveServer(
+                    requested: dotted[0], toolName: dotted[1], enabled: enabled, advertised: advertised
+                ) {
+                    return mcpApprovalReason(
+                        server: server, serverLabel: server.name, leaf: dotted[1], argumentsJson: argumentsJson
+                    )
+                }
+                return nil
+            }
+            if let owned = MCPToolRouting.serverOwning(tool: toolName, servers: enabled, advertised: advertised) {
+                return mcpApprovalReason(
+                    server: owned.server, serverLabel: owned.server.name, leaf: owned.tool, argumentsJson: argumentsJson
+                )
             }
             return nil
         }
     }
 
-
+    /// Whether an MCP call needs a person, judged on the tool it will actually run.
+    private static func mcpApprovalReason(
+        server: MCPServerConfig?, serverLabel: String, leaf: String, argumentsJson: String
+    ) -> String? {
+        // Meta-tools say nothing about what they do — `call_tool_by_name` is a read when
+        // it lists mailboxes and a write when it sends mail. Classify the nested target.
+        if leaf == "call_tool_by_name" || leaf == "call_tool" {
+            let nested = macUseNestedToolName(from: argumentsJson)
+            if MCPEffectCatalog.classifyNested(server: server, nestedToolName: nested) == .read {
+                return nil
+            }
+            let label = nested.map { "'\($0)'" } ?? "an unnamed tool"
+            return "Runs \(label) on MCP server '\(serverLabel)', which may change apps or data on this Mac."
+        }
+        if MCPEffectCatalog.classify(server: server, toolName: leaf, advertised: true) == .read {
+            return nil
+        }
+        return "Runs '\(leaf)' on MCP server '\(serverLabel)', which may change apps or data on this Mac."
+    }
 
     private static func macUseNestedToolName(from argumentsJson: String) -> String? {
         guard let data = argumentsJson.data(using: .utf8),
@@ -2224,8 +2403,16 @@ public final class AgentRunner {
     /// Coerce stringified nested JSON so dispatcher servers receive real objects.
     ///
     /// Repairs the shape of the call the model made; it never substitutes a different tool.
-    private static func sanitizeToolArgumentsJson(toolName: String, argumentsJson: String) -> String {
+    static func sanitizeToolArgumentsJson(toolName: String, argumentsJson: String) -> String {
         let leaf = (MCPNamespacedTool.parse(toolName)?.toolName ?? toolName).lowercased()
+        // Only the dispatcher shapes have anything to repair here. Every other tool — built-in or
+        // a server's own — keeps its arguments exactly as sent: this used to parse any string
+        // starting with `{` or `[` into an object for *every* tool, so `file_write` of a JSON
+        // file arrived as an object and was re-serialised with sorted keys. A server's own tools
+        // are repaired at dispatch, where the schema says which parameters are structured.
+        let dispatcherShape = leaf == "call_tool_by_name" || leaf == "call_tool"
+            || leaf == "get_tool_definitions" || leaf == "mcp_call" || leaf == "call_mcp_tool"
+        guard dispatcherShape else { return argumentsJson }
         guard let data = argumentsJson.data(using: .utf8),
               var dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             return argumentsJson

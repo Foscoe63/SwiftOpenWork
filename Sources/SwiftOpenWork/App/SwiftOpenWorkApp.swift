@@ -32,6 +32,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationWillTerminate(_ notification: Notification) {
         // A dev server outliving the app would hold its port with nothing left to stop it.
         MainActor.assumeIsolated { DevServerManager.shared.terminateAllNow() }
+        // Same for a `splash serve` process SwiftOpenWork launched — it is not the user's to clean up.
+        MainActor.assumeIsolated { SplashServerManager.shared.terminateNow() }
         for window in NSApp.windows where window.styleMask.contains(.titled) && window.styleMask.contains(.resizable) {
             WindowLayoutStore.saveWindowFrame(from: window)
         }

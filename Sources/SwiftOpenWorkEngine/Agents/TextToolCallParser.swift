@@ -100,7 +100,11 @@ public enum TextToolCallParser {
 
     private static func call(from dict: [String: Any]) -> Call? {
         // `{"mcp": "server", "tool": "t", "arguments": {…}}`
-        if let server = (dict["mcp"] as? String) ?? (dict["server"] as? String) {
+        // `server` alone is just a word: a config snippet `{"server": "localhost", "port": 80}` is
+        // not a call. It counts only beside something that says which tool to run.
+        let namesATool = dict["tool"] != nil || dict["action"] != nil
+            || (dict["name"] != nil && ["parameters", "arguments", "args", "input"].contains { dict[$0] != nil })
+        if let server = (dict["mcp"] as? String) ?? (namesATool ? dict["server"] as? String : nil) {
             let tool = (dict["tool"] as? String) ?? (dict["action"] as? String) ?? (dict["name"] as? String) ?? "query"
             let wrapper: [String: Any] = ["server": server, "tool": tool, "arguments": arguments(in: dict)]
             return Call(tool: "mcp_call", args: encode(wrapper))

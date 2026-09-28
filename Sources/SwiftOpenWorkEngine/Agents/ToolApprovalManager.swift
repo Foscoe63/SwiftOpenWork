@@ -30,6 +30,50 @@ public enum ToolApprovalOutcome: Sendable, Equatable {
     public var isApproved: Bool { self == .approved }
 }
 
+/// Calls a person has approved, so the executor can tell "the loop asked and was told yes" from
+/// "nobody asked". Under "Always Ask Confirmation" the executor refuses a shell command unless
+/// its call id is here; before this existed it refused every one, approved or not.
+///
+/// Lock-backed rather than main-actor: the executor runs off the main actor.
+public enum ApprovedCalls {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var ids = Set<String>()
+
+    public static func record(_ callId: String) {
+        lock.lock(); defer { lock.unlock() }
+        ids.insert(callId)
+    }
+
+    /// True once, then forgotten: an approval covers the one call it was given for.
+    public static func consume(_ callId: String?) -> Bool {
+        guard let callId else { return false }
+        lock.lock(); defer { lock.unlock() }
+        return ids.remove(callId) != nil
+    }
+}
+
+/// What one unattended run had refused, kept per run rather than on the shared manager.
+///
+/// Both the "is anyone watching" flag and the refusal list used to be global, so while a Loop, an
+/// automation or a sub-agent ran, *your own* chat's approval prompts were refused as unattended,
+/// and parallel sub-agents each reported the others' refusals as their own.
+public final class UnattendedScope: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [PendingToolApproval] = []
+
+    public init() {}
+
+    func record(_ request: PendingToolApproval) {
+        lock.lock(); defer { lock.unlock() }
+        items.append(request)
+    }
+
+    public var refused: [PendingToolApproval] {
+        lock.lock(); defer { lock.unlock() }
+        return items
+    }
+}
+
 /// Gates sensitive autonomous tool calls behind a real, interactive user decision.
 ///
 /// `AgentRunner` calls `requestApproval` and suspends the ReAct loop until the chat UI
@@ -58,15 +102,36 @@ public final class ToolApprovalManager: ObservableObject {
     /// clear the outer one's policy when it finishes.
     private var unattendedDepth = 0
 
-    public var isUnattended: Bool { unattendedDepth > 0 }
+    /// The unattended run this task belongs to, if any. A task-local, so it follows the run into
+    /// everything it awaits and never touches a chat the user is working in.
+    @TaskLocal public static var scope: UnattendedScope?
+
+    public var isUnattended: Bool { unattendedDepth > 0 || Self.scope != nil }
 
     private init() {}
 
+    /// Run `body` with approvals refused rather than awaited, and return what it had refused.
+    ///
+    /// Only calls made by `body` (and the tasks it starts) are affected. What a nested run refused
+    /// is also reported to the run around it, which is what the caller sees as "skipped".
+    public func runUnattended<T>(_ body: () async -> T) async -> (result: T, refused: [PendingToolApproval]) {
+        let scope = UnattendedScope()
+        let outer = Self.scope
+        let result = await Self.$scope.withValue(scope) { await body() }
+        for request in scope.refused { outer?.record(request) }
+        refusedWhileUnattended = scope.refused
+        return (result, scope.refused)
+    }
+
     /// Run `body` with approvals refused rather than awaited.
     public func withUnattendedApprovals<T>(_ body: () async throws -> T) async rethrows -> T {
-        beginUnattended()
-        defer { endUnattended() }
-        return try await body()
+        let scope = UnattendedScope()
+        let outer = Self.scope
+        defer {
+            for request in scope.refused { outer?.record(request) }
+            refusedWhileUnattended = scope.refused
+        }
+        return try await Self.$scope.withValue(scope) { try await body() }
     }
 
     public func beginUnattended() {
@@ -93,9 +158,13 @@ public final class ToolApprovalManager: ObservableObject {
             reason: reason
         )
 
-        if isUnattended {
+        if let scope = Self.scope {
             // Do not enqueue it: nothing is going to resolve a queue no one can see, and a stale
             // entry would appear as a live prompt the next time the user opens the app.
+            scope.record(request)
+            return .refusedUnattended
+        }
+        if unattendedDepth > 0 {
             refusedWhileUnattended.append(request)
             return .refusedUnattended
         }
@@ -104,6 +173,7 @@ public final class ToolApprovalManager: ObservableObject {
         let approved = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             continuations[callId] = continuation
         }
+        if approved { ApprovedCalls.record(callId) }
         return approved ? .approved : .rejected
     }
 

@@ -188,6 +188,9 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                     formattedMessages.append(["role": role, "content": blocks])
                     continue
                 }
+                // The API rejects a message with no content. One with nothing in it — a turn that
+                // was cut off before it said anything, its calls unanswered — is left out.
+                if msg.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !canSee { continue }
                 formattedMessages.append([
                     "role": role,
                     "content": canSee
@@ -354,11 +357,7 @@ public final class AnthropicService: LLMProviderClient, Sendable {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (bytes, response) = try await session.bytes(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 500
-            throw NSError(domain: "AnthropicService", code: status, userInfo: [NSLocalizedDescriptionKey: "Anthropic returned HTTP status \(status)"])
-        }
+        let bytes = try await ProviderHTTP.open(request, session: session, domain: "AnthropicService", label: "Anthropic")
 
         var currentToolUseId = ""
         var currentToolName = ""
@@ -403,6 +402,18 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                       let usage = json["usage"] as? [String: Any],
                       let output = usage["output_tokens"] as? Int {
                 onChunk(LLMStreamChunk(completionTokens: output))
+            }
+            // A reply that stopped because it ran out of tokens says so here and nowhere else. A
+            // tool call cut off that way arrives with truncated arguments and fails as "Invalid
+            // arguments JSON", which points nowhere near the cause.
+            if eventType == "message_delta",
+               let delta = json["delta"] as? [String: Any],
+               let stop = delta["stop_reason"] as? String {
+                if stop == "max_tokens" {
+                    onChunk(LLMStreamChunk(deltaNotice: "The reply hit the max-token limit and was cut off — raise Max Tokens for this agent if a tool call failed."))
+                } else if stop == "refusal" {
+                    onChunk(LLMStreamChunk(deltaNotice: "The model declined to answer this request."))
+                }
             }
 
             if eventType == "content_block_start" {

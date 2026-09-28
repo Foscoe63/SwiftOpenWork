@@ -125,11 +125,20 @@ public enum SubAgentExecutor {
             // agents are configured; a populated one is a real restriction.
             if !subAgent.allowedToolIds.isEmpty,
                !subAgent.allowedToolIds.contains(tool.id),
-               !subAgent.allowedToolIds.contains(tool.name) {
+               !subAgent.allowedToolIds.contains(tool.name),
+               !allowsServer(of: tool, in: subAgent.allowedToolIds, settings: settings) {
                 return false
             }
             return true
         }
+    }
+
+    /// A role profile lists a whole server as `mcp_<server id or name>`; that admits every tool
+    /// the server advertises. (Individual MCP tools are matched by their own name above.)
+    static func allowsServer(of tool: Tool, in allowed: [String], settings: AppSettings) -> Bool {
+        guard let parsed = MCPNamespacedTool.parse(tool.name),
+              let server = settings.mcpServers.first(where: { $0.id == parsed.serverId }) else { return false }
+        return allowed.contains("mcp_\(server.id)") || allowed.contains("mcp_\(server.name)")
     }
 
     /// Run `objective` to completion, or to the end of its budget.
@@ -188,7 +197,14 @@ public enum SubAgentExecutor {
 
         var allTools = PersistenceManager.shared.loadTools()
         _ = ToolSchemaCatalog.ensureParityTools(in: &allTools)
+        // Servers already connected. Never starts one: a sub-agent must not wait on an `npx`
+        // download. Reads run; anything that would change data is refused by the policy below.
+        for mcpTool in await MCPClientManager.shared.cachedMcpToolDefs()
+        where !allTools.contains(where: { $0.id == mcpTool.id || $0.name == mcpTool.name }) {
+            allTools.append(mcpTool)
+        }
         let tools = toolSet(for: subAgent, depth: depth, settings: settings, all: allTools)
+        let offeredTools = Set(tools.map { AgentRunner.canonicalToolName($0.name) })
 
         let systemPrompt = """
         \(subAgent.systemPrompt)
@@ -241,7 +257,7 @@ public enum SubAgentExecutor {
                 + (waited > 0 ? " of work (plus \(waited)s waiting for the local model)" : "")
         }
 
-        await ToolApprovalManager.shared.withUnattendedApprovals {
+        let unattendedRun = await ToolApprovalManager.shared.runUnattended {
             while iterations < maxIterations {
                 if worked() > deadlineSeconds {
                     stoppedBecause = outOfTime()
@@ -291,7 +307,12 @@ public enum SubAgentExecutor {
                     }
                 }
                 do {
-                    try await round.value
+                    // Cancelling the parent run (Stop) must reach the round in flight.
+                    try await withTaskCancellationHandler {
+                        try await round.value
+                    } onCancel: {
+                        round.cancel()
+                    }
                     watchdog.cancel()
                 } catch {
                     watchdog.cancel()
@@ -308,7 +329,16 @@ public enum SubAgentExecutor {
                 }
 
                 let text = AssistantContentSanitizer.splitThinking(from: box.text).visible
-                let pending = calls.drain()
+                var pending = calls.drain()
+                if pending.isEmpty {
+                    // A model whose template the runtime does not recognise writes its calls as
+                    // text. Without this, such a sub-agent "completed" having run nothing. Only
+                    // a tool it was offered counts.
+                    let offeredNames = Set(tools.map(\.name))
+                    pending = TextToolCallParser.parse(text) { name in
+                        offeredTools.contains(AgentRunner.canonicalToolName(name)) || offeredNames.contains(name)
+                    }.map { ToolCallInfo(id: UUID().uuidString, toolName: $0.tool, argumentsJson: $0.args) }
+                }
                 if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { lastText = text }
 
                 if pending.isEmpty {
@@ -325,6 +355,17 @@ public enum SubAgentExecutor {
                     onProgress("\(subAgent.name): \(call.toolName)")
                     // The frame is what lets an `agent_spawn` from here know its depth and which
                     // model is really running.
+                    // Only what this sub-agent was offered. The dispatcher resolves aliases and runs
+                    // any name it is given, so a "read-only" reviewer could call `edit_file` — which
+                    // the worktree policy below then allows — just by naming it.
+                    if !offeredTools.contains(AgentRunner.canonicalToolName(call.toolName)) {
+                        messages.append(ChatMessage(
+                            id: call.id,
+                            role: .tool,
+                            content: "Error: `\(call.toolName)` is not one of your tools, so it was not run. Your tools: \(tools.map(\.name).sorted().joined(separator: ", ")). Use one of those, or say in your report what you could not do."
+                        ))
+                        continue
+                    }
                     let parentSession = AgentRunContext.current?.sessionId ?? ""
                     let frame = AgentRunContext.Frame(provider: provider, model: model, depth: depth, sessionId: parentSession)
                     // Unattended: whatever would ask a person is refused and recorded, except edits
@@ -394,7 +435,9 @@ public enum SubAgentExecutor {
             }
         }
 
-        let refused = ToolApprovalManager.shared.refusedWhileUnattended.map {
+        // What *this* sub-agent had refused — not the shared list, which parallel sub-agents and
+        // any other unattended run also write to.
+        let refused = unattendedRun.refused.map {
             "\($0.toolName) — \($0.reason)"
         }
         let changed = await changedFiles(in: effectiveWorkspace.folderPath)

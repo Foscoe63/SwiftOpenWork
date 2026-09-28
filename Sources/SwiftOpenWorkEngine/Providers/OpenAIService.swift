@@ -320,6 +320,28 @@ public final class OpenAIService: LLMProviderClient, Sendable {
             body["reasoning_effort"] = reasoningEffort.rawValue
         }
 
+        // OpenAI's reasoning models (o-series, gpt-5) refuse `max_tokens`, a temperature other than
+        // the default, and the penalties — HTTP 400 on every request. They take
+        // `max_completion_tokens` instead. Applied only to OpenAI's own endpoint: other servers
+        // that speak this protocol still expect the classic names.
+        let isOfficialOpenAI = provider.baseUrl.lowercased().contains("api.openai.com")
+        let modelName = model.id.lowercased()
+        let isOpenAIReasoningModel = isOfficialOpenAI
+            && ["o1", "o3", "o4", "gpt-5"].contains { modelName.hasPrefix($0) }
+            && !modelName.contains("chat")
+        if isOpenAIReasoningModel {
+            body.removeValue(forKey: "max_tokens")
+            body["max_completion_tokens"] = maxTokens
+            for key in ["temperature", "presence_penalty", "frequency_penalty", "top_p"] {
+                body.removeValue(forKey: key)
+            }
+        }
+        // Without this the stream carries no token counts, so the context meter and the cost
+        // stay at zero for OpenAI.
+        if isOfficialOpenAI {
+            body["stream_options"] = ["include_usage": true]
+        }
+
         // Add native structured tool schemas whenever tools are provided (including local
         // OpenAI-compatible endpoints — Radiant parity).
         if !tools.isEmpty {
@@ -464,10 +486,23 @@ public final class OpenAIService: LLMProviderClient, Sendable {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (bytes, response) = try await session.bytes(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 500
-            throw NSError(domain: "OpenAIService", code: status, userInfo: [NSLocalizedDescriptionKey: "Provider returned HTTP status \(status)"])
+        let bytes: URLSession.AsyncBytes
+        do {
+            bytes = try await ProviderHTTP.open(
+                request, session: session, domain: "OpenAIService", label: "Provider",
+                detectToolsUnsupported: !tools.isEmpty
+            )
+        } catch let unsupported as ProviderToolsUnsupported {
+            // A server that cannot take tools at all (a local model without a tool template) used
+            // to fail the whole turn. Without a tools array the agent loop falls back to calls
+            // written as text, which it knows how to read.
+            onChunk(LLMStreamChunk(deltaNotice: "This model does not support tool calling (\(unsupported.detail.prefix(80))); continuing without native tools."))
+            try await streamChat(
+                provider: provider, model: model, systemPrompt: systemPrompt, messages: messages,
+                temperature: temperature, maxTokens: maxTokens, reasoningEffort: reasoningEffort,
+                tools: [], onChunk: onChunk
+            )
+            return
         }
 
         // Track accumulating tool calls across streaming deltas

@@ -14,28 +14,33 @@ public final class UserChoiceManager: ObservableObject {
 
     @Published public private(set) var pending: PendingChoice?
 
-    private var continuation: CheckedContinuation<String, Never>?
+    /// Every question waiting for an answer, oldest first. There used to be one continuation, so
+    /// a second question orphaned the first and its run waited for ever.
+    private var queue: [(choice: PendingChoice, continuation: CheckedContinuation<String, Never>)] = []
 
     private init() {}
 
     public func request(question: String, options: [String], callId: String) async -> String {
-        pending = PendingChoice(id: callId, question: question, options: options, requestedAt: Date())
+        let choice = PendingChoice(id: callId, question: question, options: options, requestedAt: Date())
         return await withCheckedContinuation { cont in
-            continuation = cont
+            queue.append((choice, cont))
+            pending = queue.first?.choice
         }
     }
 
+    /// Answers the question on screen — the oldest — and brings up the next.
     public func resolve(answer: String) {
         let text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        pending = nil
-        continuation?.resume(returning: text)
-        continuation = nil
+        guard !text.isEmpty, !queue.isEmpty else { return }
+        let head = queue.removeFirst()
+        pending = queue.first?.choice
+        head.continuation.resume(returning: text)
     }
 
     public func cancelAll() {
+        let waiting = queue
+        queue.removeAll()
         pending = nil
-        continuation?.resume(returning: "(user cancelled)")
-        continuation = nil
+        for entry in waiting { entry.continuation.resume(returning: "(user cancelled)") }
     }
 }

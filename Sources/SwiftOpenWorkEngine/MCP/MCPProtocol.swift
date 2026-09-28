@@ -22,7 +22,7 @@ public enum MCPError: Error, CustomStringConvertible {
         case .toolNotFound(let server, let tool):
             return "Tool '\(tool)' not found on MCP Server '\(server)'."
         case .timeout:
-            return "MCP tool call timed out after 30 seconds."
+            return "The MCP server did not respond in time, or was restarted while the call was starting."
         case .invalidConfiguration(let message):
             return "Invalid MCP configuration: \(message)"
         case .requestFailed(let message):
@@ -59,7 +59,9 @@ public struct AnyCodable: Codable, @unchecked Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        if let bool = try? container.decode(Bool.self) {
+        if container.decodeNil() {
+            value = NSNull()
+        } else if let bool = try? container.decode(Bool.self) {
             value = bool
         } else if let int = try? container.decode(Int.self) {
             value = int
@@ -72,13 +74,24 @@ public struct AnyCodable: Codable, @unchecked Sendable {
         } else if let dict = try? container.decode([String: AnyCodable].self) {
             value = dict.mapValues { $0.value }
         } else {
-            value = ""
+            value = NSNull()
         }
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        if let bool = value as? Bool {
+        // An NSNumber that is really a Boolean is told apart from 0 and 1 by its CF type;
+        // `as? Bool` accepts any NSNumber holding 0 or 1, so integers 0 and 1 were sent as
+        // `false` and `true`.
+        if let number = value as? NSNumber {
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                try container.encode(number.boolValue)
+            } else if let int = value as? Int {
+                try container.encode(int)
+            } else {
+                try container.encode(number.doubleValue)
+            }
+        } else if let bool = value as? Bool {
             try container.encode(bool)
         } else if let int = value as? Int {
             try container.encode(int)
@@ -132,12 +145,47 @@ public struct MCPToolDefinition: Identifiable, Codable, Hashable, Sendable {
 }
 
 /// Radiant-compatible namespaced MCP tool names: `mcp__{serverId}__{toolName}`.
+///
+/// Providers accept tool names matching `[A-Za-z0-9_-]{1,64}` and reject the *whole request* for
+/// one that does not. A server id is a 36-character UUID, so `mcp__<uuid>__create_pull_request_review`
+/// is 69 characters. A name that does not fit is shortened deterministically — a short id, a
+/// truncated tool name and a hash of the original — and the mapping back is remembered, so the
+/// call the model makes still reaches the real server and tool.
 public enum MCPNamespacedTool {
+    public static let maxLength = 64
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var aliases: [String: (serverId: String, toolName: String)] = [:]
+
     public static func name(serverId: String, toolName: String) -> String {
-        "mcp__\(serverId)__\(toolName)"
+        let full = "mcp__\(serverId)__\(toolName)"
+        if full.count <= maxLength, isProviderSafe(full) { return full }
+
+        let short = shortId(serverId)
+        let leaf = sanitized(toolName)
+        let hash = fnvHex("\(serverId)\u{1}\(toolName)")
+        let prefix = "mcp__\(short)__"
+        // Room for the leaf once the prefix and a `_hash` suffix are accounted for.
+        let room = max(1, maxLength - prefix.count - hash.count - 1)
+        let candidate = prefix + leaf
+        let alias: String
+        if candidate.count <= maxLength, leaf == toolName {
+            alias = candidate
+        } else {
+            alias = prefix + String(leaf.prefix(room)) + "_" + hash
+        }
+        lock.lock()
+        aliases[alias] = (serverId, toolName)
+        lock.unlock()
+        return alias
     }
 
     public static func parse(_ name: String) -> (serverId: String, toolName: String)? {
+        lock.lock()
+        let known = aliases[name]
+        lock.unlock()
+        if let known { return known }
+
         let parts = name.split(separator: "__", omittingEmptySubsequences: false).map(String.init)
         guard parts.count >= 3, parts[0] == "mcp" else { return nil }
         let serverId = parts[1]
@@ -149,6 +197,107 @@ public enum MCPNamespacedTool {
     public static func isNamespaced(_ name: String) -> Bool {
         name.hasPrefix("mcp__")
     }
+
+    static func isProviderSafe(_ name: String) -> Bool {
+        !name.isEmpty && name.unicodeScalars.allSatisfy {
+            ($0.value < 128) && (CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-")
+        }
+    }
+
+    private static func sanitized(_ text: String) -> String {
+        let mapped = String(text.unicodeScalars.map { scalar -> Character in
+            (scalar.value < 128 && (CharacterSet.alphanumerics.contains(scalar) || scalar == "_" || scalar == "-"))
+                ? Character(scalar) : "_"
+        })
+        return mapped.isEmpty ? "tool" : mapped
+    }
+
+    /// The first eight letters and digits of an id, which is unique enough for a UUID and is
+    /// matched back to a server by prefix if the remembered mapping is ever missing.
+    private static func shortId(_ serverId: String) -> String {
+        let cleaned = sanitized(serverId).replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "")
+        return String(cleaned.lowercased().prefix(8))
+    }
+
+    /// FNV-1a, 32 bits, so the same tool gets the same name in every session.
+    private static func fnvHex(_ text: String) -> String {
+        var hash: UInt32 = 2166136261
+        for byte in text.utf8 { hash = (hash ^ UInt32(byte)) &* 16777619 }
+        let hex = String(hash, radix: 16)
+        return String(repeating: "0", count: 8 - hex.count) + hex
+    }
+}
+
+/// A tool's input schema in the one shape every provider accepts: an object schema.
+///
+/// A server may advertise `{}` or leave out `type`. The provider layer treated an empty schema as
+/// "unknown" and swapped in a made-up `action`/`parameters` schema for any MCP tool — which the
+/// model then filled in, and the call was routed on it. Normalised once, here, so a real tool
+/// keeps advertising exactly what it takes (or nothing).
+public enum MCPSchemaShape {
+    public static let empty = #"{"type":"object","properties":{}}"#
+
+    public static func normalized(_ json: String?) -> String {
+        guard let json, let data = json.data(using: .utf8),
+              var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              !object.isEmpty else { return empty }
+        if object["type"] == nil { object["type"] = "object" }
+        if (object["type"] as? String) == "object", object["properties"] == nil { object["properties"] = [String: Any]() }
+        guard JSONSerialization.isValidJSONObject(object),
+              let out = try? JSONSerialization.data(withJSONObject: object),
+              let text = String(data: out, encoding: .utf8) else { return json }
+        return text
+    }
+}
+
+/// What a server's `inputSchema` says about a tool's parameters.
+///
+/// Argument repair used to guess from the shape of the values alone, which corrupts a tool that
+/// really has a parameter called `name` (the tool name was taken from it) or a string parameter
+/// that happens to hold JSON (it was parsed into an object). With the schema in hand, a
+/// parameter the tool declares is passed exactly as sent.
+public struct MCPArgSchema: Sendable, Equatable {
+    /// Declared parameter → its declared JSON types (empty when the schema gives none).
+    public let properties: [String: Set<String>]
+
+    public init(properties: [String: Set<String>]) {
+        self.properties = properties
+    }
+
+    /// Nil when there is no usable schema text at all.
+    public init?(json: String?) {
+        guard let json, let data = json.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        var out: [String: Set<String>] = [:]
+        for (key, raw) in (root["properties"] as? [String: Any]) ?? [:] {
+            var types = Set<String>()
+            if let spec = raw as? [String: Any] {
+                if let t = spec["type"] as? String { types.insert(t) }
+                if let list = spec["type"] as? [String] { types.formUnion(list) }
+                // `{"anyOf": [{"type": "object"}, {"type": "null"}]}` is how optional objects arrive.
+                for key in ["anyOf", "oneOf"] {
+                    for branch in (spec[key] as? [[String: Any]]) ?? [] {
+                        if let t = branch["type"] as? String { types.insert(t) }
+                        if let list = branch["type"] as? [String] { types.formUnion(list) }
+                    }
+                }
+            }
+            out[key] = types
+        }
+        self.properties = out
+    }
+
+    public func declares(_ key: String) -> Bool { properties[key] != nil }
+
+    public var isEmpty: Bool { properties.isEmpty }
+
+    /// True only when the schema says the parameter is an object or array (and not also a
+    /// string), which is the one case where turning a JSON string into a value is a repair
+    /// rather than a corruption.
+    public func expectsStructure(_ key: String) -> Bool {
+        guard let types = properties[key], !types.isEmpty, !types.contains("string") else { return false }
+        return !types.isDisjoint(with: ["object", "array"])
+    }
 }
 
 // MARK: - Argument Normalization (from GrizzyClaw & Osaurus)
@@ -157,9 +306,10 @@ public enum MCPToolArgumentDefaults {
     public static func normalizeArguments(
         serverName: String,
         toolName: String,
-        arguments: [String: Any]
+        arguments: [String: Any],
+        schema: MCPArgSchema? = nil
     ) -> [String: Any] {
-        var result = coerceJSONMaps(in: arguments)
+        var result = coerceJSONMaps(in: arguments, schema: schema)
 
         // Unpack nested parameter wrappers (but keep MacUse meta-tool shape intact).
         let leaf = toolName.lowercased()
@@ -177,10 +327,11 @@ public enum MCPToolArgumentDefaults {
                 result["parameters"] = parseObjectMap(params) ?? [String: Any]()
             }
         } else if leaf != "get_tool_definitions" {
-            if let params = result["parameters"] as? [String: Any] {
+            // A tool that declares `parameters` / `arguments` itself owns those values.
+            if let params = result["parameters"] as? [String: Any], schema?.declares("parameters") != true {
                 for (k, v) in params { if result[k] == nil { result[k] = v } }
             }
-            if let innerArgs = result["arguments"] as? [String: Any] {
+            if let innerArgs = result["arguments"] as? [String: Any], schema?.declares("arguments") != true {
                 for (k, v) in innerArgs { if result[k] == nil { result[k] = v } }
             }
         }
@@ -214,6 +365,19 @@ public enum MCPToolArgumentDefaults {
         var result: [String: Any] = [:]
         for (key, value) in arguments {
             result[key] = coerceValue(value)
+        }
+        return result
+    }
+
+    /// With a schema, only a top-level string the schema says is an object or array is parsed;
+    /// everything else — including strings that merely look like JSON — is left as sent.
+    public static func coerceJSONMaps(in arguments: [String: Any], schema: MCPArgSchema?) -> [String: Any] {
+        // No schema, or one that declares nothing, cannot say which values are structured.
+        guard let schema, !schema.isEmpty else { return coerceJSONMaps(in: arguments) }
+        var result = arguments
+        for (key, value) in arguments {
+            guard schema.expectsStructure(key), let text = value as? String else { continue }
+            result[key] = coerceValue(text)
         }
         return result
     }
@@ -307,6 +471,62 @@ public enum MCPToolArgumentDefaults {
     }
 }
 
+/// Live MCP server processes, so the app can stop every one of them on quit without awaiting the
+/// manager actor (which is unreachable from `applicationWillTerminate`).
+public enum MCPProcessRegistry {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var pids = Set<Int32>()
+
+    static func register(_ pid: Int32) {
+        lock.lock(); defer { lock.unlock() }
+        pids.insert(pid)
+    }
+
+    static func unregister(_ pid: Int32) {
+        lock.lock(); defer { lock.unlock() }
+        pids.remove(pid)
+    }
+
+    /// Stop `process` and everything it started. `npx` and `uvx` are wrappers: terminating only
+    /// the wrapper left the server itself running, and each restart added another.
+    static func stopTree(_ process: Process) {
+        let pid = process.processIdentifier
+        // A process that already exited has a pid that may belong to something else by now.
+        if pid > 0, process.isRunning { ProcessTree.terminate(pid) }
+        unregister(pid)
+    }
+
+    /// Synchronous, for app exit: signal every server's tree, give it a moment, then force.
+    public static func terminateAllNow() {
+        lock.lock()
+        let roots = Array(pids)
+        pids.removeAll()
+        lock.unlock()
+        guard !roots.isEmpty else { return }
+        var victims: [Int32] = []
+        for root in roots { victims += ProcessTree.liveDescendants(of: root) + [root] }
+        for victim in victims { kill(victim, SIGTERM) }
+        usleep(200_000)
+        for victim in victims where kill(victim, 0) == 0 { kill(victim, SIGKILL) }
+    }
+}
+
+/// The advertised tool names per server id, readable without awaiting `MCPClientManager`.
+public enum MCPAdvertisedSnapshot {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var names: [String: [String]] = [:]
+
+    public static var current: [String: [String]] {
+        lock.lock(); defer { lock.unlock() }
+        return names
+    }
+
+    static func set(_ value: [String: [String]]) {
+        lock.lock(); defer { lock.unlock() }
+        names = value
+    }
+}
+
 // MARK: - Server Health Status
 public enum MCPServerStatus: Sendable, Equatable {
     case notStarted, connecting, running, crashed, unreachable
@@ -328,10 +548,11 @@ public struct MCPServerReport: Sendable, Identifiable, Equatable {
 
 private enum MCPLaunchError: LocalizedError {
     case processExited(String)
+    case noToolList(String)
 
     var errorDescription: String? {
         switch self {
-        case .processExited(let message): return message
+        case .processExited(let message), .noToolList(let message): return message
         }
     }
 }
@@ -383,12 +604,22 @@ public actor MCPClientManager {
     private var processInputPipes: [String: Pipe] = [:]
     /// Thread-safe stdout accumulators fed by FileHandle readability handlers (actor-safe across awaits).
     private var processOutputBuffers: [String: MCPStdioBuffer] = [:]
-    private var discoveredTools: [String: [MCPToolDefinition]] = [:]
+    private var discoveredTools: [String: [MCPToolDefinition]] = [:] {
+        // Mirrored for code that has to decide synchronously which server owns a tool name
+        // (the approval check), which cannot await this actor.
+        didSet { MCPAdvertisedSnapshot.set(discoveredTools.mapValues { $0.map(\.name) }) }
+    }
     private var serverStatus: [String: MCPServerStatus] = [:]
     private var serverErrors: [String: String] = [:]
     private var sdkSessions: [String: MCPSDKSession] = [:]
+    private var httpSessions: [String: MCPHTTPSession] = [:]
     /// Bumps on each start/stop so a late connect after timeout cannot mark the server running.
     private var startGenerations: [String: Int] = [:]
+    /// What each running server was started with, so an edited config is noticed.
+    private var startedFingerprints: [String: String] = [:]
+    /// Servers being brought up right now, so a second warm-up joins the first instead of
+    /// restarting it (starting a server stops any earlier start of the same id).
+    private var inFlightStarts: Set<String> = []
     private var requestId: Int = 1
     
     // Request throttling for concurrent execution control
@@ -404,7 +635,39 @@ public actor MCPClientManager {
     }
 
     // MARK: - Discover & Start Server
+    /// Everything that changes how a server is launched or reached. Excludes the name and the
+    /// per-tool switches, which do not need a restart.
+    nonisolated static func fingerprint(_ config: MCPServerConfig) -> String {
+        let env = config.env.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "\u{1}")
+        let headers = config.headers.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "\u{1}")
+        return [
+            config.transportType.rawValue, config.command, config.args.joined(separator: "\u{2}"),
+            config.workingDirectory, config.url, env, headers,
+        ].joined(separator: "\u{0}")
+    }
+
+    /// Bring running servers in line with the saved configuration: stop one that was deleted,
+    /// disabled or edited, and forget what it advertised. The next use starts it fresh with the
+    /// new settings. Without this a changed token or argument list did nothing until relaunch,
+    /// and a server switched off in Settings kept running.
+    public func reconcile(with servers: [MCPServerConfig]) async {
+        let byId = Dictionary(servers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let known = Set(runningProcesses.keys).union(sdkSessions.keys)
+            .union(discoveredTools.keys).union(serverStatus.keys)
+        for id in known {
+            let current = byId[id]
+            let changed = current.map { startedFingerprints[id] != nil && startedFingerprints[id] != Self.fingerprint($0) } ?? true
+            guard current?.isEnabled != true || changed else { continue }
+            await stopServer(id: id)
+            discoveredTools.removeValue(forKey: id)
+            serverStatus.removeValue(forKey: id)
+            serverErrors.removeValue(forKey: id)
+            startedFingerprints.removeValue(forKey: id)
+        }
+    }
+
     public func startServer(config: MCPServerConfig) async throws -> [MCPToolDefinition] {
+        startedFingerprints[config.id] = Self.fingerprint(config)
         if config.transportType == .stdio {
             return try await startStdioServer(config: config)
         } else {
@@ -420,11 +683,11 @@ public actor MCPClientManager {
         for server in enabled {
             do {
                 let tools = try await startServer(config: server)
-                result[server.name] = tools
+                result[server.id] = tools
             } catch {
                 serverStatus[server.id] = .crashed
                 serverErrors[server.id] = error.localizedDescription
-                result[server.name] = []
+                result[server.id] = []
             }
         }
         return result
@@ -583,11 +846,14 @@ public actor MCPClientManager {
 
         let cached = buildToolModels(from: enabled, order: preferred + deferred)
         if !blockForWarm {
-            // Radiant-better: never stall the chat bubble on npx cold starts.
+            // Radiant-better: never stall the chat bubble on npx cold starts. Nobody is waiting on
+            // this, so it gets a budget a first-time `npx` download can actually finish in;
+            // killing it at the turn's 8 seconds meant a slow server never connected.
+            let backgroundBudget = max(perServerTimeout, .seconds(45))
             Task {
-                await self.warmServers(preferred, perServerTimeout: perServerTimeout)
+                await self.warmServers(preferred, perServerTimeout: backgroundBudget)
                 if !deferred.isEmpty {
-                    let timeout = perServerTimeout
+                    let timeout = backgroundBudget
                     await self.warmServers(deferred, perServerTimeout: timeout)
                 }
             }
@@ -647,7 +913,7 @@ public actor MCPClientManager {
             displayName: "\(server.name): \(def.name)",
             description: "[\(server.name)] \(def.description ?? def.name)",
             category: .mcp,
-            parametersJsonSchema: def.inputSchemaJson ?? #"{"type":"object","properties":{}}"#,
+            parametersJsonSchema: MCPSchemaShape.normalized(def.inputSchemaJson),
             isEnabled: true,
             requiresApproval: effect == .write
         )
@@ -691,10 +957,19 @@ public actor MCPClientManager {
 
     private func ensureServerReady(_ server: MCPServerConfig, timeout: Duration = .seconds(8)) async {
         if Task.isCancelled { return }
-        if case .running = serverStatus[server.id],
-           let cached = discoveredTools[server.id], !cached.isEmpty {
+        // Running is ready, even with no tools: a server may genuinely advertise none, and
+        // restarting it on every use (or killing it at the deadline) helps nobody.
+        if case .running = serverStatus[server.id] { return }
+
+        if inFlightStarts.contains(server.id) {
+            // Someone is already connecting it. Wait for that, not restart it.
+            let started = ContinuousClock.now
+            while inFlightStarts.contains(server.id), ContinuousClock.now - started < timeout {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
             return
         }
+        inFlightStarts.insert(server.id)
         serverStatus[server.id] = .connecting
         serverErrors[server.id] = nil
 
@@ -718,6 +993,7 @@ public actor MCPClientManager {
                 once.resume(())
             }
         }
+        inFlightStarts.remove(server.id)
     }
 
     private func noteStartFailure(serverId: String, message: String) {
@@ -728,10 +1004,7 @@ public actor MCPClientManager {
     }
 
     private func timeoutStart(serverId: String, name: String, timeout: Duration) async {
-        if case .running = serverStatus[serverId],
-           let cached = discoveredTools[serverId], !cached.isEmpty {
-            return
-        }
+        if case .running = serverStatus[serverId] { return }
         await stopServer(id: serverId)
         serverStatus[serverId] = .crashed
         serverErrors[serverId] = "Timed out after \(timeout) starting \(name)"
@@ -801,13 +1074,35 @@ public actor MCPClientManager {
     /// Resolve the MCP `tools/call` name + arguments.
     /// MacUse exposes only meta-tools (`get_tool_definitions`, `call_tool_by_name`); nested
     /// `name`/`arguments` must stay as parameters — do not unwrap them into a fake top-level tool.
+    ///
+    /// `schema` is the advertised schema of `toolName` when the server has reported one. A tool
+    /// the server really advertises is called by that name: its own `name`, `tool` or `action`
+    /// parameter is data, not a redirect. Only a wrapper-style tool (`*_call`) or a tool whose
+    /// schema is unknown still has those keys read as the target.
     public nonisolated static func resolveMCPCall(
         toolName: String,
-        arguments: [String: Any]
+        arguments: [String: Any],
+        schema: MCPArgSchema? = nil
     ) -> (name: String, arguments: [String: Any]) {
         let leaf = toolName.lowercased()
         if leaf == "call_tool_by_name" || leaf == "call_tool" || leaf == "get_tool_definitions" {
             return (toolName, arguments)
+        }
+
+        let routingKeys = ["action", "tool", "name", "server", "server_name", "parameters", "arguments"]
+
+        if let schema, !leaf.hasSuffix("_call") {
+            // A real, advertised tool. Keep every declared parameter; drop only the routing
+            // keys the tool does not itself declare.
+            if schema.isEmpty {
+                // Takes nothing, so any wrapper the model added around "no arguments" is noise.
+                let inner = arguments["parameters"] as? [String: Any]
+                    ?? arguments["arguments"] as? [String: Any]
+                    ?? [:]
+                return (toolName, inner)
+            }
+            let kept = arguments.filter { !routingKeys.contains($0.key) || schema.declares($0.key) }
+            return (toolName, kept)
         }
 
         var actualTool = arguments["action"] as? String
@@ -823,12 +1118,20 @@ public actor MCPClientManager {
         }
         let callArgs = arguments["parameters"] as? [String: Any]
             ?? arguments["arguments"] as? [String: Any]
-            ?? arguments.filter {
-                !["action", "tool", "name", "server", "server_name", "parameters", "arguments"].contains($0.key)
-            }
+            ?? arguments.filter { !routingKeys.contains($0.key) }
         return (actualTool, callArgs)
     }
-    
+
+    /// The advertised schema of `toolName` on `serverId`, if the server has reported one.
+    func argSchema(serverId: String, toolName: String) -> MCPArgSchema? {
+        let tools = discoveredTools[serverId] ?? []
+        guard let canonical = MCPToolRouting.canonicalTool(toolName, known: tools.map(\.name)),
+              let def = tools.first(where: { $0.name == canonical }) else { return nil }
+        // A tool advertised without any schema text still counts as "advertised, takes nothing
+        // declared" — but only if the server said so; otherwise leave the legacy behaviour.
+        return MCPArgSchema(json: def.inputSchemaJson)
+    }
+
     public func getServerStatus(serverId: String) -> MCPServerStatus {
         serverStatus[serverId] ?? .notStarted
     }
@@ -906,18 +1209,20 @@ public actor MCPClientManager {
 
         do {
             try process.run()
+            MCPProcessRegistry.register(process.processIdentifier)
             // Bad CLI args (e.g. codegraph `alwaysLoad true`) exit immediately — writing stdin then
             // used to raise an uncaught NSException via FileHandle.write(_:) and kill the app.
             try await Task.sleep(nanoseconds: 120_000_000)
             guard process.isRunning else {
                 outPipe.fileHandleForReading.readabilityHandler = nil
+                MCPProcessRegistry.unregister(process.processIdentifier)
                 throw MCPLaunchError.processExited(
                     "MCP '\(config.name)' exited immediately. Check command/args (got: \(config.command) \(launchArgs.joined(separator: " ")))."
                 )
             }
             guard startGenerations[config.id] == generation else {
                 outPipe.fileHandleForReading.readabilityHandler = nil
-                if process.isRunning { process.terminate() }
+                MCPProcessRegistry.stopTree(process)
                 throw MCPError.timeout
             }
 
@@ -962,6 +1267,11 @@ public actor MCPClientManager {
             var tools: [MCPToolDefinition] = []
             // Cap tools/list wait; outer ensureServerReady also kills the process on deadline.
             let listResp = await readResponse(for: 2, buffer: stdoutBuffer, timeoutSeconds: 8.0)
+            // Silence is not "no tools". Treating it as an empty catalog marked a server that never
+            // answered as running, and it then stayed that way.
+            if listResp.isEmpty {
+                throw MCPLaunchError.noToolList("MCP '\(config.name)' did not answer tools/list.")
+            }
             if !listResp.isEmpty, let data = listResp.data(using: .utf8),
                let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
                 let toolsArray = (json["tools"] as? [[String: Any]]) ?? ((json["result"] as? [String: Any])?["tools"] as? [[String: Any]]) ?? []
@@ -984,7 +1294,7 @@ public actor MCPClientManager {
         } catch {
             print("[MCPManager] Stdio start failed for \(config.name): \(error.localizedDescription)")
             outPipe.fileHandleForReading.readabilityHandler = nil
-            if process.isRunning { process.terminate() }
+            MCPProcessRegistry.stopTree(process)
             runningProcesses.removeValue(forKey: config.id)
             processInputPipes.removeValue(forKey: config.id)
             processOutputPipes.removeValue(forKey: config.id)
@@ -1020,77 +1330,33 @@ public actor MCPClientManager {
     }
 
     private func queryHttpSseServer(config: MCPServerConfig) async throws -> [MCPToolDefinition] {
-        guard let url = URL(string: config.url), !config.url.isEmpty else {
+        guard URL(string: config.url) != nil, !config.url.isEmpty else {
             serverStatus[config.id] = .unreachable
-            serverErrors[config.id] = "Missing or invalid URL for HTTP MCP server."
+            serverErrors[config.id] = MCPHTTPError.badURL(config.url).errorDescription
             return []
         }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
-        for (k, v) in config.headers { req.setValue(v, forHTTPHeaderField: k) }
-        // Radiant parity: optional bearer token via env["MCP_TOKEN"] / env["token"] / headers.
-        if req.value(forHTTPHeaderField: "Authorization") == nil {
-            if let token = config.env["MCP_TOKEN"] ?? config.env["token"] ?? config.env["TOKEN"], !token.isEmpty {
-                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            }
-        }
-
-        let body: [String: Any] = [
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/list",
-            "params": [:]
-        ]
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        req.timeoutInterval = 6
-
+        if let old = httpSessions.removeValue(forKey: config.id) { await old.stop() }
+        let session = MCPHTTPSession(config: config)
         do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse else {
-                serverStatus[config.id] = .unreachable
-                serverErrors[config.id] = "No HTTP response from \(config.url)"
-                discoveredTools[config.id] = []
-                return []
-            }
-            if http.statusCode == 401 || http.statusCode == 403 {
-                serverStatus[config.id] = .unreachable
-                let msg = config.headers["Authorization"] != nil || config.env["MCP_TOKEN"] != nil
-                    ? "That server rejected the token — check it is current and has the right scope."
-                    : "That server needs you to sign in. Paste an access token in headers/env; SwiftOpenWork cannot yet do a full OAuth sign-in for MCP servers."
-                serverErrors[config.id] = msg
-                discoveredTools[config.id] = []
-                return []
-            }
-            guard (200...299).contains(http.statusCode) else {
-                serverStatus[config.id] = .unreachable
-                serverErrors[config.id] = "HTTP \(http.statusCode) from \(config.url)"
-                discoveredTools[config.id] = []
-                return []
-            }
-
-            if let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let result = dict["result"] as? [String: Any],
-               let toolsArray = result["tools"] as? [[String: Any]] {
-                var list: [MCPToolDefinition] = []
-                for t in toolsArray {
-                    list.append(MCPToolDefinition.fromToolsListEntry(t))
-                }
-                serverStatus[config.id] = .running
-                serverErrors[config.id] = nil
-                discoveredTools[config.id] = list
-                return list
-            }
-            serverStatus[config.id] = .unreachable
-            serverErrors[config.id] = "Unexpected tools/list payload from \(config.url)"
+            let tools = try await session.start()
+            httpSessions[config.id] = session
+            serverStatus[config.id] = .running
+            serverErrors[config.id] = nil
+            discoveredTools[config.id] = tools
+            return tools
         } catch {
             serverStatus[config.id] = .unreachable
             serverErrors[config.id] = error.localizedDescription
+            discoveredTools[config.id] = []
+            return []
         }
+    }
 
-        discoveredTools[config.id] = []
-        return []
+    /// The live HTTP session for `server`, connecting first if there is none.
+    private func httpSession(for server: MCPServerConfig) async -> MCPHTTPSession? {
+        if let existing = httpSessions[server.id] { return existing }
+        _ = try? await queryHttpSseServer(config: server)
+        return httpSessions[server.id]
     }
 
     // MARK: - Universal Tool Dispatcher
@@ -1115,7 +1381,8 @@ public actor MCPClientManager {
         )
 
         if MCPFailureClassifier.failed(text: output),
-           MCPFailureClassifier.isTransientFailure(output) {
+           MCPFailureClassifier.isTransientFailure(output),
+           isSafeToRetry(output, serverConfig: serverConfig, serverIdentifier: serverIdentifier, toolName: toolName, arguments: arguments) {
             try? await Task.sleep(for: .milliseconds(400))
             let retry = await dispatchToolCallOnce(
                 serverConfig: serverConfig,
@@ -1132,6 +1399,42 @@ public actor MCPClientManager {
         }
 
         return MCPFailureClassifier.annotate(output)
+    }
+
+    /// Whether repeating a failed call cannot do its work twice.
+    ///
+    /// A timeout or a dropped connection says nothing about whether the server acted: the request
+    /// may have arrived and the reply been lost. Repeating a `send_message` that way sends it
+    /// twice. So those failures are retried only for reads; a failure that happened before
+    /// anything was sent (connection refused, all slots busy) is safe for anything.
+    private func isSafeToRetry(
+        _ output: String,
+        serverConfig: MCPServerConfig?,
+        serverIdentifier: String?,
+        toolName: String,
+        arguments: [String: Any]
+    ) -> Bool {
+        let lower = output.lowercased()
+        let neverSent = ["busy. please wait", "connection refused", "econnrefused", "newconnectionerror"]
+        if neverSent.contains(where: { lower.contains($0) }) { return true }
+
+        let enabled = PersistenceManager.shared.loadSettings().mcpServers.filter(\.isEnabled)
+        var server = serverConfig
+        if server == nil {
+            let requested = serverIdentifier ?? arguments["server"] as? String ?? arguments["server_name"] as? String ?? ""
+            if case .resolved(let found) = MCPToolRouting.resolveServer(
+                requested: requested, toolName: toolName, enabled: enabled, advertised: advertisedToolNames()
+            ) { server = found }
+        }
+        let leaf = toolName.lowercased()
+        let effect: MCPEffect
+        if leaf == "call_tool_by_name" || leaf == "call_tool" {
+            let nested = (arguments["name"] as? String) ?? (arguments["tool"] as? String)
+            effect = MCPEffectCatalog.classifyNested(server: server, nestedToolName: nested)
+        } else {
+            effect = MCPEffectCatalog.classify(server: server, toolName: toolName, advertised: true)
+        }
+        return effect == .read
     }
 
     private func dispatchToolCallOnce(
@@ -1176,15 +1479,17 @@ public actor MCPClientManager {
         }
 
         let sName = resolvedServer.name
+        let schema = argSchema(serverId: resolvedServer.id, toolName: toolName)
         let normArgs = MCPToolArgumentDefaults.normalizeArguments(
             serverName: sName,
             toolName: toolName,
-            arguments: arguments
+            arguments: arguments,
+            schema: schema
         )
 
         // 2. Per-tool gate: a tool the user switched off must not run, and the model needs to be
         //    told so it can route around it instead of retrying.
-        let gateTarget = Self.resolveMCPCall(toolName: toolName, arguments: normArgs).name
+        let gateTarget = Self.resolveMCPCall(toolName: toolName, arguments: normArgs, schema: schema).name
         if !MCPToolGate.isToolEnabled(server: resolvedServer, toolName: gateTarget) {
             return MCPToolGate.disabledMessage(server: resolvedServer, toolName: gateTarget)
         }
@@ -1206,7 +1511,14 @@ public actor MCPClientManager {
         do {
             let server = resolvedServer
             // Check server health before attempting call
-            let status = getServerStatus(serverId: server.id)
+            var status = getServerStatus(serverId: server.id)
+            if case .crashed = status, server.transportType == .stdio {
+                // One attempt to bring it back before telling the model it is gone: a server that
+                // died between turns, or missed an earlier deadline, used to stay unusable until
+                // it was restarted by hand from Settings.
+                await ensureServerReady(server, timeout: .seconds(20))
+                status = getServerStatus(serverId: server.id)
+            }
             if case .crashed = status {
                 let err = serverErrors[server.id].map { ": \($0)" } ?? "."
                 return """
@@ -1217,6 +1529,10 @@ public actor MCPClientManager {
             }
 
             if server.transportType == .stdio && !server.command.isEmpty {
+                // A session whose process has died is not a session: calls into it fail for ever.
+                if let session = sdkSessions[server.id], !(await session.isRunning) {
+                    await stopServer(id: server.id)
+                }
                 let hasSDK = sdkSessions[server.id] != nil
                 let procRunning = runningProcesses[server.id]?.isRunning == true
                 if !hasSDK && !procRunning {
@@ -1225,7 +1541,7 @@ public actor MCPClientManager {
 
                 // Official SDK path (Radiant parity)
                 if let session = sdkSessions[server.id] {
-                    let resolved = Self.resolveMCPCall(toolName: toolName, arguments: normArgs)
+                    let resolved = Self.resolveMCPCall(toolName: toolName, arguments: normArgs, schema: schema)
                     do {
                         // Deliberately unbounded: the agent loop bounds what reaches the
                         // transcript, but catalog payloads are parsed structurally first. Cutting
@@ -1245,7 +1561,7 @@ public actor MCPClientManager {
                 if let inPipe = processInputPipes[server.id],
                    let stdoutBuffer = processOutputBuffers[server.id] {
                     let reqId = nextRequestId()
-                    let resolved = Self.resolveMCPCall(toolName: toolName, arguments: normArgs)
+                    let resolved = Self.resolveMCPCall(toolName: toolName, arguments: normArgs, schema: schema)
                     let actualTool = resolved.name
                     let callArgs = resolved.arguments
 
@@ -1291,76 +1607,28 @@ public actor MCPClientManager {
                     return "Error: MCP Server '\(server.name)' communication pipes not available."
                 }
             } else if server.transportType == .httpSse && !server.url.isEmpty {
-                guard let endpoint = URL(string: server.url) else {
+                guard URL(string: server.url) != nil else {
                     return "Error: MCP Server '\(server.name)' has an invalid URL: \(server.url)"
                 }
-                var req = URLRequest(url: endpoint)
-                req.httpMethod = "POST"
-                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                for (k, v) in server.headers { req.setValue(v, forHTTPHeaderField: k) }
-                for (k, v) in server.env { req.setValue(v, forHTTPHeaderField: k) }
-
-                var actualTool = normArgs["action"] as? String ?? normArgs["tool"] as? String ?? normArgs["name"] as? String ?? toolName
-                if actualTool.lowercased().hasSuffix("_call"),
-                   let nested = normArgs["tool"] as? String,
-                   !nested.isEmpty,
-                   nested.lowercased() != actualTool.lowercased() {
-                    actualTool = nested
-                }
-                let callArgs = normArgs["parameters"] as? [String: Any]
-                    ?? normArgs["arguments"] as? [String: Any]
-                    ?? normArgs.filter { !["action", "tool", "name", "server", "server_name", "parameters", "arguments"].contains($0.key) }
+                let resolved = Self.resolveMCPCall(toolName: toolName, arguments: normArgs, schema: schema)
+                let actualTool = resolved.name
                 let listAliases: Set<String> = ["list_tools", "tools_list", "list-tools", "tools/list", "listtools"]
-                let callReq: [String: Any]
-                if listAliases.contains(actualTool.lowercased()) {
-                    callReq = [
-                        "jsonrpc": "2.0",
-                        "id": nextRequestId(),
-                        "method": "tools/list",
-                        "params": [:]
-                    ]
-                } else {
-                    callReq = [
-                        "jsonrpc": "2.0",
-                        "id": nextRequestId(),
-                        "method": "tools/call",
-                        "params": [
-                            "name": actualTool,
-                            "arguments": callArgs
-                        ]
-                    ]
+                guard let session = await httpSession(for: server) else {
+                    let why = serverErrors[server.id].map { ": \($0)" } ?? "."
+                    return "Error: MCP Server '\(server.name)' could not be reached\(why)"
                 }
-                let bodyData = try? JSONSerialization.data(withJSONObject: callReq)
-                req.httpBody = bodyData
-                
                 do {
-                    let (data, response) = try await URLSession.shared.data(for: req)
-                    if let http = response as? HTTPURLResponse, http.statusCode == 200,
-                       let respDict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                        if let result = respDict["result"] as? [String: Any] {
-                            if let content = result["content"] as? [[String: Any]] {
-                                let texts = content.compactMap { $0["text"] as? String }
-                                if !texts.isEmpty {
-                                    return texts.joined(separator: "\n")
-                                }
-                            }
-                            if let tools = result["tools"] as? [[String: Any]] {
-                                let names = tools.compactMap { $0["name"] as? String }
-                                if !names.isEmpty {
-                                    return "Available tools on \(server.name):\n" + names.map { "- \($0)" }.joined(separator: "\n")
-                                }
-                            }
-                            let jsonText = String(data: (try? JSONSerialization.data(withJSONObject: result, options: .prettyPrinted)) ?? Data(), encoding: .utf8) ?? "{}"
-                            return jsonText
-                        }
-                        if let error = respDict["error"] as? [String: Any] {
-                            return "MCP Error from '\(server.name)': \(error["message"] as? String ?? "\(error)")"
-                        }
-                    } else {
-                        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                        return "Error: MCP Server '\(server.name)' returned HTTP \(status)."
+                    if listAliases.contains(actualTool.lowercased()) {
+                        let names = try await session.listTools().map(\.name)
+                        return "Available tools on \(server.name):\n" + names.map { "- \($0)" }.joined(separator: "\n")
                     }
+                    return try await session.callTool(name: actualTool, arguments: JSONCopy.fresh(resolved.arguments))
                 } catch {
+                    // A transport failure leaves the session unusable; drop it so the next call
+                    // reconnects instead of failing the same way for ever.
+                    if case MCPHTTPError.rpc = error {} else {
+                        httpSessions.removeValue(forKey: server.id)
+                    }
                     return "Error: MCP Server '\(server.name)' request failed: \(error.localizedDescription)"
                 }
             }
@@ -1557,13 +1825,14 @@ public actor MCPClientManager {
         if let session = sdkSessions.removeValue(forKey: id) {
             await session.stop()
         }
+        if let session = httpSessions.removeValue(forKey: id) {
+            await session.stop()
+        }
         if let outPipe = processOutputPipes[id] {
             outPipe.fileHandleForReading.readabilityHandler = nil
         }
         if let proc = runningProcesses[id] {
-            if proc.isRunning {
-                proc.terminate()
-            }
+            MCPProcessRegistry.stopTree(proc)
             runningProcesses.removeValue(forKey: id)
         }
         processInputPipes.removeValue(forKey: id)
@@ -1592,7 +1861,7 @@ public final class MCPStdioBuffer: @unchecked Sendable {
         lock.lock()
         text += chunk
         // Cap runaway buffers (log spam / huge payloads)
-        if text.count > 2_000_000 {
+        if text.utf8.count > 2_000_000 {
             text = String(text.suffix(1_000_000))
         }
         lock.unlock()
@@ -1621,7 +1890,8 @@ public final class MCPStdioBuffer: @unchecked Sendable {
                 if let s = json["id"] as? String { return Int(s) }
                 return nil
             }()
-            guard respId == id else { continue }
+            // A request or notification *from* the server has a `method`, and may reuse our id.
+            guard respId == id, json["method"] == nil else { continue }
 
             // Drop everything through this line from the buffer
             text = String(remaining[next...])

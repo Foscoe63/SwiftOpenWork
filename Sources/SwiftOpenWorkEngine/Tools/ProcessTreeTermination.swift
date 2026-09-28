@@ -27,8 +27,8 @@ extension ProcessTree {
 
     /// SIGTERM the process and everything under it, then SIGKILL whatever ignored that.
     /// Returns immediately; the follow-up runs in the background.
-    public static func terminate(_ pid: Int32, grace: TimeInterval = 2) {
-        let victims = liveDescendants(of: pid) + [pid]
+    public static func terminate(_ pid: Int32, grace: TimeInterval = 2, alsoStopping extra: [Int32] = []) {
+        let victims = Array(Set(liveDescendants(of: pid) + extra)) + [pid]
         for victim in victims { kill(victim, SIGTERM) }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + grace) {
             for victim in victims where kill(victim, 0) == 0 { kill(victim, SIGKILL) }

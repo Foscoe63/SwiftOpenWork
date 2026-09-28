@@ -256,6 +256,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             messages: messages,
             temperature: temperature,
             maxTokens: maxTokens,
+            reasoningEffort: reasoningEffort,
             tools: tools,
             onChunk: onChunk
         )
@@ -267,6 +268,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         messages: [ChatMessage],
         temperature: Double,
         maxTokens: Int,
+        reasoningEffort: ReasoningEffort,
         tools: [SwiftOpenWorkCore.Tool],
         onChunk: @Sendable @escaping (LLMStreamChunk) -> Void
     ) async throws {
@@ -333,10 +335,12 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         }
 
         let toolSpecs = Self.mlxToolSpecs(from: tools)
+        let thinkingEnabled = reasoningEffort != .off
         let key = MLXSessionReuse.Key(
             modelId: model.id,
             instructions: sanitizedInstructions,
-            toolNames: tools.map(\.name)
+            toolNames: tools.map(\.name),
+            thinkingEnabled: thinkingEnabled
         )
         let fingerprints = mlxMessages.map {
             MLXSessionReuse.Fingerprint(
@@ -390,6 +394,13 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
                     maxTokens: maxTokens,
                     temperature: temperature
                 ),
+                // `reasoningEffort` used to arrive here and go nowhere: this is the only real
+                // in-process engine, and its ChatSession never got the `enable_thinking` context
+                // the oneShot path already sets. So the Reasoning toggle had no way to stop a
+                // thinking-capable checkpoint from opening a `<think>` block on every turn — and
+                // an unbounded, uncapped-effort think is exactly what a marginal quantized model
+                // spirals inside of before the repetition breaker has anything to catch.
+                additionalContext: ["enable_thinking": thinkingEnabled],
                 tools: toolSpecs.isEmpty ? nil : toolSpecs
                 // No toolDispatch — AgentRunner owns approval + MCP execution (Radiant shape).
                 // streamDetails surfaces .toolCall for the outer loop.

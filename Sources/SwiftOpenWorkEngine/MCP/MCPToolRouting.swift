@@ -72,7 +72,15 @@ public enum MCPToolRouting: Sendable {
                 || normalized(server.name) == needle
                 || normalized(slug(server)) == needle
         }
-        return hits.count == 1 ? hits[0] : nil
+        if hits.count == 1 { return hits[0] }
+        guard hits.isEmpty else { return nil }
+        // A shortened `mcp__<8 chars>__…` name (see `MCPNamespacedTool`) names its server by an
+        // id prefix. Accepted only when it picks out exactly one server.
+        guard needle.count >= 6 else { return nil }
+        let byPrefix = servers.filter {
+            normalized($0.id).replacingOccurrences(of: "_", with: "").hasPrefix(needle)
+        }
+        return byPrefix.count == 1 ? byPrefix[0] : nil
     }
 
     // MARK: - Tool resolution

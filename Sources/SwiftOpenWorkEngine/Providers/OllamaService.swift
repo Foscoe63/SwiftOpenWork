@@ -159,6 +159,11 @@ public final class OllamaService: LLMProviderClient, Sendable {
             "presence_penalty": presPenalty,
             "frequency_penalty": freqPenalty
         ]
+        // Ollama's own default context is 2-4K tokens and it drops the *start* of a longer prompt
+        // without a word — which is where the system prompt and the tool list are. This agent's
+        // prompt plus its tools run past that on their own, so ask for what the model can hold,
+        // up to a size that will still fit in memory.
+        options["num_ctx"] = min(max(model.contextWindow, 8192), 32768)
         // See OpenAIService: the Top-P setting used to reach only the in-process MLX path.
         if loadedSettings.defaultTopP > 0, loadedSettings.defaultTopP < 1.0 {
             options["top_p"] = loadedSettings.defaultTopP
@@ -203,9 +208,22 @@ public final class OllamaService: LLMProviderClient, Sendable {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (bytes, response) = try await session.bytes(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw NSError(domain: "OllamaService", code: 3, userInfo: [NSLocalizedDescriptionKey: "Ollama returned HTTP error status"])
+        let bytes: URLSession.AsyncBytes
+        do {
+            bytes = try await ProviderHTTP.open(
+                request, session: session, domain: "OllamaService", label: "Ollama",
+                detectToolsUnsupported: !tools.isEmpty
+            )
+        } catch let unsupported as ProviderToolsUnsupported {
+            // Ollama answers 400 "does not support tools" for a model without a tool template.
+            onChunk(LLMStreamChunk(deltaNotice: "\(model.name) does not support tool calling; continuing without native tools."))
+            _ = unsupported
+            try await streamChat(
+                provider: provider, model: model, systemPrompt: systemPrompt, messages: messages,
+                temperature: temperature, maxTokens: maxTokens, reasoningEffort: reasoningEffort,
+                tools: [], onChunk: onChunk
+            )
+            return
         }
 
         for try await line in bytes.lines {

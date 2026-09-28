@@ -485,7 +485,10 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             guard !path.trimmingCharacters(in: .whitespaces).isEmpty else {
                 return ToolExecutionResult(
                     success: false, output: "",
-                    error: "file_write requires a `path`. Nothing was written.",
+                    error: "file_write requires a `path`. Nothing was written. Each call is independent — "
+                        + "it does not remember the path or content from an earlier call this turn, so "
+                        + "resend both. For a small correction to a file already written, use edit_file "
+                        + "instead: it only needs the path and the exact text to replace.",
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                 )
             }
@@ -506,7 +509,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             default:
                 return ToolExecutionResult(
                     success: false, output: "",
-                    error: "file_write requires `content` (the full file text); none was given, so nothing was written and '\(path)' is unchanged. If the file is large, write it in smaller pieces or use edit_file for targeted changes.",
+                    error: "file_write requires `content` (the full file text); none was given, so nothing was written and '\(path)' is unchanged. This call does not remember content from an earlier call — resend the complete text. If the file is large, write it in smaller pieces, or use edit_file for a targeted change instead of a full rewrite.",
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                 )
             }

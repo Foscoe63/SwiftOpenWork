@@ -219,7 +219,7 @@ public enum MCPCatalogPromote: Sendable {
             displayName: "\(promoted.serverName): \(promoted.injectName)",
             description: String(description.prefix(400)),
             category: .mcp,
-            parametersJsonSchema: promoted.inputSchemaJson,
+            parametersJsonSchema: MCPSchemaShape.normalized(promoted.inputSchemaJson),
             isEnabled: true,
             requiresApproval: effect == .write
         )
@@ -230,36 +230,49 @@ public enum MCPCatalogPromote: Sendable {
         for promoted: MCPPromotedTool,
         raw: [String: Any]
     ) -> [String: Any] {
+        // A schema that declares nothing (the placeholder given to tools found only by name) says
+        // nothing about which parameters are structured, so it does not switch repair off.
+        let schema = MCPArgSchema(json: promoted.inputSchemaJson).flatMap { $0.isEmpty ? nil : $0 }
         // The model passes the catalog tool's own fields; nest them under `arguments`.
         var inner = raw
-        inner.removeValue(forKey: "name")
-        if let nested = raw["arguments"] as? [String: Any] {
+        // A stray `name` is the model restating which tool it means — unless the tool has a
+        // parameter of that name, in which case it is data and must reach the tool.
+        if schema?.declares("name") != true {
+            inner.removeValue(forKey: "name")
+        }
+        if let nested = raw["arguments"] as? [String: Any], schema?.declares("arguments") != true {
             inner = nested
         }
         return [
             "name": promoted.injectName,
-            "arguments": MCPToolArgumentDefaults.coerceJSONMaps(in: inner),
+            "arguments": MCPToolArgumentDefaults.coerceJSONMaps(in: inner, schema: schema),
         ]
     }
 }
 
-/// Turn-scoped registry of promoted tools, so the execution engine can resolve a direct call to
-/// the meta-tool that dispatches it.
+/// Registry of promoted tools, so the execution engine can resolve a direct call to the meta-tool
+/// that dispatches it.
+///
+/// Each run registers under its own owner and clears only what it registered. It used to be one
+/// shared map wiped at the start of every run, so a chat turn begun while a Loop was mid-turn
+/// erased the Loop's promoted tools and its next call failed as unknown.
 public actor MCPPromotedToolRegistry {
     public static let shared = MCPPromotedToolRegistry()
 
     private var promoted: [String: MCPPromotedTool] = [:]
+    private var owners: [String: Set<String>] = [:]
 
     private init() {}
 
-    /// Store newly harvested tools. Returns only the ones not already registered, so the caller
-    /// can announce them once.
+    /// Store newly harvested tools. Returns only the ones this owner has not registered before,
+    /// so the caller can announce them once.
     @discardableResult
-    public func register(_ tools: [MCPPromotedTool]) -> [MCPPromotedTool] {
+    public func register(_ tools: [MCPPromotedTool], owner: String = "") -> [MCPPromotedTool] {
         var newcomers: [MCPPromotedTool] = []
-        for tool in tools where promoted[tool.chatName] == nil {
-            guard promoted.count < MCPCatalogPromote.maxPromoted else { break }
+        for tool in tools where !(owners[tool.chatName]?.contains(owner) ?? false) {
+            guard promoted.count < MCPCatalogPromote.maxPromoted || promoted[tool.chatName] != nil else { break }
             promoted[tool.chatName] = tool
+            owners[tool.chatName, default: []].insert(owner)
             newcomers.append(tool)
         }
         return newcomers
@@ -269,11 +282,21 @@ public actor MCPPromotedToolRegistry {
         promoted[chatName]
     }
 
-    public func all() -> [MCPPromotedTool] {
-        promoted.values.sorted { $0.chatName < $1.chatName }
+    /// What `owner` registered (everything, for the default owner used by tests and old callers).
+    public func all(owner: String? = nil) -> [MCPPromotedTool] {
+        promoted.values
+            .filter { owner == nil || owners[$0.chatName]?.contains(owner!) == true }
+            .sorted { $0.chatName < $1.chatName }
     }
 
-    public func reset() {
-        promoted.removeAll()
+    /// Forget what `owner` registered; a tool another run also registered stays for that run.
+    public func reset(owner: String = "") {
+        for name in Array(owners.keys) {
+            owners[name]?.remove(owner)
+            if owners[name]?.isEmpty ?? true {
+                owners.removeValue(forKey: name)
+                promoted.removeValue(forKey: name)
+            }
+        }
     }
 }

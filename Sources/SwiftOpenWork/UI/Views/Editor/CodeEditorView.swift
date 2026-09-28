@@ -668,7 +668,7 @@ struct CodeEditorView: NSViewRepresentable {
         var appliedTheme: AppTheme?
         var appliedWrap: Bool?
         var seenExternalRevision = -1
-        private var highlightWork: DispatchWorkItem?
+        private var highlightTask: Task<Void, Never>?
         private var suggestionWork: DispatchWorkItem?
         private var suggestionTask: Task<Void, Never>?
         private var cachedWords: (revision: Int, documentId: UUID, words: [String])?
@@ -826,25 +826,32 @@ struct CodeEditorView: NSViewRepresentable {
 
         func scheduleHighlight(immediate: Bool = false) {
             guard let document else { return }
-            highlightWork?.cancel()
+            highlightTask?.cancel()
             let text = document.text
             let revision = document.textRevision
             let language = document.language
             let length = (text as NSString).length
-            let work = DispatchWorkItem { [weak self, weak document] in
-                let tokens = SyntaxHighlighter.tokens(in: text, language: language)
-                DispatchQueue.main.async {
-                    guard let self, let document, self.document === document,
-                          document.textRevision == revision else { return }
-                    document.tokens = tokens
-                    document.tokensRevision = revision
-                    self.applyTokens(force: true)
-                }
-            }
-            highlightWork = work
             // Short files recolour almost as you type; long ones wait for a pause.
             let delay: TimeInterval = immediate ? 0 : (length < 150_000 ? 0.05 : 0.3)
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + delay, execute: work)
+            highlightTask = Task { [weak self, weak document] in
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                }
+                guard !Task.isCancelled else { return }
+                // `SyntaxHighlighter.tokens` is nonisolated, pure computation — hop off the main
+                // actor for it explicitly. A plain `DispatchWorkItem` run on `DispatchQueue.global`
+                // used to be handed this work instead, but a closure written inside a `@MainActor`
+                // method is itself inferred `@MainActor`; running it on a background queue tripped
+                // Swift's runtime isolation check and crashed the app on every highlight pass.
+                let tokens = await Task.detached(priority: .userInitiated) {
+                    SyntaxHighlighter.tokens(in: text, language: language)
+                }.value
+                guard !Task.isCancelled, let self, let document, self.document === document,
+                      document.textRevision == revision else { return }
+                document.tokens = tokens
+                document.tokensRevision = revision
+                self.applyTokens(force: true)
+            }
         }
 
         func applyTokens(force: Bool) {

@@ -21,11 +21,16 @@ public enum MLXSessionReuse {
         public var instructions: String
         /// Tool names, sorted. A changed tool list changes the prompt the template renders.
         public var toolNames: [String]
+        /// Whether the template was asked to think. A session built with thinking on or off
+        /// bakes that into its first prefill; reusing it across a toggle flip would keep serving
+        /// the stale behavior even though the user just changed it.
+        public var thinkingEnabled: Bool
 
-        public init(modelId: String, instructions: String, toolNames: [String]) {
+        public init(modelId: String, instructions: String, toolNames: [String], thinkingEnabled: Bool) {
             self.modelId = modelId
             self.instructions = instructions
             self.toolNames = toolNames.sorted()
+            self.thinkingEnabled = thinkingEnabled
         }
     }
 

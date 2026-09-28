@@ -2133,14 +2133,35 @@ public struct SettingsView: View {
                             .textFieldStyle(.roundedBorder)
                         }
 
-                        Button("Fetch Models") {
-                            appState.refreshModels(for: prov)
+                        // Splash pins one model per process and only reports whichever one is
+                        // currently resident — there's no catalog endpoint to fetch a list from, so
+                        // this button never had a meaningful job for it (same reasoning as
+                        // ProvidersView's splashControls / Fetch Models omission).
+                        if prov.kind != .splash {
+                            Button("Fetch Models") {
+                                appState.refreshModels(for: prov)
+                            }
                         }
 
                         Button("Test") {
                             Task {
-                                let ok = (try? await ProviderRouter.shared.client(for: prov).testConnection(provider: prov)) ?? false
-                                appState.showToast(ok ? "\(prov.name): Connected!" : "\(prov.name): Failed")
+                                // Splash isn't a server the user starts themselves — it's a
+                                // subprocess SplashServerManager owns, so testing it means starting
+                                // it (or confirming it's already running), not just GETting its
+                                // base URL like every other provider. A plain testConnection()
+                                // always failed here because nothing was ever listening on the port.
+                                if prov.kind == .splash {
+                                    let modelId = prov.models.first(where: { $0.isDefault })?.id ?? prov.models.first?.id ?? ""
+                                    guard !modelId.isEmpty else {
+                                        appState.showToast("\(prov.name): Add a model before testing.")
+                                        return
+                                    }
+                                    let result = await SplashServerManager.shared.ensureRunning(modelId: modelId, baseUrl: prov.baseUrl, settings: appState.settings)
+                                    appState.showToast(result.success ? "\(prov.name): Connected!" : "\(prov.name): \(result.message)")
+                                } else {
+                                    let ok = (try? await ProviderRouter.shared.client(for: prov).testConnection(provider: prov)) ?? false
+                                    appState.showToast(ok ? "\(prov.name): Connected!" : "\(prov.name): Failed")
+                                }
                             }
                         }
 
