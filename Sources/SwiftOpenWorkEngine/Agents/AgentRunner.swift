@@ -878,11 +878,12 @@ public final class AgentRunner {
                 base: baseAgent.systemPrompt,
                 names: group.roster,
                 self: baseAgent.name,
-                role: group.role
+                role: group.role,
+                requestedBy: group.requestedBy
             )
             return speaker
         }()
-        // Discussion and re-plan turns talk; they do not act. See `GroupChat.Role`.
+        // A re-plan turn revises the agent's own notes; it does not act. See `GroupChat.Role`.
         let groupToolless = group.map { !$0.role.usesTools } ?? false
         // The chat composer's "Reasoning" pill overrides the agent's own configured effort for
         // this turn when set; nil (no override) preserves the agent's own setting.
@@ -953,7 +954,10 @@ public final class AgentRunner {
             servers: loadedSettings.mcpServers
         )
         let mcpTools: [Tool]
-        if casualChat || inventoryPrompt {
+        if groupToolless {
+            // This speaker gets no tools, so waiting on MCP servers to warm would only delay it.
+            mcpTools = []
+        } else if casualChat || inventoryPrompt {
             mcpTools = await MCPClientManager.shared.cachedMcpToolDefs()
             await MCPClientManager.shared.warmAllInBackground()
         } else if !preferMCP.isEmpty {
@@ -1142,7 +1146,7 @@ public final class AgentRunner {
             \(workspaceSection)
             \(instructionsSection)
 
-            No tools are available on this turn. Reply in prose only; do not write tool calls.
+            Reply in prose only, without tool calls. Do not comment on tools or say that you cannot run them.
             """
         } else {
             systemPromptWithTools = """

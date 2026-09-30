@@ -16,6 +16,18 @@ public enum AutoContinuePolicy {
     /// resumed turn cannot tell the two apart and the model gets the same instruction either way.
     public static let continuePrompt = "Continue from where you stopped. Do not repeat completed work."
 
+    /// The continue prompt, addressed to `agentSlug` in a group chat. Sent bare, a group would
+    /// treat it as a message to the whole room and every agent would answer it.
+    public static func continuePrompt(addressedTo agentSlug: String?) -> String {
+        guard let agentSlug, !agentSlug.isEmpty else { return continuePrompt }
+        return "@\(agentSlug) \(continuePrompt)"
+    }
+
+    /// Whether `text` is the continue prompt, bare or addressed to one agent.
+    public static func isContinuePrompt(_ text: String) -> Bool {
+        text == continuePrompt || (text.hasPrefix("@") && text.hasSuffix(" " + continuePrompt))
+    }
+
     /// `haltReason` is `ChatMessage.haltReason` on the turn's final assistant message: `"stopped"`
     /// when the user pressed Stop, `"round_cap"` when the autonomous round budget ran out, or nil
     /// when the turn ended on its own. `finalText` is that message's content. `pendingTodos` is

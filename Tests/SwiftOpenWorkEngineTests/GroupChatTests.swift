@@ -100,10 +100,10 @@ final class GroupChatTests: XCTestCase {
         XCTAssertEqual(plan.notice, "Coder is acting on this.")
     }
 
-    func testNoRoleExceptActUsesTools() {
-        XCTAssertFalse(GroupChat.Role.discuss.usesTools)
-        XCTAssertFalse(GroupChat.Role.replan.usesTools)
+    func testEveryoneCanUseToolsExceptAReplanner() {
+        XCTAssertTrue(GroupChat.Role.discuss.usesTools)
         XCTAssertTrue(GroupChat.Role.act.usesTools)
+        XCTAssertFalse(GroupChat.Role.replan.usesTools)
     }
 
     func testSweptAgentsReplanAndDoNotAct() {
@@ -142,6 +142,80 @@ final class GroupChatTests: XCTestCase {
         XCTAssertEqual(plan.speakers.count, 2)
     }
 
+    // MARK: - Handoffs
+
+    private func relay(_ text: String, followUp: Bool = false) -> GroupChat.Relay {
+        let plan = GroupChat.plan(text: text, participants: room, followUp: followUp)
+        return GroupChat.Relay(speakers: plan.speakers, excluded: plan.excluded, participants: room)
+    }
+
+    func testAnActingAgentCanHandWorkToATeammateWithTools() {
+        var r = relay("@coder build the API")
+        let first = r.next()
+        XCTAssertEqual(first?.speaker, GroupChat.Speaker(id: "coder", role: .act))
+        XCTAssertNil(first?.requestedBy)
+        XCTAssertEqual(r.didSpeak(first!.speaker, reply: "Done. @Reviewer please check the API shape."), ["reviewer"])
+        let second = r.next()
+        XCTAssertEqual(second?.speaker, GroupChat.Speaker(id: "reviewer", role: .act))
+        XCTAssertEqual(second?.requestedBy, "coder")
+        XCTAssertNil(r.next())
+    }
+
+    func testOnlyActingAgentsHandOff() {
+        var r = relay("what do you all think?")
+        let first = r.next()!
+        XCTAssertEqual(first.speaker.role, .discuss)
+        XCTAssertTrue(r.didSpeak(first.speaker, reply: "@Marketing should weigh in").isEmpty)
+        // Marketing still speaks once, as a discussion turn, not as an actor.
+        var roles: [GroupChat.Role] = []
+        while let n = r.next() { roles.append(n.speaker.role) }
+        XCTAssertEqual(roles, [.discuss, .discuss, .discuss])
+    }
+
+    func testAgentsCannotHandBackToWhoAlreadySpokeOrToThemselves() {
+        var r = relay("@coder go")
+        let coderTurn = r.next()!
+        XCTAssertEqual(r.didSpeak(coderTurn.speaker, reply: "@Coder and @Reviewer"), ["reviewer"])
+        let reviewerTurn = r.next()!
+        // Reviewer mentioning Coder (already spoke) or itself hands off nothing: no ping-pong.
+        XCTAssertTrue(r.didSpeak(reviewerTurn.speaker, reply: "@Coder fix it, cc @Reviewer").isEmpty)
+        XCTAssertNil(r.next())
+    }
+
+    func testHandoffsAreCappedPerMessage() {
+        let many = (1...6).map { GroupChat.Participant(id: "a\($0)", name: "A\($0)") }
+        var r = GroupChat.Relay(speakers: [GroupChat.Speaker(id: "a1", role: .act)], excluded: [], participants: many)
+        let first = r.next()!
+        let added = r.didSpeak(first.speaker, reply: "@a2 @a3 @a4 @a5 @a6")
+        XCTAssertEqual(added.count, GroupChat.Relay.maxHandoffs)
+        var spoke = 0
+        while r.next() != nil { spoke += 1 }
+        XCTAssertEqual(spoke, GroupChat.Relay.maxHandoffs)
+    }
+
+    func testAnExcludedAgentIsNeverHandedAnything() {
+        var r = relay("@coder go !@reviewer")
+        let first = r.next()!
+        XCTAssertTrue(r.didSpeak(first.speaker, reply: "@Reviewer look").isEmpty)
+        XCTAssertNil(r.next())
+    }
+
+    func testAQueuedReplannerIsPromotedRatherThanSpeakingTwice() {
+        var r = relay("@coder go @others adjust")
+        let first = r.next()!
+        XCTAssertEqual(r.didSpeak(first.speaker, reply: "@Devops needs to act"), ["devops"])
+        var order: [(String, GroupChat.Role)] = []
+        while let n = r.next() { order.append((n.speaker.id, n.speaker.role)) }
+        XCTAssertEqual(order.map(\.0), ["devops", "reviewer", "marketing"])
+        XCTAssertEqual(order.map(\.1), [.act, .replan, .replan])
+    }
+
+    func testHandedOverPersonaNamesWhoAskedAndKeepsTools() {
+        let text = GroupChat.persona(base: "", names: ["Coder", "Reviewer"], self: "Reviewer", role: .act, requestedBy: "Coder")
+        XCTAssertTrue(text.contains("Coder mentioned you"))
+        XCTAssertTrue(text.contains("with your tools"))
+    }
+
     // MARK: - Persona
 
     func testActingPersonaSaysDoTheWorkAndNamesTheListeners() {
@@ -157,9 +231,17 @@ final class GroupChatTests: XCTestCase {
         XCTAssertFalse(text.contains("Do the work yourself"))
     }
 
-    func testDiscussPersonaTellsTheAgentItHasNoTools() {
+    func testRoundTablePersonaDoesNotClaimThereAreNoTools() {
         let text = GroupChat.persona(base: "", names: ["A", "B"], self: "A", role: .discuss)
-        XCTAssertTrue(text.contains("no tools this turn"))
+        XCTAssertFalse(text.lowercased().contains("no tools"))
+        XCTAssertTrue(text.contains("you can use your tools"))
+        XCTAssertTrue(text.contains("do not redo their work"))
+    }
+
+    func testReplanPersonaTellsTheAgentNotToTalkAboutTools() {
+        let text = GroupChat.persona(base: "", names: ["A", "B"], self: "B", role: .replan)
+        XCTAssertFalse(text.lowercased().contains("no tools"))
+        XCTAssertTrue(text.contains("do not comment on tools"))
     }
 
     // MARK: - History
@@ -172,9 +254,10 @@ final class GroupChatTests: XCTestCase {
             ChatMessage(role: .assistant, content: "Looks fine.", agentId: "reviewer", agentName: "Reviewer")
         ]
         let seenByReviewer = GroupChat.flatten(messages, speakerId: "reviewer", names: names)
-        XCTAssertEqual(seenByReviewer.map(\.role), [.user, .user, .assistant])
-        XCTAssertEqual(seenByReviewer[1].content, "[Coder]: Use Go.")
-        XCTAssertEqual(seenByReviewer[2].content, "Looks fine.")
+        // The user's message and Coder's tagged reply are one user turn; Reviewer's own reply follows.
+        XCTAssertEqual(seenByReviewer.map(\.role), [.user, .assistant])
+        XCTAssertEqual(seenByReviewer[0].content, "plan it\n\n[Coder]: Use Go.")
+        XCTAssertEqual(seenByReviewer[1].content, "Looks fine.")
     }
 
     func testFlattenDropsOtherAgentsToolCallsAndEmptyOrFailedReplies() {
@@ -186,6 +269,37 @@ final class GroupChatTests: XCTestCase {
         let out = GroupChat.flatten([toolOnly, failed, ok], speakerId: "reviewer", names: names)
         XCTAssertEqual(out.map(\.content), ["[Coder]: done"])
         XCTAssertTrue(out[0].toolCalls.isEmpty)
+    }
+
+    func testFlattenMergesRunsOfUserTurnsSoRolesAlternate() {
+        let names = ["coder": "Coder", "reviewer": "Reviewer"]
+        let messages = [
+            ChatMessage(role: .user, content: "plan it"),
+            ChatMessage(role: .assistant, content: "Use Go.", agentId: "coder"),
+            ChatMessage(role: .assistant, content: "Fine.", agentId: "reviewer"),
+            ChatMessage(role: .user, content: "ok, go on")
+        ]
+        let out = GroupChat.flatten(messages, speakerId: "coder", names: names)
+        XCTAssertEqual(out.map(\.role), [.user, .assistant, .user])
+        XCTAssertEqual(out[0].content, "plan it")
+        XCTAssertEqual(out[2].content, "[Reviewer]: Fine.\n\nok, go on")
+
+        let forReviewer = GroupChat.flatten(messages, speakerId: "reviewer", names: names)
+        XCTAssertEqual(forReviewer.map(\.role), [.user, .assistant, .user])
+        XCTAssertEqual(forReviewer[0].content, "plan it\n\n[Coder]: Use Go.")
+    }
+
+    func testContinueInAGroupIsAddressedToOneAgent() {
+        XCTAssertEqual(AutoContinuePolicy.continuePrompt(addressedTo: nil), AutoContinuePolicy.continuePrompt)
+        let addressed = AutoContinuePolicy.continuePrompt(addressedTo: "coder")
+        XCTAssertTrue(addressed.hasPrefix("@coder "))
+        XCTAssertTrue(AutoContinuePolicy.isContinuePrompt(addressed))
+        XCTAssertTrue(AutoContinuePolicy.isContinuePrompt(AutoContinuePolicy.continuePrompt))
+        XCTAssertFalse(AutoContinuePolicy.isContinuePrompt("@coder please continue the migration"))
+        // ...and it really does pick only that agent.
+        let room = [GroupChat.Participant(id: "coder", name: "Coder"), GroupChat.Participant(id: "reviewer", name: "Reviewer")]
+        let plan = GroupChat.plan(text: addressed, participants: room, followUp: false)
+        XCTAssertEqual(plan.speakers, [GroupChat.Speaker(id: "coder", role: .act)])
     }
 
     func testFlattenLeavesUnattributedAssistantMessagesAlone() {

@@ -116,7 +116,7 @@ struct GroupPickerView: View {
             }
             .frame(maxHeight: 260)
 
-            Text("Name an agent to have just that one act: \u{201C}@coder, plan the stack\u{201D}. Without a name, everyone answers in prose and nobody touches your files.")
+            Text("Everyone takes a turn, in order, and can see what the others did. Name an agent to have just that one act: \u{201C}@coder, plan the stack\u{201D}.")
                 .font(.system(size: 10.5))
                 .foregroundColor(ThemeColors.textSecondary(for: theme))
                 .multilineTextAlignment(.center)

@@ -646,7 +646,7 @@ public struct ComposerView: View {
                     .background(ThemeColors.cardBg(for: appState.settings.theme))
                     .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
                     .cornerRadius(6)
-                    .help("Address one agent with @name to have it act; without a name everyone answers in prose.")
+                    .help("Address one agent with @name to have just that agent act; without a name everyone takes a turn.")
                 } else {
                 // Agent Picker Pill
                 Menu {

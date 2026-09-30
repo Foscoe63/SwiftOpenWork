@@ -996,7 +996,7 @@ public final class AppState: ObservableObject {
         // Anything the user actually chose to send resets the auto-continue chain — only a run
         // of turns this method itself generated (the exact auto-continue prompt, sent because
         // nothing else did) should ever count against the cap.
-        if trimmed != AutoContinuePolicy.continuePrompt {
+        if !AutoContinuePolicy.isContinuePrompt(trimmed) {
             autoContinueChainCounts[session.id] = 0
         }
 
@@ -1070,13 +1070,23 @@ public final class AppState: ObservableObject {
         let allAgentsList = agents
         // One agent for an ordinary chat; in a group, one step per speaker, in the order the
         // message addressed them. See `GroupChat.plan`.
-        let steps = turnSteps(for: session, userText: trimmed)
+        let plan = turnPlan(for: session, userText: trimmed)
 
         currentExecutionTask?.cancel()
         currentExecutionTask = Task { [weak self] in
-            // Speakers run one after another: each reads what the last one said.
-            for (stepIndex, step) in steps.enumerated() {
-                if stepIndex > 0, Task.isCancelled { break }
+            // Speakers run one after another: each reads what the last one said. The queue can grow
+            // mid-turn: an agent the user named may hand part of the work to a teammate by
+            // @mentioning them (see `GroupChat.Relay` for the limits).
+            var relay = plan.relay
+            var upcoming: (step: TurnStep, speaker: GroupChat.Speaker?)? = plan.solo.map { ($0, nil) }
+            if upcoming == nil, let first = relay?.next(),
+               let step = plan.stager?.step(first.speaker, requestedBy: first.requestedBy, notice: plan.notice, startsTurn: true) {
+                upcoming = (step, first.speaker)
+            }
+            var stepIndex = 0
+            while let current = upcoming {
+                let step = current.step
+                upcoming = nil
                 let stepSession = stepIndex == 0
                     ? session
                     : (self?.sessions.first(where: { $0.id == session.id }) ?? session)
@@ -1145,6 +1155,21 @@ public final class AppState: ObservableObject {
                     },
                     group: step.group
                 )
+
+                // Did this agent ask a teammate to take something on?
+                guard let speaker = current.speaker, !Task.isCancelled else { break }
+                if let reply = self?.sessions.first(where: { $0.id == session.id })?.messages
+                    .last(where: { $0.role == .assistant && $0.agentId == step.agent.id }),
+                   !reply.isError {
+                    relay?.didSpeak(speaker, reply: reply.content)
+                }
+                stepIndex += 1
+                while let next = relay?.next() {
+                    if let step = plan.stager?.step(next.speaker, requestedBy: next.requestedBy, notice: nil, startsTurn: false) {
+                        upcoming = (step, next.speaker)
+                        break
+                    }
+                }
             }
 
             // Seal the turn's baseline before anything can call beginTurn again. The in-memory
@@ -1187,35 +1212,63 @@ public final class AppState: ObservableObject {
         isReasoningEnabled ? (agent.reasoningEffort == .off ? .medium : agent.reasoningEffort) : .off
     }
 
-    /// The agents that answer `userText`, in order.
-    ///
-    /// An ordinary chat is a single step with the selected agent. A group chat asks
-    /// `GroupChat.plan` who was addressed; `text` is what the user typed, not the file-enriched
-    /// version the model sees, so a mention inside an attached file cannot pick a speaker.
-    func turnSteps(for session: Session, userText: String) -> [TurnStep] {
+    /// Builds `TurnStep`s for the agents of one group chat.
+    struct GroupStager: Sendable {
+        var room: [Agent]
+        var names: [String: String]
+        var roster: [String]
+        var reasoning: [String: ReasoningEffort]
+
+        func step(_ speaker: GroupChat.Speaker, requestedBy: String?, notice: String?, startsTurn: Bool) -> TurnStep? {
+            guard let agent = room.first(where: { $0.id == speaker.id }) else { return nil }
+            let requester = requestedBy.flatMap { names[$0] }
+            return TurnStep(
+                agent: agent,
+                group: GroupChat.Turn(
+                    names: names,
+                    roster: roster,
+                    role: speaker.role,
+                    notice: notice ?? requester.map { "\($0) asked \(agent.name) to take this." },
+                    startsTurn: startsTurn,
+                    requestedBy: requester
+                ),
+                reasoning: reasoning[agent.id] ?? .off
+            )
+        }
+    }
+
+    /// Who answers one user message: a single agent for an ordinary chat, or a group's opening
+    /// speakers plus the queue that handoffs can add to.
+    struct TurnPlan: Sendable {
+        var solo: TurnStep?
+        var stager: GroupStager?
+        var relay: GroupChat.Relay?
+        /// Says who is acting, on the first speaker's bubble.
+        var notice: String?
+    }
+
+    /// `userText` is what the user typed, not the file-enriched version the model sees, so a
+    /// mention inside an attached file cannot pick a speaker.
+    func turnPlan(for session: Session, userText: String) -> TurnPlan {
         let room = participants(of: session)
         guard session.isGroup, room.count >= 2 else {
             let solo = currentAgent
-            return [TurnStep(agent: solo, group: nil, reasoning: reasoningOverride(for: solo))]
+            return TurnPlan(solo: TurnStep(agent: solo, group: nil, reasoning: reasoningOverride(for: solo)))
         }
 
         let people = room.map { GroupChat.Participant(id: $0.id, name: $0.name) }
         let names = Dictionary(people.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         let plan = GroupChat.plan(text: userText, participants: people, followUp: session.groupFollowUp)
-        return plan.speakers.enumerated().compactMap { index, speaker in
-            guard let agent = room.first(where: { $0.id == speaker.id }) else { return nil }
-            return TurnStep(
-                agent: agent,
-                group: GroupChat.Turn(
-                    names: names,
-                    roster: room.map(\.name),
-                    role: speaker.role,
-                    notice: index == 0 ? plan.notice : nil,
-                    startsTurn: index == 0
-                ),
-                reasoning: reasoningOverride(for: agent)
-            )
-        }
+        return TurnPlan(
+            stager: GroupStager(
+                room: room,
+                names: names,
+                roster: room.map(\.name),
+                reasoning: Dictionary(room.map { ($0.id, reasoningOverride(for: $0)) }, uniquingKeysWith: { first, _ in first })
+            ),
+            relay: GroupChat.Relay(speakers: plan.speakers, excluded: plan.excluded, participants: people),
+            notice: plan.notice
+        )
     }
 
     /// Send another Continue on the model's behalf when a turn ended without finishing and
@@ -1241,7 +1294,7 @@ public final class AppState: ObservableObject {
             return
         }
         autoContinueChainCounts[sessionId] = count + 1
-        sendMessage(text: AutoContinuePolicy.continuePrompt)
+        sendMessage(text: continuePrompt(for: session))
     }
 
 
@@ -1282,7 +1335,17 @@ public final class AppState: ObservableObject {
     }
 
     public func continueAfterHalt() {
-        sendMessage(text: AutoContinuePolicy.continuePrompt)
+        sendMessage(text: currentSession.map { continuePrompt(for: $0) } ?? AutoContinuePolicy.continuePrompt)
+    }
+
+    /// In a group chat, Continue goes to the agent that stopped, not to the whole room.
+    private func continuePrompt(for session: Session) -> String {
+        guard session.isGroup,
+              let id = session.messages.last(where: { $0.role == .assistant })?.agentId,
+              let agent = participants(of: session).first(where: { $0.id == id }) else {
+            return AutoContinuePolicy.continuePrompt
+        }
+        return AutoContinuePolicy.continuePrompt(addressedTo: GroupChat.slugName(agent.name))
     }
 
     /// Jump to a `file:line` from a build or test failure.

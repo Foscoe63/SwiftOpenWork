@@ -383,7 +383,7 @@ public struct ChatView: View {
         let workspace = appState.currentWorkspace.name
         if let session = appState.currentSession, session.isGroup {
             let names = appState.participants(of: session).map(\.name).joined(separator: ", ")
-            return "Group chat with \(names) in \(workspace)\nName one with @ to have it act; otherwise everyone answers in prose."
+            return "Group chat with \(names) in \(workspace)\nEveryone takes a turn; name one with @ to have just that agent act."
         }
         return starterKind == .empty
             ? "What should we build in \(workspace)?"
