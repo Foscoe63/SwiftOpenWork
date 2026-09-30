@@ -11,6 +11,18 @@ final class RadiantAgentsTests: XCTestCase {
         XCTAssertFalse(RadiantBuiltInAgents.addMissing(to: &agents), "second run changes nothing")
     }
 
+    func testNewAgentsJoinTheLeadsTeamOnceOnly() {
+        var agents = [Agent(id: "lead-assistant", name: "Lead", subAgentIds: ["coder-agent"], isBuiltIn: true, isLeadAgent: true)]
+        RadiantBuiltInAgents.addMissing(to: &agents)
+        let newIds = RadiantBuiltInAgents.agents.map(\.id)
+        XCTAssertEqual(agents[0].subAgentIds, ["coder-agent"] + newIds)
+        XCTAssertTrue(RadiantBuiltInAgents.agents.allSatisfy { $0.parentAgentId == "lead-assistant" })
+
+        agents[0].subAgentIds.removeAll { $0 == "docs-agent" }
+        RadiantBuiltInAgents.addMissing(to: &agents)
+        XCTAssertFalse(agents[0].subAgentIds.contains("docs-agent"), "a member the user removed is not re-added")
+    }
+
     func testBuiltInsHaveUniqueIdsPromptsAndRealTools() {
         let agents = RadiantBuiltInAgents.agents
         XCTAssertEqual(agents.count, 9)
