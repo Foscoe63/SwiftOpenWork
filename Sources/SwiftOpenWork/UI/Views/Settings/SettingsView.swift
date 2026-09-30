@@ -2476,7 +2476,8 @@ public struct SettingsView: View {
         return SettingsCard(
             title: "Project Skills (\(projectSkills.count))",
             description: "Skills stored inside '\(workspace.name)' and loaded only while it is the active workspace. Edited on disk, versioned with the project.",
-            icon: "folder.badge.gearshape"
+            icon: "folder.badge.gearshape",
+            collapseKey: "projectSkills"
         ) {
             HStack(spacing: 8) {
                 Text(folder)
@@ -2612,7 +2613,8 @@ public struct SettingsView: View {
             SettingsCard(
                 title: "Agent Skills (\(appState.skills.count))",
                 description: "Modular instructions and domain knowledge that enhance agent autonomy",
-                icon: "sparkles"
+                icon: "sparkles",
+                collapseKey: "agentSkills"
             ) {
                 // Actions & Filter Bar
                 HStack(spacing: 10) {
@@ -2820,7 +2822,8 @@ public struct SettingsView: View {
             SettingsCard(
                 title: "Model Context Protocol (MCP) Servers (\(appState.settings.mcpServers.count))",
                 description: "Extend autonomous agents with stdio processes, remote HTTP/SSE gateways, and WebSocket tools. Enable only servers you trust — cold starts no longer block chat.",
-                icon: "network"
+                icon: "network",
+                collapseKey: "mcp"
             ) {
                 HStack {
                     Text("Configured MCP Servers")

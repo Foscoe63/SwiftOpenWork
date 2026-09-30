@@ -21,6 +21,23 @@ public actor MCPSDKSession {
         process?.isRunning == true && client != nil
     }
 
+    /// A bare `python3` has none of the server's dependencies. When the script sits in a project
+    /// with its own `venv`/`.venv`, run it with that interpreter instead.
+    static func preferProjectInterpreter(_ resolved: String, command: String, args: [String]) -> String {
+        let name = (command as NSString).lastPathComponent
+        guard name.hasPrefix("python"),
+              let script = args.first(where: { $0.hasSuffix(".py") && $0.hasPrefix("/") }) else { return resolved }
+        var dir = (script as NSString).deletingLastPathComponent
+        for _ in 0..<3 where dir.count > 1 {
+            for venv in ["venv", ".venv"] {
+                let py = "\(dir)/\(venv)/bin/python"
+                if FileManager.default.isExecutableFile(atPath: py) { return py }
+            }
+            dir = (dir as NSString).deletingLastPathComponent
+        }
+        return resolved
+    }
+
     @discardableResult
     public func start() async throws -> [MCPToolDefinition] {
         if isRunning, let client {
@@ -32,7 +49,8 @@ public actor MCPSDKSession {
         let process = Process()
         let inPipe = Pipe()
         let outPipe = Pipe()
-        process.standardError = FileHandle.nullDevice
+        let errPipe = Pipe()
+        process.standardError = errPipe
 
         let env = ToolExecutionEngine.defaultEnvironment(custom: config.env)
         let launchArgs = MCPClientManager.sanitizedStdioArgs(
@@ -40,7 +58,11 @@ public actor MCPSDKSession {
             name: config.name,
             args: config.args
         )
-        let resolved = MCPClientManager.resolveExecutable(config.command, environment: env)
+        let resolved = Self.preferProjectInterpreter(
+            MCPClientManager.resolveExecutable(config.command, environment: env),
+            command: config.command,
+            args: launchArgs
+        )
         if resolved.hasPrefix("/") {
             process.executableURL = URL(fileURLWithPath: resolved)
             process.arguments = launchArgs
@@ -60,8 +82,14 @@ public actor MCPSDKSession {
         try await Task.sleep(nanoseconds: 120_000_000)
         guard process.isRunning else {
             MCPProcessRegistry.unregister(process.processIdentifier)
-            throw MCPSDKError.processExited("MCP '\(config.name)' exited immediately after launch.")
+            let stderr = String(decoding: errPipe.fileHandleForReading.availableData.suffix(600), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let detail = stderr.isEmpty ? "" : " stderr: \(stderr)"
+            throw MCPSDKError.processExited("MCP '\(config.name)' exited immediately after launch.\(detail)")
         }
+
+        // Keep draining stderr so a chatty server can never block on a full pipe.
+        errPipe.fileHandleForReading.readabilityHandler = { $0.availableData }
 
         // Retain process before connect so stop() can kill a hung handshake.
         self.process = process

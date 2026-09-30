@@ -5,19 +5,28 @@ public struct SettingsCard<Content: View>: View {
     let title: String?
     let description: String?
     let icon: String?
+    let collapseKey: String?
     let content: Content
+    @State private var isCollapsed: Bool
 
+    /// Pass `collapseKey` to make the card collapsible; the state is remembered per key.
     public init(
         title: String? = nil,
         description: String? = nil,
         icon: String? = nil,
+        collapseKey: String? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
         self.description = description
         self.icon = icon
+        self.collapseKey = collapseKey
         self.content = content()
+        let stored = collapseKey.map { UserDefaults.standard.bool(forKey: "settings.collapsed.\($0)") } ?? false
+        _isCollapsed = State(initialValue: stored)
     }
+
+    private var collapsed: Bool { collapseKey != nil && isCollapsed }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -42,13 +51,30 @@ public struct SettingsCard<Content: View>: View {
                         }
                     }
                     Spacer()
+                    if collapseKey != nil {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(ThemeColors.textSecondary(for: AppState.shared.settings.theme))
+                            .rotationEffect(.degrees(isCollapsed ? -90 : 0))
+                            .accessibilityLabel(isCollapsed ? "Expand" : "Collapse")
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard let key = collapseKey else { return }
+                    withAnimation(.easeInOut(duration: 0.18)) { isCollapsed.toggle() }
+                    UserDefaults.standard.set(isCollapsed, forKey: "settings.collapsed.\(key)")
                 }
 
-                Divider()
-                    .background(ThemeColors.border(for: AppState.shared.settings.theme))
+                if !collapsed {
+                    Divider()
+                        .background(ThemeColors.border(for: AppState.shared.settings.theme))
+                }
             }
 
-            content
+            if !collapsed {
+                content
+            }
         }
         .padding(16)
         .background(ThemeColors.cardBg(for: AppState.shared.settings.theme))
