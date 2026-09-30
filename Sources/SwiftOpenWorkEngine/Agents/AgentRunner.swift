@@ -1533,6 +1533,42 @@ public final class AgentRunner {
             var stopToolLoop = false
             let toolQueue = pendingCallsToExecute
             var queueIndex = 0
+            // Start the leading run of read-only calls together. Each still passes through every
+            // guard below in order (approval, repeat breakers, unchanged-read notes) and only its
+            // execution is taken from here, so the bookkeeping is the same as a serial run. The run
+            // ends at the first call that is not read-only: later reads may depend on its effect.
+            var prefetched: [String: Task<ToolExecutionResult, Never>] = [:]
+            let leadingReads = toolQueue.prefix { call in
+                Self.isParallelSafe(call.tool)
+                    && !disabledToolNames.contains(Self.canonicalToolName(call.tool))
+                    && Self.approvalReason(
+                        toolName: call.tool,
+                        argumentsJson: Self.sanitizeToolArgumentsJson(toolName: call.tool, argumentsJson: call.args),
+                        settings: loadedSettings,
+                        sessionId: session.id,
+                        workspaceRoot: workspace.folderPath
+                    ) == nil
+            }
+            if leadingReads.count > 1 {
+                let frame = AgentRunContext.Frame(provider: provider, model: model, depth: 0, sessionId: session.id)
+                for call in leadingReads {
+                    let args = Self.sanitizeToolArgumentsJson(toolName: call.tool, argumentsJson: call.args)
+                    let name = call.tool
+                    let id = call.id
+                    prefetched[id] = Task {
+                        await AgentRunContext.$current.withValue(frame) {
+                            await ToolExecutionEngine.shared.execute(
+                                toolName: name,
+                                argumentsJson: args,
+                                workspace: workspace,
+                                currentAgent: agent,
+                                callId: id
+                            )
+                        }
+                    }
+                }
+            }
+            defer { prefetched.values.forEach { $0.cancel() } }
             while queueIndex < toolQueue.count {
                 let callId = toolQueue[queueIndex].id
                 let toolName = toolQueue[queueIndex].tool
@@ -1757,14 +1793,19 @@ public final class AgentRunner {
                         accumulator.appendNotice("Blocked a repeated failing call to \(toolName).")
                     } else {
                         let runFrame = AgentRunContext.Frame(provider: provider, model: model, depth: 0, sessionId: session.id)
-                        let result = await AgentRunContext.$current.withValue(runFrame) {
-                            await ToolExecutionEngine.shared.execute(
-                                toolName: toolName,
-                                argumentsJson: argsJson,
-                                workspace: workspace,
-                                currentAgent: agent,
-                                callId: callInfo.id
-                            )
+                        let result: ToolExecutionResult
+                        if let early = prefetched.removeValue(forKey: callId) {
+                            result = await early.value
+                        } else {
+                            result = await AgentRunContext.$current.withValue(runFrame) {
+                                await ToolExecutionEngine.shared.execute(
+                                    toolName: toolName,
+                                    argumentsJson: argsJson,
+                                    workspace: workspace,
+                                    currentAgent: agent,
+                                    callId: callInfo.id
+                                )
+                            }
                         }
                         resultSuccess = result.success
                         resultOutput = Self.describeToolResult(result)
@@ -2119,6 +2160,20 @@ public final class AgentRunner {
     }
 
     /// Tools whose success changes the workspace, and so makes an earlier identical call new again.
+    /// Built-in tools that only read: no file, process or network effect, and no dependence on the
+    /// order they run in. A model that asks for five `file_read`s in one step gets them concurrently
+    /// instead of one after another. Conservative on purpose — anything not listed runs in order.
+    public nonisolated static func isParallelSafe(_ toolName: String) -> Bool {
+        guard let canonical = ToolCallRepair.builtInCanonical(toolName) else { return false }
+        switch canonical {
+        case "file_read", "file_list", "glob", "grep", "find_symbol", "workspace_semantic_search",
+             "git_status", "git_diff", "git_log", "changed_files", "get_current_date", "calculator":
+            return true
+        default:
+            return false
+        }
+    }
+
     public nonisolated static func changesFiles(_ toolName: String) -> Bool {
         switch canonicalToolName(toolName) {
         case "file_write", "edit_file", "multi_edit", "file_delete", "file_move", "file_copy",
