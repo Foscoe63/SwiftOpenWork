@@ -5,6 +5,10 @@ import SwiftOpenWorkEngine
 public struct AgentsView: View {
     @ObservedObject var appState: AppState
     @State private var showingAddAgent = false
+    @State private var showingTemplates = false
+    /// Set by the template picker; opened in the editor once the picker has finished dismissing,
+    /// since one sheet cannot present another while it is still on screen.
+    @State private var pendingTemplateAgent: Agent? = nil
     @State private var editingAgent: Agent? = nil
     @State private var selectedTab: String = "list" // list, collaboration
 
@@ -56,6 +60,21 @@ public struct AgentsView: View {
                 reasoningEffort: appState.settings.defaultReasoningEffort
             ))
         }
+        .sheet(isPresented: $showingTemplates, onDismiss: {
+            if let agent = pendingTemplateAgent {
+                pendingTemplateAgent = nil
+                editingAgent = agent
+            }
+        }) {
+            AgentTemplatePicker(theme: appState.settings.theme, accent: appState.settings.accentColor) { template in
+                pendingTemplateAgent = template.makeAgent(
+                    temperature: appState.settings.defaultTemperature,
+                    maxTokens: appState.settings.defaultMaxTokens,
+                    reasoningEffort: appState.settings.defaultReasoningEffort
+                )
+                showingTemplates = false
+            }
+        }
         .sheet(item: $editingAgent) { agent in
             agentEditModal(agent: agent)
         }
@@ -74,6 +93,14 @@ public struct AgentsView: View {
             }
 
             Spacer()
+
+            Button {
+                showingTemplates = true
+            } label: {
+                Label("From Template", systemImage: "square.grid.2x2")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.bordered)
 
             Button {
                 showingAddAgent = true

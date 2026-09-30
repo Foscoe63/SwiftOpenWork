@@ -501,11 +501,16 @@ public final class PersistenceManager: Sendable {
             items = loaded
         } else {
             items = defaultAgents
+            RadiantBuiltInAgents.addMissing(to: &items)
             saveAgents(items)
             return items
         }
 
         var modified = false
+
+        // Specialists carried over from Radiant, added by id so existing installs get them once
+        // and a user's own agents are never touched.
+        if RadiantBuiltInAgents.addMissing(to: &items) { modified = true }
 
         // Retire the legacy per-agent tool allowlist.
         //
