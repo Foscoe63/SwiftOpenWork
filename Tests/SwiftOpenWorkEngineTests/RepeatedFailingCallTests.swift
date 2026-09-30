@@ -90,3 +90,22 @@ final class LoopBreakerWatchesReasoningTests: XCTestCase {
         XCTAssertNotNil(chunk.deltaReasoning)
     }
 }
+
+/// A missing path retried with a different offset or limit is one dead end, not new attempts.
+final class MissingPathRepeatTests: XCTestCase {
+    func testOffsetAndLimitDoNotChangeTheMissingPathKey() {
+        let a = AgentRunner.missingPathKey("file_read", #"{"path":"/w/CleanUpEngine.swift","offset":"170.0","limit":"50.0"}"#, workspaceRoot: "/w")
+        let b = AgentRunner.missingPathKey("read_file", #"{"limit":50,"path":"/w/CleanUpEngine.swift","offset":137}"#, workspaceRoot: "/w")
+        XCTAssertNotNil(a)
+        XCTAssertEqual(a, b)
+        XCTAssertNil(AgentRunner.missingPathKey("build_project", "{}", workspaceRoot: "/w"))
+    }
+
+    func testHintKeepsTheSuggestion() {
+        let text = "Error: no such file.\nDid you mean: `MacClean/Services/CleanupEngine.swift`?"
+        XCTAssertEqual(AgentRunner.didYouMeanHint(in: text), "Did you mean: `MacClean/Services/CleanupEngine.swift`?")
+        XCTAssertTrue(AgentRunner.didYouMeanHint(in: "does not exist").contains("glob"))
+        XCTAssertTrue(AgentRunner.isMissingPathFailure("The file does not exist."))
+        XCTAssertFalse(AgentRunner.isMissingPathFailure("permission denied"))
+    }
+}

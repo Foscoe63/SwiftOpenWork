@@ -1120,6 +1120,9 @@ public final class AgentRunner {
         var warnedMcpStall = false
         /// Consecutive failures per (tool, arguments) pair, for `identicalFailureLimit`.
         var repeatedFailures: [String: Int] = [:]
+        /// Failures on a path that does not exist, by (tool, path) — arguments other than the path
+        /// ignored — with the last error text so a block can repeat its "Did you mean" hint.
+        var missingPathFailures: [String: (count: Int, hint: String)] = [:]
         /// Successful file reads this turn, by call signature, for `unchangedReadNote`.
         var readLog: [String: RecordedRead] = [:]
         var mcpDisabledThisTurn = false
@@ -1711,6 +1714,24 @@ public final class AgentRunner {
                     ) {
                         resultOutput = note
                         accumulator.appendNotice("Skipped re-reading an unchanged file.")
+                    } else if let missing = Self.missingPathKey(toolName, argsJson, workspaceRoot: workspace.folderPath),
+                              let prior = missingPathFailures[missing],
+                              prior.count >= Self.identicalFailureLimit {
+                        // The same nonexistent path with a different offset or limit is not a new
+                        // attempt. Observed: twelve `file_read` calls on one misspelled path, each
+                        // varying `offset`, so the identical-call check never matched — while the
+                        // error text named the right file every time.
+                        resultSuccess = false
+                        resultError = "repeated identical call"
+                        resultOutput = """
+                        Error: that path does not exist, and it has already failed \(prior.count) times \
+                        this turn (changing offset or limit does not help). It was not run again.
+
+                        \(prior.hint)
+
+                        Use the corrected path from the hint above, or `glob` to find the file.
+                        """
+                        accumulator.appendNotice("Blocked a repeated call on a missing path (\(toolName)).")
                     } else if let priorFailures = repeatedFailures[Self.callSignature(toolName, argsJson)],
                               priorFailures >= Self.identicalFailureLimit {
                         // Refuse to run a call that has already failed identically.
@@ -1833,6 +1854,7 @@ public final class AgentRunner {
                 if resultSuccess, Self.changesFiles(toolName) {
                     identicalToolCounts.removeAll()
                     repeatedFailures.removeAll()
+                    missingPathFailures.removeAll()
                 }
 
                 // Track identical failures so the branch above can refuse the third one.
@@ -1841,6 +1863,11 @@ public final class AgentRunner {
                     repeatedFailures[repeatKey] = 0
                 } else if resultError != "repeated identical call" {
                     repeatedFailures[repeatKey, default: 0] += 1
+                    if let missing = Self.missingPathKey(toolName, argsJson, workspaceRoot: workspace.folderPath),
+                       Self.isMissingPathFailure(resultOutput + " " + (resultError ?? "")) {
+                        let hint = Self.didYouMeanHint(in: resultOutput + " " + (resultError ?? ""))
+                        missingPathFailures[missing] = ((missingPathFailures[missing]?.count ?? 0) + 1, hint)
+                    }
                 }
 
                 let bounded = ToolBounds.boundResult(resultOutput + stuckNudge)
@@ -2189,6 +2216,30 @@ public final class AgentRunner {
     }
 
     /// The absolute path a `file_read` call targets.
+    /// (tool, path) identity for missing-path failure counting; nil when the call names no path.
+    nonisolated static func missingPathKey(_ toolName: String, _ argumentsJson: String, workspaceRoot: String) -> String? {
+        guard let path = readTarget(argumentsJson: argumentsJson, workspaceRoot: workspaceRoot) else { return nil }
+        let name = canonicalToolName(toolName)
+        // `grep` on a missing file and `file_read` of it are the same dead end.
+        return (name == "grep" ? "read" : name) + "\u{1}" + path
+    }
+
+    nonisolated static func isMissingPathFailure(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.contains("no such file") || lower.contains("does not exist")
+            || lower.contains("no matches for") && lower.contains("in 0 files")
+    }
+
+    /// The "Did you mean: ..." sentence from a not-found error, or a `glob` nudge when it had none.
+    nonisolated static func didYouMeanHint(in text: String) -> String {
+        if let range = text.range(of: "Did you mean:") {
+            let tail = text[range.lowerBound...]
+            let sentence = tail.prefix(while: { $0 != "\n" })
+            return String(sentence)
+        }
+        return "Use `glob` to find the right path rather than guessing."
+    }
+
     public nonisolated static func readTarget(argumentsJson: String, workspaceRoot: String) -> String? {
         guard let data = argumentsJson.data(using: .utf8),
               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
