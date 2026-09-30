@@ -8,7 +8,7 @@ import XCTest
 final class MLXSessionReuseTests: XCTestCase {
 
     private func key(model: String = "m", instructions: String = "sys", tools: [String] = ["a"]) -> MLXSessionReuse.Key {
-        MLXSessionReuse.Key(modelId: model, instructions: instructions, toolNames: tools)
+        MLXSessionReuse.Key(modelId: model, instructions: instructions, toolNames: tools, thinkingEnabled: false)
     }
 
     private func msg(_ role: String, _ content: String, attachments: Bool = false) -> MLXSessionReuse.Fingerprint {
@@ -165,9 +165,9 @@ extension MLXSessionReuseTests {
             MLXSessionReuse.Fingerprint(role: "user", content: "[Tool output]\nok"),
         ]
         let d = MLXSessionReuse.decide(
-            cachedKey: MLXSessionReuse.Key(modelId: "m", instructions: "sys", toolNames: ["a"]),
+            cachedKey: MLXSessionReuse.Key(modelId: "m", instructions: "sys", toolNames: ["a"], thinkingEnabled: false),
             cachedConsumed: consumed,
-            incomingKey: MLXSessionReuse.Key(modelId: "m", instructions: "sys", toolNames: ["a"]),
+            incomingKey: MLXSessionReuse.Key(modelId: "m", instructions: "sys", toolNames: ["a"], thinkingEnabled: false),
             incoming: incoming
         )
         guard case .advance(let new) = d else {
@@ -191,9 +191,9 @@ extension MLXSessionReuseTests {
             MLXSessionReuse.Fingerprint(role: "user", content: "more"),
         ]
         let d = MLXSessionReuse.decide(
-            cachedKey: MLXSessionReuse.Key(modelId: "m", instructions: "sys", toolNames: ["a"]),
+            cachedKey: MLXSessionReuse.Key(modelId: "m", instructions: "sys", toolNames: ["a"], thinkingEnabled: false),
             cachedConsumed: consumed,
-            incomingKey: MLXSessionReuse.Key(modelId: "m", instructions: "sys", toolNames: ["a"]),
+            incomingKey: MLXSessionReuse.Key(modelId: "m", instructions: "sys", toolNames: ["a"], thinkingEnabled: false),
             incoming: incoming
         )
         if case .advance = d { XCTFail("a rewrite behind the trailing reply must still rebuild") }
@@ -203,7 +203,7 @@ extension MLXSessionReuseTests {
 /// The session's history and the caller's transcript are not the same list.
 extension MLXSessionReuseTests {
     private var k: MLXSessionReuse.Key {
-        MLXSessionReuse.Key(modelId: "m", instructions: "sys", toolNames: ["a"])
+        MLXSessionReuse.Key(modelId: "m", instructions: "sys", toolNames: ["a"], thinkingEnabled: false)
     }
     private func gen(_ c: String) -> MLXSessionReuse.Fingerprint {
         MLXSessionReuse.Fingerprint(role: "assistant", content: c, isGeneratedReply: true)

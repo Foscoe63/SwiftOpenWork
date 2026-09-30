@@ -164,7 +164,7 @@ final class LocalGenerationGateTests: XCTestCase {
 final class MLXSessionSelectionTests: XCTestCase {
 
     private func key(_ instructions: String, tools: [String] = ["a"]) -> MLXSessionReuse.Key {
-        MLXSessionReuse.Key(modelId: "m", instructions: instructions, toolNames: tools)
+        MLXSessionReuse.Key(modelId: "m", instructions: instructions, toolNames: tools, thinkingEnabled: false)
     }
 
     private func fp(_ role: String, _ content: String, generated: Bool = false) -> MLXSessionReuse.Fingerprint {
