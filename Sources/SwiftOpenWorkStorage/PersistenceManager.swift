@@ -502,6 +502,7 @@ public final class PersistenceManager: Sendable {
         } else {
             items = defaultAgents
             RadiantBuiltInAgents.addMissing(to: &items)
+            AgentRoleProfiles.migrate(&items)
             saveAgents(items)
             return items
         }
@@ -545,7 +546,8 @@ public final class PersistenceManager: Sendable {
 
         // Role-matched tool allowlists and repaired seed names, once. Gated so an agent whose
         // allowlist the user later clears on purpose ("everything") is not refilled every launch.
-        let profilesKey = "agentRoleProfilesApplied.v1"
+        // v2 covered the Cowork agents; v3 adds per-agent skills.
+        let profilesKey = "agentRoleProfilesApplied.v3"
         if !UserDefaults.standard.bool(forKey: profilesKey) {
             if AgentRoleProfiles.migrate(&items) { modified = true }
             UserDefaults.standard.set(true, forKey: profilesKey)
@@ -1038,7 +1040,7 @@ public final class PersistenceManager: Sendable {
     // MARK: - Skills
     public func loadSkills() -> [Skill] {
         if var items = storage.load([Skill].self, from: "skills.json"), !items.isEmpty {
-            let key = "roleSkillsAdded.v1"
+            let key = "roleSkillsAdded.v2"
             if !UserDefaults.standard.bool(forKey: key) {
                 if AgentRoleProfiles.addMissingSkills(to: &items) { saveSkills(items) }
                 UserDefaults.standard.set(true, forKey: key)

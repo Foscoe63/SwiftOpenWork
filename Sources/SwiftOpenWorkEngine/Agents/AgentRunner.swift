@@ -1070,7 +1070,7 @@ public final class AgentRunner {
             ? ""
             : WorkspaceContext.promptBlock(WorkspaceContext.snapshot(folderPath: workspace.folderPath))
 
-        let enabledSkills = PersistenceManager.shared.loadSkills().filter(\.isEnabled)
+        let enabledSkills = PersistenceManager.shared.loadSkills().filter { $0.isEnabled && $0.isAllowed(by: agent.allowedSkillIds) }
         var skillsSection = ""
         // Skip skills dump on inventory — it only encourages digression.
         if !enabledSkills.isEmpty && !inventoryPrompt {
@@ -1091,6 +1091,7 @@ public final class AgentRunner {
         if !inventoryPrompt {
             skillsSection += ProjectSkills.promptBlock(
                 ProjectSkills.load(workspacePath: workspace.folderPath)
+                    .filter { $0.isAllowed(by: agent.allowedSkillIds) }
             )
         }
 

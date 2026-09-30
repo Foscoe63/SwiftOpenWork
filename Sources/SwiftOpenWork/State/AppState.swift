@@ -1741,6 +1741,17 @@ public final class AppState: ObservableObject {
         persistence.saveAgents(agents)
     }
 
+    /// Loads a saved role-tools template: sets each listed agent's allowlist and enables the
+    /// MCP servers it names. Returns true when anything changed.
+    @discardableResult
+    public func applyToolTemplate(_ template: AgentToolTemplate) -> Bool {
+        var servers = settings.mcpServers
+        guard template.apply(to: &agents, servers: &servers) else { return false }
+        persistence.saveAgents(agents)
+        if servers != settings.mcpServers { settings.mcpServers = servers }
+        return true
+    }
+
     public func deleteAgent(_ agent: Agent) {
         agents.removeAll(where: { $0.id == agent.id })
         persistence.saveAgents(agents)

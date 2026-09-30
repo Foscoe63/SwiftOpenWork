@@ -68,3 +68,11 @@ public struct Skill: Identifiable, Codable, Hashable, Sendable {
         self.updatedAt = updatedAt
     }
 }
+
+public extension Skill {
+    /// Whether an agent with this skill allowlist is shown the skill. nil or empty admits every skill.
+    func isAllowed(by allowed: [String]?) -> Bool {
+        guard let allowed, !allowed.isEmpty else { return true }
+        return allowed.contains { $0 == id || $0 == name || id.hasPrefix($0 + "/") }
+    }
+}

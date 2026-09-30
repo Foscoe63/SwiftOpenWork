@@ -33,6 +33,9 @@ public struct Agent: Identifiable, Codable, Hashable, Sendable {
     public var parentAgentId: String?
     public var subAgentIds: [String]
     public var allowedToolIds: [String]
+    /// Skills this agent is shown, by skill id, name, or `project:<folder>` for a repository skill.
+    /// nil or empty means every enabled skill. Optional so agents saved before this existed decode.
+    public var allowedSkillIds: [String]?
     public var canSpawnSubAgents: Bool
     public var maxSubAgentDepth: Int
     public var autoDelegate: Bool
@@ -65,6 +68,7 @@ public struct Agent: Identifiable, Codable, Hashable, Sendable {
         // build_project, run_tests and every perception tool. See
         // `PersistenceManager.isLegacySeededAllowlist`.
         allowedToolIds: [String] = [],
+        allowedSkillIds: [String]? = nil,
         canSpawnSubAgents: Bool = true,
         maxSubAgentDepth: Int = 3,
         autoDelegate: Bool = true,
@@ -91,6 +95,7 @@ public struct Agent: Identifiable, Codable, Hashable, Sendable {
         self.parentAgentId = parentAgentId
         self.subAgentIds = subAgentIds
         self.allowedToolIds = allowedToolIds
+        self.allowedSkillIds = allowedSkillIds
         self.canSpawnSubAgents = canSpawnSubAgents
         self.maxSubAgentDepth = maxSubAgentDepth
         self.autoDelegate = autoDelegate

@@ -49,6 +49,99 @@ public enum AgentRoleProfiles {
             "agent_spawn", "memory_store", "memory_recall", "todo_write", "ask_user",
             "mcp_mcp-memory", "mcp_mcp-filesystem",
         ],
+
+        // Specialists carried over from Radiant.
+        "explainer-agent": readCode + [
+            "workspace_semantic_search", "git_log", "web_search", "fetch_url",
+        ],
+        "security-agent": readCode + [
+            "workspace_semantic_search", "git_diff", "git_status", "git_log", "changed_files",
+            "web_search", "fetch_url", "todo_write",
+        ],
+        "sales-agent": [
+            "web_search", "fetch_url", "document_extract", "file_read", "file_list", "file_write",
+            "edit_file", "memory_store", "memory_recall", "get_current_date", "calculator",
+            "gmail_search", "mcp_mcp-fetch",
+        ],
+        "design-agent": [
+            "file_read", "file_list", "grep", "glob", "file_write", "edit_file",
+            "web_search", "fetch_url", "image_analyze", "mlx_vision_describe",
+            "screenshot_window", "accessibility_tree",
+            "run_app", "quit_app", "preview_start", "preview_check", "preview_logs", "preview_stop",
+        ],
+        "education-agent": [
+            "file_read", "file_list", "grep", "glob", "document_extract", "web_search", "fetch_url",
+            "calculator", "memory_store", "memory_recall", "get_current_date",
+        ],
+        "finance-agent": [
+            "calculator", "web_search", "fetch_url", "document_extract", "file_read", "file_list",
+            "file_write", "edit_file", "get_current_date", "memory_store", "memory_recall",
+        ],
+        "devops-agent": readCode + [
+            "file_write", "edit_file", "multi_edit", "terminal_command", "build_project", "run_tests",
+            "git_status", "git_diff", "git_log", "changed_files", "web_search", "fetch_url",
+            "todo_write", "mcp_mcp-git",
+        ],
+        "data-agent": [
+            "file_read", "file_list", "grep", "glob", "file_write", "edit_file", "terminal_command",
+            "document_extract", "calculator", "web_search", "fetch_url", "get_current_date",
+        ],
+        "docs-agent": readCode + [
+            "workspace_semantic_search", "document_extract", "file_write", "edit_file", "multi_edit",
+            "git_log", "git_diff", "web_search", "fetch_url",
+        ],
+
+        // Knowledge-worker (Cowork) agents.
+        "admin-finance-agent": [
+            "file_read", "file_list", "file_write", "edit_file", "glob", "grep", "document_extract",
+            "calculator", "get_current_date", "gmail_list", "gmail_search",
+            "memory_store", "memory_recall", "todo_write", "web_search", "fetch_url",
+        ],
+        "sales-marketing-agent": [
+            "web_search", "fetch_url", "document_extract", "file_read", "file_list", "file_write",
+            "edit_file", "glob", "grep", "calculator", "get_current_date", "gmail_search",
+            "memory_store", "memory_recall", "todo_write", "mcp_mcp-fetch",
+        ],
+        "operations-pm-agent": [
+            "file_read", "file_list", "file_write", "edit_file", "glob", "grep", "document_extract",
+            "calculator", "get_current_date", "google_calendar_list", "google_calendar_upcoming",
+            "memory_store", "memory_recall", "todo_write",
+        ],
+        "comms-organizer-agent": [
+            "file_read", "file_list", "file_write", "file_copy", "file_move", "edit_file", "glob", "grep",
+            "document_extract", "image_analyze", "mlx_vision_describe",
+            "gmail_list", "gmail_search", "google_calendar_list", "google_calendar_upcoming",
+            "memory_store", "memory_recall", "get_current_date", "todo_write", "mcp_mcp-memory",
+        ],
+    ]
+
+    /// Which skills each agent is shown (`Agent.allowedSkillIds`). Skills used to go to every agent.
+    /// `project:<folder>` names a skill in the repository's `.swiftopenwork/skills/`.
+    public static let skillsByAgentId: [String: [String]] = [
+        "lead-assistant": ["task-delegation-skill", "git-expert-skill", "project:build-and-test"],
+        "coder-agent": ["swift-conventions-skill", "git-expert-skill", "project:build-and-test"],
+        "research-agent": ["source-evaluation-skill"],
+        "reviewer-agent": ["code-reviewer-skill", "swift-conventions-skill", "project:build-and-test"],
+        "architect-agent": ["architecture-decision-skill", "swift-conventions-skill", "source-evaluation-skill"],
+        "explainer-agent": ["teaching-skill", "swift-conventions-skill"],
+        "security-agent": ["security-auditor-skill", "code-reviewer-skill", "source-evaluation-skill"],
+        "sales-agent": ["sales-outreach-skill", "source-evaluation-skill"],
+        "design-agent": [
+            "project:design-ui-designer", "project:design-ux-architect", "project:design-ux-researcher",
+            "project:design-brand-guardian", "project:design-ui-finish-gate-reviewer",
+            "project:design-persona-walkthrough", "project:design-inclusive-visuals-specialist",
+            "project:design-visual-storyteller", "project:design-whimsy-injector",
+            "project:design-image-prompt-engineer",
+        ],
+        "education-agent": ["teaching-skill", "source-evaluation-skill"],
+        "finance-agent": ["financial-analysis-skill", "source-evaluation-skill"],
+        "devops-agent": ["devops-runbook-skill", "security-auditor-skill", "git-expert-skill", "project:build-and-test"],
+        "data-agent": ["data-analysis-skill", "source-evaluation-skill"],
+        "docs-agent": ["technical-writing-skill", "source-evaluation-skill"],
+        "admin-finance-agent": ["invoicing-admin-skill", "financial-analysis-skill"],
+        "sales-marketing-agent": ["sales-outreach-skill", "source-evaluation-skill", "comms-briefing-skill"],
+        "operations-pm-agent": ["project-planning-skill", "task-delegation-skill"],
+        "comms-organizer-agent": ["comms-briefing-skill"],
     ]
 
     /// Names a mix-up left on the wrong agent, and what the seed calls them.
@@ -72,6 +165,10 @@ public enum AgentRoleProfiles {
             }
             if agents[i].allowedToolIds.isEmpty, let tools = toolsByAgentId[id] {
                 agents[i].allowedToolIds = tools
+                changed = true
+            }
+            if (agents[i].allowedSkillIds ?? []).isEmpty, let skills = skillsByAgentId[id] {
+                agents[i].allowedSkillIds = skills
                 changed = true
             }
         }
@@ -134,6 +231,123 @@ public enum AgentRoleProfiles {
                 1. Prefer official docs and primary sources over blogs and forums.
                 2. Cross-check important claims across two sources; note the date.
                 3. Cite the URL or file path for every fact, and say plainly what you could not verify.
+                """,
+                source: .builtIn
+            ),
+            Skill(
+                id: "teaching-skill",
+                name: "Teaching & Explaining",
+                description: "Teach top-down in plain language, with small examples and a check for understanding.",
+                category: "Education",
+                content: """
+                # Teaching & Explaining
+                1. Start from the big picture, then the parts; one idea per step.
+                2. Use plain words, a small concrete example, and an analogy where it helps.
+                3. Ask a quick question to check understanding; adapt to the answer.
+                """,
+                source: .builtIn
+            ),
+            Skill(
+                id: "sales-outreach-skill",
+                name: "Sales Outreach & Positioning",
+                description: "Short, benefit-led outreach; qualify before pitching; handle objections honestly.",
+                category: "Sales",
+                content: """
+                # Sales Outreach & Positioning
+                1. Lead with the reader's problem, then one concrete benefit; keep it under 120 words.
+                2. Qualify: need, budget, authority, timing, before proposing.
+                3. Answer objections with evidence; never invent numbers or customers.
+                """,
+                source: .builtIn
+            ),
+            Skill(
+                id: "financial-analysis-skill",
+                name: "Financial Analysis",
+                description: "State assumptions, show the math, sanity-check, end with a bottom line.",
+                category: "Finance",
+                content: """
+                # Financial Analysis
+                1. List assumptions and units first.
+                2. Show each calculation; cross-check totals and orders of magnitude.
+                3. Give ranges and risks, then a one-line conclusion. Not personalised investment advice.
+                """,
+                source: .builtIn
+            ),
+            Skill(
+                id: "devops-runbook-skill",
+                name: "DevOps Runbooks & Reliability",
+                description: "Reproducible, observable changes with a rollback and least privilege.",
+                category: "DevOps",
+                content: """
+                # DevOps Runbooks & Reliability
+                1. Prefer scripted, idempotent steps over manual ones; give exact commands.
+                2. For every change state the failure modes and how to roll back.
+                3. Use least privilege; never put secrets in files or logs.
+                """,
+                source: .builtIn
+            ),
+            Skill(
+                id: "data-analysis-skill",
+                name: "Data Analysis",
+                description: "Check the data before concluding; report findings with caveats.",
+                category: "Data",
+                content: """
+                # Data Analysis
+                1. Inspect shape, types, nulls and duplicates before analysing.
+                2. Keep queries and code reproducible; verify joins and filters with counts.
+                3. Report the finding, its confidence, and what could change it. Label every chart axis.
+                """,
+                source: .builtIn
+            ),
+            Skill(
+                id: "technical-writing-skill",
+                name: "Technical Writing",
+                description: "Accurate docs written from the code, for the reader's level.",
+                category: "Docs",
+                content: """
+                # Technical Writing
+                1. Read the code first; document what it does, not what it was meant to do.
+                2. Lead with purpose and a runnable example; then reference detail.
+                3. Short headings, consistent terms, no stale claims.
+                """,
+                source: .builtIn
+            ),
+            Skill(
+                id: "invoicing-admin-skill",
+                name: "Invoicing & Admin",
+                description: "Quotes to invoices, polite payment reminders, consistent records.",
+                category: "Admin",
+                content: """
+                # Invoicing & Admin
+                1. Invoices carry number, dates, line items, totals, tax and payment terms; check the arithmetic.
+                2. Reminders escalate politely: R1 friendly, R2 firm, R3 final notice with consequences.
+                3. Never invent amounts or dates; ask when a figure is missing.
+                """,
+                source: .builtIn
+            ),
+            Skill(
+                id: "project-planning-skill",
+                name: "Project & Operations Planning",
+                description: "Milestones, dependencies, owners and checklists that can be tracked.",
+                category: "Operations",
+                content: """
+                # Project & Operations Planning
+                1. Break work into milestones with owner, date and dependency.
+                2. Flag the critical path and the biggest risk for each milestone.
+                3. Turn recurring work into a short SOP checklist.
+                """,
+                source: .builtIn
+            ),
+            Skill(
+                id: "comms-briefing-skill",
+                name: "Communications & File Organisation",
+                description: "Sort files, extract receipts, summarise meetings, draft clear messages.",
+                category: "Communications",
+                content: """
+                # Communications & File Organisation
+                1. Sort by type and date; move or copy, never delete; report what moved.
+                2. Extract receipt fields (date, vendor, total, tax) into rows; flag unreadable ones.
+                3. Meeting summaries: decisions, owners, deadlines. Drafts are never sent without the user's say-so.
                 """,
                 source: .builtIn
             ),

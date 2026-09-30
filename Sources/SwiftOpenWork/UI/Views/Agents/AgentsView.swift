@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftOpenWorkCore
 import SwiftOpenWorkEngine
+import SwiftOpenWorkStorage
 
 public struct AgentsView: View {
     @ObservedObject var appState: AppState
@@ -93,6 +94,19 @@ public struct AgentsView: View {
             }
 
             Spacer()
+
+            Menu {
+                Button("Reapply Built-in Role Tools") {
+                    appState.applyToolTemplate(.builtIn)
+                }
+                Button("Export Current Tools…") { exportToolTemplate() }
+                Button("Load Tools Template…") { importToolTemplate() }
+            } label: {
+                Label("Role Tools", systemImage: "wrench.and.screwdriver")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .menuStyle(.borderedButton)
+            .fixedSize()
 
             Button {
                 showingTemplates = true
@@ -559,6 +573,31 @@ public struct AgentEditModalView: View {
 
                     Divider()
 
+                    // Allowed Skills
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Skills")
+                            .font(.system(size: 12, weight: .bold))
+                        Text((draft.allowedSkillIds ?? []).isEmpty
+                             ? "No restriction: this agent is shown every enabled skill."
+                             : "Only the skills ticked below are shown to this agent.")
+                            .font(.system(size: 10.5))
+                            .foregroundColor(.secondary)
+                        ForEach(appState.skills) { skill in
+                            Toggle(skill.name, isOn: Binding(
+                                get: { skill.isAllowed(by: draft.allowedSkillIds) && !(draft.allowedSkillIds ?? []).isEmpty },
+                                set: { on in
+                                    var ids = draft.allowedSkillIds ?? []
+                                    ids.removeAll { $0 == skill.id || $0 == skill.name }
+                                    if on { ids.append(skill.id) }
+                                    draft.allowedSkillIds = ids
+                                }
+                            ))
+                            .font(.system(size: 11.5))
+                        }
+                    }
+
+                    Divider()
+
                     // LLM Parameters
                     VStack(alignment: .leading, spacing: 8) {
                         Text("LLM Model & Parameters")
@@ -613,5 +652,24 @@ public struct AgentEditModalView: View {
         }
         .frame(width: 540, height: 620)
         .background(ThemeColors.bg(for: appState.settings.theme))
+    }
+}
+
+extension AgentsView {
+    fileprivate func exportToolTemplate() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "agent-tools-template.json"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let template = AgentToolTemplate.capture(from: appState.agents, servers: appState.settings.mcpServers, name: "Exported role tools")
+        try? template.jsonData().write(to: url)
+    }
+
+    fileprivate func importToolTemplate() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        guard panel.runModal() == .OK, let url = panel.url,
+              let data = try? Data(contentsOf: url),
+              let template = try? AgentToolTemplate.load(from: data) else { return }
+        appState.applyToolTemplate(template)
     }
 }
