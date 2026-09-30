@@ -149,6 +149,8 @@ public final class AppState: ObservableObject {
     }
     @Published public var searchSessionText: String = ""
     @Published public var isSearchDialogOpen: Bool = false
+    /// The "Pick 2 or more agents" sheet, opened from the sidebar.
+    @Published public var isGroupPickerPresented: Bool = false
     @Published public var toastMessage: String? = nil
 
     // MARK: - Core Entities
@@ -580,6 +582,82 @@ public final class AppState: ObservableObject {
         AutomationScheduler.shared.sessionWasCreated()
     }
 
+    /// A session with nothing said in it yet, in the active workspace, that a new chat can take
+    /// over instead of leaving an empty one behind in the sidebar.
+    private var reusableEmptySession: Session? {
+        guard let session = currentSession,
+              session.messages.isEmpty,
+              !session.isArchived,
+              session.workspaceId == activeWorkspaceId else { return nil }
+        return session
+    }
+
+    /// Chat with one specific agent, in the active workspace.
+    ///
+    /// The welcome screen's "Work with an agent" grid. An empty chat is repurposed rather than
+    /// stacking another empty session under it.
+    public func startChat(with agentId: String) {
+        guard agents.contains(where: { $0.id == agentId }) else { return }
+        selectedAgentId = agentId
+        if var session = reusableEmptySession, let idx = sessions.firstIndex(where: { $0.id == session.id }) {
+            session.agentId = agentId
+            session.participantIds = []
+            session.updatedAt = Date()
+            sessions[idx] = session
+            persistence.saveSessions(sessions)
+            navigationDestination = .chat
+        } else {
+            createNewSession(agentId: agentId)
+        }
+    }
+
+    /// Start a group chat with `participantIds`, in the active workspace (so a project's folder,
+    /// instructions and skills apply to the whole room).
+    ///
+    /// Needs two agents or more; ids that no longer name an agent are dropped, and if that leaves
+    /// fewer than two nothing is created.
+    @discardableResult
+    public func createGroupSession(participantIds: [String]) -> Session? {
+        var seen = Set<String>()
+        let ids = participantIds.filter { id in
+            agents.contains(where: { $0.id == id }) && seen.insert(id).inserted
+        }
+        guard ids.count >= 2 else {
+            showToast("Pick at least two agents for a group chat")
+            return nil
+        }
+        if var session = reusableEmptySession, let idx = sessions.firstIndex(where: { $0.id == session.id }) {
+            session.agentId = ids[0]
+            session.participantIds = ids
+            session.groupFollowUp = false
+            session.title = "Group chat"
+            session.updatedAt = Date()
+            sessions[idx] = session
+            persistence.saveSessions(sessions)
+            selectSession(session)
+            navigationDestination = .chat
+            return session
+        }
+        createNewSession(agentId: ids[0])
+        guard let id = currentSessionId, let idx = sessions.firstIndex(where: { $0.id == id }) else { return nil }
+        sessions[idx].participantIds = ids
+        sessions[idx].title = "Group chat"
+        persistence.saveSessions(sessions)
+        return sessions[idx]
+    }
+
+    /// The room option "others re-plan" on the current group chat.
+    public func setGroupFollowUp(_ on: Bool) {
+        guard let id = currentSessionId, let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[idx].groupFollowUp = on
+        persistence.saveSessions(sessions)
+    }
+
+    /// The agents in a group session, in the order they were picked. Agents deleted since are skipped.
+    public func participants(of session: Session) -> [Agent] {
+        session.participantIds.compactMap { id in agents.first(where: { $0.id == id }) }
+    }
+
     /// Branch the current session at `messageId` into a new one, and switch to it.
     ///
     /// Only the conversation branches. See `SessionFork` for why the working tree deliberately does
@@ -986,83 +1064,88 @@ public final class AppState: ObservableObject {
         isGenerating = true
         turnStartedAt = Date()
 
-        let agent = currentAgent
         let provider = currentProvider
         let model = currentModel
         let workspace = currentWorkspace
         let allAgentsList = agents
-        // "Reasoning" composer pill: off forces no reasoning for this turn regardless of the
-        // agent's own setting; on guarantees some reasoning even if the agent defaults to off.
-        let reasoningOverride: ReasoningEffort = isReasoningEnabled
-            ? (agent.reasoningEffort == .off ? .medium : agent.reasoningEffort)
-            : .off
+        // One agent for an ordinary chat; in a group, one step per speaker, in the order the
+        // message addressed them. See `GroupChat.plan`.
+        let steps = turnSteps(for: session, userText: trimmed)
 
         currentExecutionTask?.cancel()
         currentExecutionTask = Task { [weak self] in
-            await AgentRunner.shared.run(
-                session: session,
-                agent: agent,
-                provider: provider,
-                model: model,
-                workspace: workspace,
-                allAgents: allAgentsList,
-                reasoningOverride: reasoningOverride,
-                onMessageUpdated: { [weak self] updatedMsg in
-                    guard let self = self else { return }
-                    if let sIdx = self.sessions.firstIndex(where: { $0.id == session.id }) {
-                        if let mIdx = self.sessions[sIdx].messages.firstIndex(where: { $0.id == updatedMsg.id }) {
-                            self.sessions[sIdx].messages[mIdx] = updatedMsg
-                        } else {
-                            self.sessions[sIdx].messages.append(updatedMsg)
+            // Speakers run one after another: each reads what the last one said.
+            for (stepIndex, step) in steps.enumerated() {
+                if stepIndex > 0, Task.isCancelled { break }
+                let stepSession = stepIndex == 0
+                    ? session
+                    : (self?.sessions.first(where: { $0.id == session.id }) ?? session)
+                await AgentRunner.shared.run(
+                    session: stepSession,
+                    agent: step.agent,
+                    provider: provider,
+                    model: model,
+                    workspace: workspace,
+                    allAgents: allAgentsList,
+                    reasoningOverride: step.reasoning,
+                    onMessageUpdated: { [weak self] updatedMsg in
+                        guard let self = self else { return }
+                        if let sIdx = self.sessions.firstIndex(where: { $0.id == session.id }) {
+                            if let mIdx = self.sessions[sIdx].messages.firstIndex(where: { $0.id == updatedMsg.id }) {
+                                self.sessions[sIdx].messages[mIdx] = updatedMsg
+                            } else {
+                                self.sessions[sIdx].messages.append(updatedMsg)
+                            }
+                            if !updatedMsg.isStreaming {
+                                self.sessions[sIdx].recordActivity(providers: self.providers)
+                            }
+                            // Every streamed chunk lands here. Saving each one rewrote all chat
+                            // history tens of times a second; once a second is enough while it
+                            // streams, and the finished message is always saved.
+                            let now = Date()
+                            if !updatedMsg.isStreaming || now.timeIntervalSince(self.lastStreamingSessionSave) >= 1 {
+                                self.lastStreamingSessionSave = now
+                                self.persistence.saveSessions(self.sessions)
+                            }
                         }
-                        if !updatedMsg.isStreaming {
-                            self.sessions[sIdx].recordActivity(providers: self.providers)
+                    },
+                    onSubAgentTaskCreated: { [weak self] subTask in
+                        guard let self = self else { return }
+                        self.activeSubAgentTasks.append(subTask)
+                        if let sIdx = self.sessions.firstIndex(where: { $0.id == session.id }) {
+                            self.sessions[sIdx].activeSubAgentTasks.append(subTask)
                         }
-                        // Every streamed chunk lands here. Saving each one rewrote all chat
-                        // history tens of times a second; once a second is enough while it
-                        // streams, and the finished message is always saved.
-                        let now = Date()
-                        if !updatedMsg.isStreaming || now.timeIntervalSince(self.lastStreamingSessionSave) >= 1 {
-                            self.lastStreamingSessionSave = now
-                            self.persistence.saveSessions(self.sessions)
+                    },
+                    onSubAgentTaskUpdated: { [weak self] subTask in
+                        guard let self = self else { return }
+                        if let idx = self.activeSubAgentTasks.firstIndex(where: { $0.id == subTask.id }) {
+                            self.activeSubAgentTasks[idx] = subTask
                         }
-                    }
-                },
-                onSubAgentTaskCreated: { [weak self] subTask in
-                    guard let self = self else { return }
-                    self.activeSubAgentTasks.append(subTask)
-                    if let sIdx = self.sessions.firstIndex(where: { $0.id == session.id }) {
-                        self.sessions[sIdx].activeSubAgentTasks.append(subTask)
-                    }
-                },
-                onSubAgentTaskUpdated: { [weak self] subTask in
-                    guard let self = self else { return }
-                    if let idx = self.activeSubAgentTasks.firstIndex(where: { $0.id == subTask.id }) {
-                        self.activeSubAgentTasks[idx] = subTask
-                    }
-                    if let sIdx = self.sessions.firstIndex(where: { $0.id == session.id }) {
-                        if let tIdx = self.sessions[sIdx].activeSubAgentTasks.firstIndex(where: { $0.id == subTask.id }) {
-                            self.sessions[sIdx].activeSubAgentTasks[tIdx] = subTask
+                        if let sIdx = self.sessions.firstIndex(where: { $0.id == session.id }) {
+                            if let tIdx = self.sessions[sIdx].activeSubAgentTasks.firstIndex(where: { $0.id == subTask.id }) {
+                                self.sessions[sIdx].activeSubAgentTasks[tIdx] = subTask
+                            }
                         }
-                    }
-                },
-                onInterAgentMessage: { [weak self] msg in
-                    guard let self = self else { return }
-                    self.interAgentMessages.append(msg)
-                    if let sIdx = self.sessions.firstIndex(where: { $0.id == session.id }) {
-                        self.sessions[sIdx].interAgentMessages.append(msg)
-                    }
-                },
-                onSessionTodosUpdated: { [weak self] todos in
-                    guard let self = self else { return }
-                    self.updateSessionTodos(todos, sessionId: session.id)
-                },
-                onModelContextUpdated: { [weak self] snapshot in
-                    guard let self = self,
-                          let sIdx = self.sessions.firstIndex(where: { $0.id == session.id }) else { return }
-                    self.sessions[sIdx].modelContext = snapshot
-                }
-            )
+                    },
+                    onInterAgentMessage: { [weak self] msg in
+                        guard let self = self else { return }
+                        self.interAgentMessages.append(msg)
+                        if let sIdx = self.sessions.firstIndex(where: { $0.id == session.id }) {
+                            self.sessions[sIdx].interAgentMessages.append(msg)
+                        }
+                    },
+                    onSessionTodosUpdated: { [weak self] todos in
+                        guard let self = self else { return }
+                        self.updateSessionTodos(todos, sessionId: session.id)
+                    },
+                    onModelContextUpdated: { [weak self] snapshot in
+                        guard let self = self,
+                              let sIdx = self.sessions.firstIndex(where: { $0.id == session.id }) else { return }
+                        self.sessions[sIdx].modelContext = snapshot
+                    },
+                    group: step.group
+                )
+            }
 
             // Seal the turn's baseline before anything can call beginTurn again. The in-memory
             // window still dies with the next turn; this is the copy that outlives a relaunch.
@@ -1087,6 +1170,51 @@ public final class AppState: ObservableObject {
                     self.maybeAutoContinue(sessionId: session.id)
                 }
             }
+        }
+    }
+
+    /// One speaker's turn: who, and (in a group) how they were addressed.
+    struct TurnStep {
+        var agent: Agent
+        var group: GroupChat.Turn?
+        /// The composer's "Reasoning" pill applied to this agent's own setting: off forces no
+        /// reasoning regardless of the agent's own setting; on guarantees some, even if the agent
+        /// defaults to off.
+        var reasoning: ReasoningEffort
+    }
+
+    private func reasoningOverride(for agent: Agent) -> ReasoningEffort {
+        isReasoningEnabled ? (agent.reasoningEffort == .off ? .medium : agent.reasoningEffort) : .off
+    }
+
+    /// The agents that answer `userText`, in order.
+    ///
+    /// An ordinary chat is a single step with the selected agent. A group chat asks
+    /// `GroupChat.plan` who was addressed; `text` is what the user typed, not the file-enriched
+    /// version the model sees, so a mention inside an attached file cannot pick a speaker.
+    func turnSteps(for session: Session, userText: String) -> [TurnStep] {
+        let room = participants(of: session)
+        guard session.isGroup, room.count >= 2 else {
+            let solo = currentAgent
+            return [TurnStep(agent: solo, group: nil, reasoning: reasoningOverride(for: solo))]
+        }
+
+        let people = room.map { GroupChat.Participant(id: $0.id, name: $0.name) }
+        let names = Dictionary(people.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let plan = GroupChat.plan(text: userText, participants: people, followUp: session.groupFollowUp)
+        return plan.speakers.enumerated().compactMap { index, speaker in
+            guard let agent = room.first(where: { $0.id == speaker.id }) else { return nil }
+            return TurnStep(
+                agent: agent,
+                group: GroupChat.Turn(
+                    names: names,
+                    roster: room.map(\.name),
+                    role: speaker.role,
+                    notice: index == 0 ? plan.notice : nil,
+                    startsTurn: index == 0
+                ),
+                reasoning: reasoningOverride(for: agent)
+            )
         }
     }
 

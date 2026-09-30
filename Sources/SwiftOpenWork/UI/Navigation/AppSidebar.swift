@@ -167,6 +167,18 @@ public struct AppSidebar: View {
                 .buttonStyle(.hitTestable)
                 .help(showAllWorkspaceSessions ? "Show Active Workspace Only" : "Show All Workspaces")
 
+                if appState.agents.count >= 2 {
+                    Button {
+                        appState.isGroupPickerPresented = true
+                    } label: {
+                        Image(systemName: "person.2.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                    }
+                    .buttonStyle(.hitTestable)
+                    .help("New Group Chat — several agents in one conversation")
+                }
+
                 Button {
                     appState.createNewSession()
                 } label: {
@@ -200,6 +212,11 @@ public struct AppSidebar: View {
                             Image(systemName: "pin.fill")
                                 .font(.system(size: 9))
                                 .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                        } else if session.isGroup {
+                            // Several agents in the room; the pin above still wins for pinned.
+                            Image(systemName: "person.2.fill")
+                                .font(.system(size: 9))
+                                .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
                         } else if session.forkedFromSessionId != nil {
                             // A fork shares its opening messages with another session; the icon is
                             // what stops the two looking like unrelated conversations in the list.

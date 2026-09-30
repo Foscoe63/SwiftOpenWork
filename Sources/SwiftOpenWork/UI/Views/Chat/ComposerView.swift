@@ -211,6 +211,17 @@ public struct ComposerView: View {
         ComposerContextMentions.activeQuery(in: appState.composerText)
     }
 
+    /// In a group chat, `@` also picks who acts: "@coder, plan the stack" makes Coder the only
+    /// agent that answers, with tools. The room is offered first, files after.
+    private var agentMentionSuggestions: [Agent] {
+        guard let session = appState.currentSession, session.isGroup,
+              let query = mentionQuery?.lowercased() else { return [] }
+        return appState.participants(of: session).filter { agent in
+            let slug = GroupChat.slugName(agent.name)
+            return query.isEmpty || slug.hasPrefix(query) || slug.replacingOccurrences(of: "-", with: "").hasPrefix(query)
+        }
+    }
+
     private var mentionSuggestions: [ComposerContextMentions.Suggestion] {
         guard let query = mentionQuery else { return [] }
         return ComposerContextMentions.suggestions(
@@ -321,6 +332,54 @@ public struct ComposerView: View {
                     }
                 }
                 .padding(12)
+                .background(ThemeColors.cardBg(for: appState.settings.theme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(ThemeColors.accent(for: appState.settings.accentColor).opacity(0.45), lineWidth: 1)
+                )
+                .cornerRadius(10)
+                .padding(.horizontal, 16)
+            }
+
+            if !agentMentionSuggestions.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Image(systemName: "person.2")
+                            .font(.system(size: 10))
+                            .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                        Text("IN THIS ROOM \u{2014} ONLY THEY WILL ACT")
+                            .font(.system(size: 9.5, weight: .bold))
+                            .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+
+                    ForEach(agentMentionSuggestions) { agent in
+                        Button {
+                            insertMention(GroupChat.slugName(agent.name))
+                        } label: {
+                            HStack(spacing: 8) {
+                                AgentAvatar(agent: agent, size: 18)
+                                Text("@\(GroupChat.slugName(agent.name))")
+                                    .font(.system(size: 11.5, design: .monospaced))
+                                    .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                                Text(agent.name)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                                Spacer()
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.secondary.opacity(0.06))
+                            .cornerRadius(6)
+                        }
+                        .buttonStyle(.hitTestable)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 6)
+                }
                 .background(ThemeColors.cardBg(for: appState.settings.theme))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10)
@@ -574,6 +633,21 @@ public struct ComposerView: View {
 
             // Bottom Sub-Bar: Quick Controls (Agent pill, Model selector, reasoning toggle)
             HStack(spacing: 8) {
+                if let session = appState.currentSession, session.isGroup {
+                    // Which agent answers is decided per message by @mentions, not by a picker.
+                    HStack(spacing: 4) {
+                        Image(systemName: "person.2.fill")
+                            .font(.system(size: 10))
+                        Text("Group \u{00B7} \(session.participantIds.count) agents")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3.5)
+                    .background(ThemeColors.cardBg(for: appState.settings.theme))
+                    .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                    .cornerRadius(6)
+                    .help("Address one agent with @name to have it act; without a name everyone answers in prose.")
+                } else {
                 // Agent Picker Pill
                 Menu {
                     ForEach(appState.agents) { ag in
@@ -605,6 +679,7 @@ public struct ComposerView: View {
                     .cornerRadius(6)
                 }
                 .menuStyle(.borderlessButton)
+                }
 
                 // Model Picker Pill (searchable)
                 ModelPickerButton(appState: appState, style: .composer)

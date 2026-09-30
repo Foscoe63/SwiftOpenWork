@@ -107,6 +107,9 @@ public struct MainView: View {
             }
         }
         .background(WindowFramePersistenceInstaller())
+        .sheet(isPresented: $appState.isGroupPickerPresented) {
+            GroupPickerSheet(appState: appState)
+        }
         .onChange(of: appState.inspectorWidthRequest) { _, requested in
             guard let requested else { return }
             appState.inspectorWidthRequest = nil

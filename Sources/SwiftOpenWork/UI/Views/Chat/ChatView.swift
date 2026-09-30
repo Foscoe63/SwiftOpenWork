@@ -9,6 +9,10 @@ public struct ChatView: View {
     /// What the empty chat offers, from the workspace's top-level files.
     @State private var starterKind: StarterSuggestions.ProjectKind = .other
     @State private var starters: [StarterSuggestions.Suggestion] = StarterSuggestions.suggestions(for: .other)
+    /// The welcome screen's "Work with an agent" grid is showing instead of the starter prompts.
+    @State private var agentPickerOpen = false
+    /// Opened by "Start a group chat", so the picker is already unfolded.
+    @State private var agentPickerStartsGroup = false
     @ObservedObject var appState: AppState
 
     public init(appState: AppState) {
@@ -22,6 +26,10 @@ public struct ChatView: View {
 
             Divider()
                 .background(ThemeColors.border(for: appState.settings.theme))
+
+            if let session = appState.currentSession, session.isGroup {
+                GroupRosterBar(appState: appState, session: session)
+            }
 
             // Main Chat Stream or Hero Empty State
             if let session = appState.currentSession, !session.messages.isEmpty {
@@ -322,14 +330,28 @@ public struct ChatView: View {
                     .font(.system(size: 20, weight: .bold))
                     .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
 
-                Text(starterKind == .empty
-                     ? "What should we build in \(appState.currentWorkspace.name)?"
-                     : "Working in \(appState.currentWorkspace.name)")
+                Text(heroSubtitle)
                     .font(.system(size: 13))
                     .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                    .multilineTextAlignment(.center)
+            }
+
+            if agentPickerOpen {
+                // 13 agents and an unfolded picker are taller than a small window; the logo and
+                // title stay put and this part scrolls.
+                ScrollView {
+                    AgentChoiceGrid(appState: appState, opensGroupPicker: agentPickerStartsGroup) {
+                        agentPickerOpen = false
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 16)
+                }
+            } else {
+                agentEntryPoints
             }
 
             // Quick Starter Prompt Cards (Centered with clean constrained responsive grid)
+            if !agentPickerOpen {
             VStack {
                 LazyVGrid(columns: [
                     GridItem(.adaptive(minimum: 180, maximum: 230), spacing: 12)
@@ -343,6 +365,7 @@ public struct ChatView: View {
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 24)
             .padding(.top, 12)
+            }
 
             Spacer()
         }
@@ -353,6 +376,49 @@ public struct ChatView: View {
             starterKind = kind
             starters = StarterSuggestions.suggestions(for: kind)
         }
+    }
+
+    /// What the empty chat says it is for: the room when it is a group chat.
+    private var heroSubtitle: String {
+        let workspace = appState.currentWorkspace.name
+        if let session = appState.currentSession, session.isGroup {
+            let names = appState.participants(of: session).map(\.name).joined(separator: ", ")
+            return "Group chat with \(names) in \(workspace)\nName one with @ to have it act; otherwise everyone answers in prose."
+        }
+        return starterKind == .empty
+            ? "What should we build in \(workspace)?"
+            : "Working in \(workspace)"
+    }
+
+    /// Ways into a specific agent, or several: the same two doors Radiant's welcome screen has.
+    private var agentEntryPoints: some View {
+        HStack(spacing: 10) {
+            entryPill(title: "Work with an agent", icon: "person.crop.circle.badge.checkmark") {
+                agentPickerStartsGroup = false
+                agentPickerOpen = true
+            }
+            if appState.agents.count >= 2 {
+                entryPill(title: "Start a group chat", icon: "person.2") {
+                    agentPickerStartsGroup = true
+                    agentPickerOpen = true
+                }
+            }
+        }
+    }
+
+    private func entryPill(title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(ThemeColors.cardBg(for: appState.settings.theme))
+                .overlay(Capsule().stroke(ThemeColors.border(for: appState.settings.theme), lineWidth: 1))
+                .clipShape(Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.hitTestable)
     }
 
     private func starterCard(title: String, subtitle: String, icon: String, prompt: String) -> some View {

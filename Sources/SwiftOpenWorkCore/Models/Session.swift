@@ -26,6 +26,15 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     public var todos: [SessionTodoItem]
     /// The conversation as the model last saw it; see `modelHistory()`.
     public var modelContext: ModelContextSnapshot? = nil
+    /// The agents in a group chat, in the order they were picked. Empty for an ordinary
+    /// single-agent session — and for every session saved before group chats existed.
+    public var participantIds: [String] = []
+    /// The room option "others re-plan": naming one agent also has the rest revise their own
+    /// plans. See `GroupChat.plan`.
+    public var groupFollowUp: Bool = false
+
+    /// Two agents make a room; one is just a chat with that agent.
+    public var isGroup: Bool { participantIds.count >= 2 }
 
     public init(
         id: String = UUID().uuidString,
@@ -91,6 +100,8 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
         forkedAtMessageId = try c.decodeIfPresent(String.self, forKey: .forkedAtMessageId)
         todos = try c.decodeIfPresent([SessionTodoItem].self, forKey: .todos) ?? []
         modelContext = try c.decodeIfPresent(ModelContextSnapshot.self, forKey: .modelContext)
+        participantIds = try c.decodeIfPresent([String].self, forKey: .participantIds) ?? []
+        groupFollowUp = try c.decodeIfPresent(Bool.self, forKey: .groupFollowUp) ?? false
     }
 
     /// What to send the model as this session's history.
@@ -106,6 +117,9 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     /// covers — same ids, same user text. An edit, a fork, a deleted message or a restore falls
     /// back to the plain transcript.
     public func modelHistory() -> [ChatMessage] {
+        // A group turn reads the transcript through `GroupChat.flatten`, per speaker; one
+        // speaker's saved context would replay its own steps into everyone else's view.
+        guard !isGroup else { return messages }
         guard let snapshot = modelContext, snapshot.covers(messages) else { return messages }
         return snapshot.messages + messages.dropFirst(snapshot.coveredMessageIds.count)
     }

@@ -855,7 +855,7 @@ public final class AgentRunner {
 
     public func run(
         session: Session,
-        agent: Agent,
+        agent baseAgent: Agent,
         provider: ModelProvider,
         model: ModelInfo,
         workspace: Workspace,
@@ -866,8 +866,24 @@ public final class AgentRunner {
         onSubAgentTaskUpdated: @escaping (SubAgentTask) -> Void,
         onInterAgentMessage: @escaping (AgentMessage) -> Void,
         onSessionTodosUpdated: (([SessionTodoItem]) -> Void)? = nil,
-        onModelContextUpdated: ((ModelContextSnapshot) -> Void)? = nil
+        onModelContextUpdated: ((ModelContextSnapshot) -> Void)? = nil,
+        group: GroupChat.Turn? = nil
     ) async {
+        // In a group chat this is one speaker's turn. The speaker is told who else is in the room
+        // and how it was addressed; the bubble below is still stamped with the original agent.
+        let agent: Agent = {
+            guard let group else { return baseAgent }
+            var speaker = baseAgent
+            speaker.systemPrompt = GroupChat.persona(
+                base: baseAgent.systemPrompt,
+                names: group.roster,
+                self: baseAgent.name,
+                role: group.role
+            )
+            return speaker
+        }()
+        // Discussion and re-plan turns talk; they do not act. See `GroupChat.Role`.
+        let groupToolless = group.map { !$0.role.usesTools } ?? false
         // The chat composer's "Reasoning" pill overrides the agent's own configured effort for
         // this turn when set; nil (no override) preserves the agent's own setting.
         let effectiveReasoningEffort = reasoningOverride ?? agent.reasoningEffort
@@ -877,8 +893,8 @@ public final class AgentRunner {
             sessionId: session.id,
             role: .assistant,
             content: "",
-            agentId: agent.id,
-            agentName: agent.name,
+            agentId: baseAgent.id,
+            agentName: baseAgent.name,
             agentAvatar: agent.avatar,
             agentColor: agent.color,
             modelId: model.id,
@@ -1016,10 +1032,12 @@ public final class AgentRunner {
         if planModeActive && !inventoryPrompt {
             availableTools = Self.filterToolsForPlanMode(availableTools)
         }
+        if groupToolless { availableTools = [] }
 
         // Offer the agent tools only to an agent allowed to use them, so the model is not handed
         // a tool whose every call is refused.
-        let canDelegate = AgentRunner.subAgentSpawningAllowed(agent: agent, settings: loadedSettings)
+        let canDelegate = !groupToolless
+            && AgentRunner.subAgentSpawningAllowed(agent: agent, settings: loadedSettings)
             && AgentRunContext.depthLimit(for: agent, settings: loadedSettings) >= 1
         availableTools.removeAll { tool in
             (tool.name == "agent_spawn" && !canDelegate)
@@ -1033,7 +1051,10 @@ public final class AgentRunner {
             )
 
         // Undo is scoped to one turn, so the window opens here rather than at session start.
-        await FileCheckpointStore.shared.beginTurn(label: session.id)
+        if group?.startsTurn ?? true {
+            await FileCheckpointStore.shared.beginTurn(label: session.id)
+        }
+        if let notice = group?.notice { accumulator.appendNotice(notice) }
 
         // Standing rules that live in the repository itself.
         let instructionsSection = inventoryPrompt
@@ -1072,7 +1093,9 @@ public final class AgentRunner {
         var iteration = 0
         // Continue from the transcript the model saw last turn, so the local engine's cache
         // extends it instead of re-reading the whole conversation (see `Session.modelHistory`).
-        var workingMessages = session.modelHistory()
+        var workingMessages = group.map {
+            GroupChat.flatten(session.messages, speakerId: baseAgent.id, names: $0.names)
+        } ?? session.modelHistory()
         // The last step's reply, when the turn ended on an answer rather than on tool calls.
         var finalStepText: String?
 
@@ -1109,6 +1132,17 @@ public final class AgentRunner {
             \(mcpPromptSummary)
 
             Be concise. No tool calls. No planning narration. Answer with one short table only.
+            """
+        } else if groupToolless {
+            // No tool list here: a model told it has tools it does not have writes the calls out
+            // as text, and then the room reads a wall of pseudo-JSON from an agent that was only
+            // asked its opinion.
+            systemPromptWithTools = """
+            \(agent.systemPrompt)
+            \(workspaceSection)
+            \(instructionsSection)
+
+            No tools are available on this turn. Reply in prose only; do not write tool calls.
             """
         } else {
             systemPromptWithTools = """
@@ -1352,7 +1386,7 @@ public final class AgentRunner {
             }
 
             // Inventory questions should be one-shot answers — never enter a tool loop.
-            if inventoryPrompt {
+            if inventoryPrompt || groupToolless {
                 finalStepText = accumulator.stepText(from: turnTextBefore.count)
                 finishedNaturally = true
                 break
@@ -1962,10 +1996,11 @@ public final class AgentRunner {
                 id: assistantMsgId, sessionId: session.id, role: .assistant, content: finalStepText
             ))
         }
-        onModelContextUpdated?(ModelContextSnapshot(
+        // Not for a group: `modelHistory()` ignores it there, since it is one speaker's view.
+        if group == nil { onModelContextUpdated?(ModelContextSnapshot(
             coveredMessageIds: session.messages.map(\.id) + [assistantMsgId],
             messages: modelContext
-        ))
+        )) }
 
         accumulator.finalize()
     }
