@@ -83,6 +83,7 @@
 		7C8E87018CC911650EDE8365 /* AgentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EFD80AF1269AC53A14551D0 /* AgentsView.swift */; };
 		7CEBBB5EACD2C944CCC69A93 /* CompletionNoticeAndContextMeterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F82EBC2B1844DDD2602062B /* CompletionNoticeAndContextMeterTests.swift */; };
 		80646096FE93CAA9788C739D /* ModelDiscoverySettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AA843C5BEF94ECB351F7842 /* ModelDiscoverySettingsTests.swift */; };
+		81066312173F1F60D4FF0789 /* GroupChatEndToEndTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96B6B7B74214CD199968693C /* GroupChatEndToEndTests.swift */; };
 		81C727430280A1E765B5FF30 /* CodeIntelligenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FED19FE82B7AEA25B8BA01AD /* CodeIntelligenceTests.swift */; };
 		83E316E60003CF113BDBC6C8 /* CodeEditorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 376906B333B3043517B782FE /* CodeEditorTests.swift */; };
 		84247D75291B765D72AFE816 /* WorkspaceBootstrapTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E0DB49E53178F0720CA5E14 /* WorkspaceBootstrapTests.swift */; };
@@ -302,6 +303,7 @@
 		90866A7A4C49960768F1D24E /* WorkspaceTemplatePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTemplatePicker.swift; sourceTree = "<group>"; };
 		9095E531286AE79AC5D4728B /* SessionTodosBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTodosBar.swift; sourceTree = "<group>"; };
 		949A7C72B71FDE13EAF8AE4D /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
+		96B6B7B74214CD199968693C /* GroupChatEndToEndTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupChatEndToEndTests.swift; sourceTree = "<group>"; };
 		996EF31795EC9550F0AF2A94 /* WebFetchPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebFetchPolicyTests.swift; sourceTree = "<group>"; };
 		9B2BC524A47712DA7FD51259 /* ThemeColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeColors.swift; sourceTree = "<group>"; };
 		9B87B59FB8E4F5E3E2AE4AEC /* ControlTokenLeakTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlTokenLeakTests.swift; sourceTree = "<group>"; };
@@ -439,6 +441,7 @@
 				837330AF2E6D7C0F5437ABCE /* FileReadPaginationTests.swift */,
 				EDC7429294BC57D879B7232C /* FileToolSafetyTests.swift */,
 				9F7EC0A215C8765E37C19F71 /* GoogleCredentialStoreTests.swift */,
+				96B6B7B74214CD199968693C /* GroupChatEndToEndTests.swift */,
 				203B7AC385B4ECC4D734899C /* GroupChatTests.swift */,
 				6C807D6E8D9E37ADB1D74E30 /* HitTestableButtonSweepTests.swift */,
 				7B76478EE5F5957662736F76 /* InlineFileDiffTests.swift */,
@@ -936,6 +939,7 @@
 				B762BDB3304D9B5C94BD1E75 /* FileReadPaginationTests.swift in Sources */,
 				0CFDC48C9447102F074004C3 /* FileToolSafetyTests.swift in Sources */,
 				B2040433F58344E455BC5572 /* GoogleCredentialStoreTests.swift in Sources */,
+				81066312173F1F60D4FF0789 /* GroupChatEndToEndTests.swift in Sources */,
 				5DBF20239524D65A97D40F8A /* GroupChatTests.swift in Sources */,
 				04D76AD06D4A860834456D23 /* HitTestableButtonSweepTests.swift in Sources */,
 				012CEB709F4B88A1B480536C /* InlineFileDiffTests.swift in Sources */,
@@ -1193,7 +1197,7 @@
 				CODE_SIGN_IDENTITY = "SwiftOpenWork Local Signing";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = SwiftOpenWork;
@@ -1208,7 +1212,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.6.1;
+				MARKETING_VERSION = 1.7.0;
 				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
 				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";
@@ -1347,7 +1351,7 @@
 				CODE_SIGN_IDENTITY = "SwiftOpenWork Local Signing";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = SwiftOpenWork;
@@ -1362,7 +1366,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.6.1;
+				MARKETING_VERSION = 1.7.0;
 				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
 				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";

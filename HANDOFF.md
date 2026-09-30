@@ -10,7 +10,7 @@ against this machine, not remembered.
 | SwiftOpenWork | `origin/main`; the module split, Swift 6 and test-host isolation landed in PR #18 | see *Verifying a change* |
 | GrizzyBot | yes, `ecce520` | 538 |
 
-Latest **published** release: **1.4.0 (build 7)** — tool-call repair layer, fail-closed file tools, Claude 5 request shape, updated model catalog, Splash provider; `main` is the only branch. Previous: **1.3.3 (build 6)**, notarised and stapled, installed in
+Latest **published** release: **1.7.0 (build 11)** — group chats: several agents in one session, addressed with `@name`, with handoffs (see the README's *Group chats*). Before it: 1.6.1 (Splash chat hang and Stop fixes), 1.6.0, 1.5.0 (Loops), and **1.4.0 (build 7)** — tool-call repair layer, fail-closed file tools, Claude 5 request shape, updated model catalog, Splash provider; `main` is the only branch. Earlier: **1.3.3 (build 6)**, notarised and stapled, installed in
 `/Applications` on 2026-09-19 — see *Notarisation works (2026-09-19)* below. It carries PR #22
 (element picking, screenshot to chat, errors on edits, workspace suggestions) and PR #26 (the
 sandbox symlink escape fix), and points the update checker at the renamed repository.

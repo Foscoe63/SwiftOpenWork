@@ -87,6 +87,24 @@ Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibil
 - Approval gates for destructive / MCP write actions. MCP read/write classification is **fail-closed**: a tool is a read only when a known server advertises it and it is absent from that server's write list, so unknown servers ask. Expect more prompts than a name-prefix heuristic would produce — that is the point
 - Sub-agent spawning and inter-agent messaging in the Side Inspector
 
+### Group chats
+
+Put two or more agents in one conversation: **Work with an agent → Start a group chat** on an empty chat, or the 👥 button beside **+** in the sidebar's session list. The chat belongs to the active workspace like any other, so the project's folder, `AGENTS.md`/rules and skills apply to the whole room, and it appears in that workspace's session list with a 👥 icon. Each reply carries its author's name and avatar, and each agent reads the others' replies as `[Name]: …`.
+
+Who speaks is decided by what you type:
+
+| You write | What happens |
+|---|---|
+| a plain message | everyone takes a turn, **one at a time, with tools**. Each is told to build on what teammates already did and skip what they covered, so they never edit at once and rarely repeat each other |
+| `@Coder, plan the stack` | only Coder acts. Name several (`@Coder … @Reviewer …`) and they act in the order you mention them |
+| `@others` / `@all` | the rest revise **their own** plans in light of it, without tools — they are not asked to do the named agent's job |
+| `!@Marketing` | Marketing sits this one out, wherever the `!@` appears |
+
+- **Handoffs.** When an agent you named `@mentions` a teammate in its reply ("@Reviewer please check the API shape"), that teammate acts next, with tools. Only agents you named can hand off, each agent speaks at most once per message, and a message allows three handoffs, so a chain cannot run away. `!@name` still holds. A teammate you had queued to re-plan is promoted to acting rather than speaking twice.
+- **Room option.** The roster bar's *others re-plan* switch does the `@others` step for you whenever you name one agent. Clicking a name in the bar inserts its `@mention`; typing `@` in the composer offers the room.
+- **Continue** (the button and auto-continue) goes to the agent that stopped, not to the whole room.
+- Every agent uses the chat's selected model and provider. The agent picker in the composer is replaced by *Group · N agents*.
+
 ### Code intelligence
 
 The code-intelligence tools run real language servers, started on first use and kept running per project (stopped after ten idle minutes):
@@ -241,7 +259,8 @@ SwiftOpenWork/
 └── Sources/                 # one folder per module; see "Modules" below
     ├── SwiftOpenWorkCore/   # library, Swift 6 language mode
     │   ├── Models/          # Agent, Workspace, Session, SessionTodo, Settings,
-    │   │                    # ProviderSelection, InlineFileDiff, ToolSchemaCatalog
+    │   │                    # ProviderSelection, InlineFileDiff, ToolSchemaCatalog,
+    │   │                    # GroupChat (addressing, handoffs, per-speaker history)
     │   ├── Providers/       # LLMProviderClient protocol, stream chunks,
     │   │                    # InProcessModelEngine, LocalGenerationGate,
     │   │                    # ReasoningChannel, ImageTransport
@@ -335,7 +354,7 @@ MCP layers pass it in and out of actors. The rules that make that compile:
 
 | | Destination |
 |:---:|---|
-| 💬 | Chat & Sessions |
+| 💬 | Chat & Sessions (including group chats) |
 | 🧊 | Local Models |
 | 👥 | AI Agents |
 | 🖥️ | Model Providers |
@@ -419,6 +438,17 @@ exist, so run the engine bundle with `xctest` directly.)
 `SwiftOpenWorkEngineTests` holds the tests that need only Core, Storage and Engine.
 `SwiftOpenWorkTests` holds the ones that need the app, its views, or the MLX engine. Put a new
 test in the engine target when it can live there.
+
+`GroupChatEndToEndTests` runs the real agent loop through group turns against a local
+OpenAI-style server that records what each agent was sent, and is skipped unless it is told where
+that server is:
+
+```bash
+python3 Scripts/fake_group_llm.py 18765 /tmp/group.log &
+TEST_RUNNER_GROUP_FAKE_URL=http://127.0.0.1:18765/v1 TEST_RUNNER_GROUP_FAKE_LOG=/tmp/group.log \
+  xcodebuild test -project SwiftOpenWork.xcodeproj -scheme SwiftOpenWorkEngineTests \
+  -destination 'platform=macOS' -only-testing:SwiftOpenWorkEngineTests/GroupChatEndToEndTests
+```
 
 Tests never touch your real data: under XCTest the app stores settings and sessions in a
 temporary folder per test process (set `SWIFTOPENWORK_DATA_DIRECTORY` to point a deliberate run
