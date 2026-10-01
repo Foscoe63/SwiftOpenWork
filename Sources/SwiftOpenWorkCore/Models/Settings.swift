@@ -71,6 +71,23 @@ public enum TerminalSafetyLevel: String, Codable, CaseIterable, Identifiable, Se
     }
 }
 
+/// Kernel-level confinement of `run_command`, on top of the path checks `sandboxAgentFileSystem` does.
+public enum ShellSandboxMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case off
+    case workspaceWrites
+    case workspaceNoNetwork
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .off: return "Off"
+        case .workspaceWrites: return "Workspace writes only"
+        case .workspaceNoNetwork: return "Workspace writes, no network"
+        }
+    }
+}
+
 public enum MCPTransportType: String, Codable, CaseIterable, Identifiable, Sendable {
     case stdio = "stdio"
     case httpSse = "http_sse"
@@ -190,6 +207,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
     /// that must fetch unattended.
     public var askBeforeFetchingNewSites: Bool
     public var sandboxAgentFileSystem: Bool
+    /// Runs shell commands under macOS Seatbelt so writes outside the workspace (and optionally
+    /// network access) fail in the kernel, whatever the command does.
+    public var shellSandboxMode: ShellSandboxMode
 
     // Appearance
     public var theme: AppTheme
@@ -354,6 +374,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         // Secure by default. Existing installs keep whatever they have: settings.json already
         // carries this key, and decoding prefers the stored value over this default.
         sandboxAgentFileSystem: Bool = true,
+        shellSandboxMode: ShellSandboxMode = .off,
         theme: AppTheme = .dark,
         accentColor: AccentColorChoice = .purple,
         editorFontSize: Int = 14,
@@ -432,6 +453,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.allowWebAccess = allowWebAccess
         self.askBeforeFetchingNewSites = askBeforeFetchingNewSites
         self.sandboxAgentFileSystem = sandboxAgentFileSystem
+        self.shellSandboxMode = shellSandboxMode
         self.theme = theme
         self.accentColor = accentColor
         self.editorFontSize = editorFontSize
@@ -503,6 +525,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.allowWebAccess = try container.decodeIfPresent(Bool.self, forKey: .allowWebAccess) ?? def.allowWebAccess
         self.askBeforeFetchingNewSites = try container.decodeIfPresent(Bool.self, forKey: .askBeforeFetchingNewSites) ?? def.askBeforeFetchingNewSites
         self.sandboxAgentFileSystem = try container.decodeIfPresent(Bool.self, forKey: .sandboxAgentFileSystem) ?? def.sandboxAgentFileSystem
+        self.shellSandboxMode = try container.decodeIfPresent(ShellSandboxMode.self, forKey: .shellSandboxMode) ?? def.shellSandboxMode
 
         self.theme = try container.decodeIfPresent(AppTheme.self, forKey: .theme) ?? def.theme
         self.accentColor = try container.decodeIfPresent(AccentColorChoice.self, forKey: .accentColor) ?? def.accentColor

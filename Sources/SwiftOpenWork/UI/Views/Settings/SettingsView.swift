@@ -1244,6 +1244,15 @@ public struct SettingsView: View {
                     Toggle("", isOn: $appState.settings.sandboxAgentFileSystem)
                         .toggleStyle(.switch)
                 }
+
+                SettingsRow(title: "Shell Sandbox", subtitle: "Run commands under macOS Seatbelt so writes outside the workspace, and optionally network access, are blocked by the OS itself", icon: "shield.lefthalf.filled") {
+                    Picker("", selection: $appState.settings.shellSandboxMode) {
+                        ForEach(ShellSandboxMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .frame(width: 240)
+                }
             }
 
             SettingsCard(title: "Authorized Workspace Directories", description: "Paths agents are granted access to read and write", icon: "folder.fill") {

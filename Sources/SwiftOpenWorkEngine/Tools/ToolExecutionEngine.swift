@@ -2459,6 +2459,24 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         return string + "\n"
     }
 
+    /// Points `process` at the shell, or at `sandbox-exec` wrapping it when Shell Sandbox is on.
+    /// The working directory is always writable, since that is where the agent was told to work.
+    private static func configureLaunch(
+        _ process: Process, shellPath: String, command: String, settings: AppSettings, cwd: String
+    ) {
+        var roots = settings.authorizedFolders.map { canonicalPath($0) }
+        roots.append(canonicalPath(cwd))
+        if let wrapped = ShellSandbox.wrap(
+            shellPath: shellPath, command: command, mode: settings.shellSandboxMode, writableRoots: roots
+        ) {
+            process.executableURL = URL(fileURLWithPath: wrapped.executable)
+            process.arguments = wrapped.arguments
+        } else {
+            process.executableURL = URL(fileURLWithPath: shellPath)
+            process.arguments = ["-c", command]
+        }
+    }
+
     public struct ProcessRun {
         public var output: String
         public var exitCode: Int32
@@ -2477,8 +2495,10 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         let settings = PersistenceManager.shared.loadSettings()
         let shellPath = settings.terminalShell.isEmpty ? "/bin/zsh" : settings.terminalShell
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: shellPath)
-        process.arguments = ["-c", command]
+        if let reason = ShellSandbox.unavailableReason(for: settings.shellSandboxMode) {
+            return ProcessRun(output: reason, exitCode: -1, timedOut: false)
+        }
+        Self.configureLaunch(process, shellPath: shellPath, command: command, settings: settings, cwd: cwd)
         process.environment = ToolExecutionEngine.defaultEnvironment(custom: settings.customEnvironmentVariables)
         process.currentDirectoryURL = URL(fileURLWithPath: (cwd as NSString).expandingTildeInPath)
 
@@ -2546,8 +2566,10 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         let settings = PersistenceManager.shared.loadSettings()
         let shellPath = settings.terminalShell.isEmpty ? "/bin/zsh" : settings.terminalShell
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: shellPath)
-        process.arguments = ["-c", command]
+        if let reason = ShellSandbox.unavailableReason(for: settings.shellSandboxMode) {
+            return ToolExecutionResult(success: false, output: "", error: reason, durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+        }
+        Self.configureLaunch(process, shellPath: shellPath, command: command, settings: settings, cwd: cwd)
         process.environment = ToolExecutionEngine.defaultEnvironment(custom: settings.customEnvironmentVariables)
         process.currentDirectoryURL = URL(fileURLWithPath: (cwd as NSString).expandingTildeInPath)
 
