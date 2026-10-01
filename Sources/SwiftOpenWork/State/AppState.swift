@@ -733,6 +733,7 @@ public final class AppState: ObservableObject {
     }
 
     public func deleteSession(_ session: Session) {
+        AIMemoryHooks.shared.noteSessionEnd(sessionId: session.id, reason: "deleted")
         sessions.removeAll(where: { $0.id == session.id })
         if currentSessionId == session.id {
             currentSessionId = sessions.first?.id
@@ -839,6 +840,9 @@ public final class AppState: ObservableObject {
     public func archiveSession(_ session: Session) {
         if let idx = sessions.firstIndex(where: { $0.id == session.id }) {
             sessions[idx].isArchived.toggle()
+            if sessions[idx].isArchived {
+                AIMemoryHooks.shared.noteSessionEnd(sessionId: session.id, reason: "archived")
+            }
             persistence.saveSessions(sessions)
         }
     }
