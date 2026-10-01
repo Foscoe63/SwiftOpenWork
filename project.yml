@@ -28,6 +28,11 @@ packages:
   # package would each carry a copy — EventSource is shared by MCP and Hugging Face.
   SwiftOpenWorkKit:
     path: .
+  # Used by the app alone (the Terminal tab), so it links straight into the app rather than into
+  # the shared Kit library.
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm.git
+    from: 1.2.0
 
 targets:
   SwiftOpenWork:
@@ -47,6 +52,8 @@ targets:
       - package: SwiftOpenWorkKit
         product: SwiftOpenWorkKit
         embed: true
+      - package: SwiftTerm
+        product: SwiftTerm
     settings:
       base:
         # Renamed from OpenWork / ai.openwork.OpenWorkSwift in 1.2: another app is called
