@@ -30,6 +30,17 @@ public final class LocalMLXEngine: @unchecked Sendable {
         return physicalRAMGB * 0.45 // Fallback estimate
     }
 
+    /// Size of the weight files in a model directory, in decimal GB. nil when there are none.
+    public static func weightsSizeGB(in directory: URL) -> Double? {
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.fileSizeKey]
+        )) ?? []
+        let bytes = files.filter { $0.pathExtension == "safetensors" }.reduce(Int64(0)) { sum, url in
+            sum + Int64((try? url.resolvingSymlinksInPath().resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return bytes > 0 ? Double(bytes) / 1_000_000_000 : nil
+    }
+
     public static var totalStorageGB: Double {
         let home = NSHomeDirectory()
         if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: home),
@@ -728,18 +739,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
     }
 
     private func extractQuant(from id: String) -> String? {
-        let lower = id.lowercased()
-        if lower.contains("8bit") || lower.contains("8-bit") { return "8-bit" }
-        if lower.contains("5bit") || lower.contains("5-bit") { return "5-bit" }
-        if lower.contains("4bit") || lower.contains("4-bit") { return "4-bit" }
-        if lower.contains("2bit") || lower.contains("2-bit") { return "2-bit" }
-        if lower.contains("3bit") || lower.contains("3-bit") { return "3-bit" }
-        if lower.contains("6bit") || lower.contains("6-bit") { return "6-bit" }
-        if lower.contains("mxfp8") { return "MXFP8" }
-        if lower.contains("mxfp4") { return "MXFP4" }
-        if lower.contains("bf16") { return "bf16" }
-        if lower.contains("fp16") { return "fp16" }
-        return nil
+        LocalMLXModel.quantizationLabel(fromId: id)
     }
 
     /// Download a model's weights so a chat turn can load them.

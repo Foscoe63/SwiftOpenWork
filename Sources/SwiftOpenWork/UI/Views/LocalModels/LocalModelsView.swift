@@ -72,6 +72,11 @@ public struct LocalModelsView: View {
     @State private var showingImportModal: Bool = false
     @State private var importRepoId: String = ""
     @State private var showingSearchRoots: Bool = false
+    /// Which precision the user picked for a model, by group. Absent means the recommended one.
+    @State private var chosenVariant: [String: String] = [:]
+    /// Other precisions found on the Hub, by group. Only filled when the user asks.
+    @State private var discoveredVariants: [String: [LocalMLXModel]] = [:]
+    @State private var findingVariants: Set<String> = []
 
     public init(appState: AppState) {
         self.appState = appState
@@ -88,6 +93,46 @@ public struct LocalModelsView: View {
     private var activeModelsList: [LocalMLXModel] {
         let base = selectedTab == .onDevice ? downloadedModels : catalogModels
         return filterAndSort(models: base)
+    }
+
+    /// One card per model, showing one precision and offering the rest as chips.
+    struct Card {
+        let key: String
+        let model: LocalMLXModel
+        let variants: [LocalMLXModel]
+    }
+
+    private var displayedCards: [Card] {
+        let ratio = appState.settings.mlxGpuMemoryBudgetRatio
+        let available = LocalMLXEngine.freeRAMGB
+        let physical = LocalMLXEngine.physicalRAMGB
+        return LocalMLXModel.variantGroups(activeModelsList).map { group in
+            let key = group.first.map { $0.variantGroupKey.isEmpty ? $0.id : $0.variantGroupKey } ?? ""
+            // Hub results only extend the catalog: on-device, a variant that is not downloaded is
+            // not a thing you can run.
+            let known = Set(group.map(\.id))
+            let extra = selectedTab == .catalog ? (discoveredVariants[key] ?? []).filter { !known.contains($0.id) } : []
+            let all = LocalMLXModel.variantGroups(group + extra).first ?? group
+            let shown = chosenVariant[key].flatMap { id in all.first { $0.id == id } }
+                ?? LocalMLXModel.recommendedVariant(in: all, budgetRatio: ratio, availableGB: available, physicalGB: physical)
+                ?? all[0]
+            return Card(key: key, model: shown.judged(atBudgetRatio: ratio), variants: all)
+        }
+    }
+
+    private func findVariants(for card: Card) {
+        guard !findingVariants.contains(card.key) else { return }
+        findingVariants.insert(card.key)
+        Task {
+            do {
+                let found = try await MLXVariantFinder.find(siblingsOf: card.model)
+                discoveredVariants[card.key] = found
+                if found.isEmpty { appState.showToast("No other precisions of \(card.model.name) found on Hugging Face") }
+            } catch {
+                appState.showToast("Could not reach Hugging Face: \(error.localizedDescription)")
+            }
+            findingVariants.remove(card.key)
+        }
     }
 
     private var totalDownloadedBytes: Int64 {
@@ -129,11 +174,16 @@ public struct LocalModelsView: View {
                         columns: [GridItem(.adaptive(minimum: 250, maximum: 380), spacing: 16)],
                         spacing: 16
                     ) {
-                        ForEach(activeModelsList) { model in
+                        ForEach(displayedCards, id: \.key) { card in
                             LocalModelCardView(
-                                model: model,
-                                isSelected: appState.selectedModelId == model.id,
-                                appState: appState
+                                model: card.model,
+                                isSelected: appState.selectedModelId == card.model.id,
+                                appState: appState,
+                                variants: card.variants,
+                                headroomGB: LocalMLXEngine.freeRAMGB,
+                                isFindingVariants: findingVariants.contains(card.key),
+                                onSelectVariant: { chosenVariant[card.key] = $0.id },
+                                onFindVariants: selectedTab == .catalog ? { findVariants(for: card) } : nil
                             )
                         }
                     }
@@ -685,7 +735,33 @@ public struct LocalModelCardView: View {
     let model: LocalMLXModel
     let isSelected: Bool
     @ObservedObject var appState: AppState
+    /// Every precision of this model the card can switch between. One entry means no chips.
+    var variants: [LocalMLXModel] = []
+    /// Free memory right now, for the fit verdict.
+    var headroomGB: Double = LocalMLXEngine.freeRAMGB
+    var isFindingVariants = false
+    var onSelectVariant: (LocalMLXModel) -> Void = { _ in }
+    var onFindVariants: (() -> Void)?
     @State private var isHovering: Bool = false
+    @State private var confirmingMisfit = false
+
+    private var fit: MLXMemoryFit {
+        MLXMemoryBudget.fit(
+            requiredRAMGB: model.estimatedRAMGB,
+            budgetRatio: appState.settings.mlxGpuMemoryBudgetRatio,
+            availableGB: headroomGB,
+            physicalGB: LocalMLXEngine.physicalRAMGB
+        )
+    }
+
+    private func color(for fit: MLXMemoryFit) -> Color {
+        switch fit {
+        case .fits: return Color(hex: "#34D399")
+        case .needsFreeMemory, .overBudget: return Color(hex: "#FBBF24")
+        case .wontLoad: return Color(hex: "#F87171")
+        }
+    }
+
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -817,6 +893,18 @@ public struct LocalModelCardView: View {
                 .background(Color(hex: "#1A1828"))
                 .cornerRadius(6)
 
+                precisionChips
+
+                if fit != .fits, !(model.isDownloaded && loadedHere) {
+                    HStack(spacing: 5) {
+                        Image(systemName: fit.willLikelyFail ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                        Text(fitDetail)
+                            .lineLimit(2)
+                    }
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundColor(color(for: fit))
+                }
+
                 // Footer Line
                 Text(model.isDownloaded ? "Local model (detected)" : model.description)
                     .font(.system(size: 11))
@@ -827,7 +915,7 @@ public struct LocalModelCardView: View {
                 HStack(spacing: 8) {
                     if model.isDownloaded {
                         Button {
-                            appState.selectLocalMLXModel(model)
+                            if fit.willLikelyFail { confirmingMisfit = true } else { appState.selectLocalMLXModel(model) }
                         } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: isSelected ? "checkmark.circle.fill" : "bolt.fill")
@@ -885,7 +973,7 @@ public struct LocalModelCardView: View {
                         .buttonStyle(.hitTestable)
                     } else {
                         Button {
-                            appState.pullMLXModel(model)
+                            if fit.willLikelyFail { confirmingMisfit = true } else { appState.pullMLXModel(model) }
                         } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: "arrow.down.circle.fill")
@@ -923,6 +1011,82 @@ public struct LocalModelCardView: View {
         .onHover { h in
             withAnimation(.easeOut(duration: 0.12)) {
                 isHovering = h
+            }
+        }
+        .alert("\(model.name) won't fit on this Mac", isPresented: $confirmingMisfit) {
+            Button("Cancel", role: .cancel) {}
+            Button(model.isDownloaded ? "Load Anyway" : "Download Anyway", role: .destructive) {
+                if model.isDownloaded { appState.selectLocalMLXModel(model) } else { appState.pullMLXModel(model) }
+            }
+        } message: {
+            Text(fitDetail + (model.isDownloaded ? " Loading it is likely to fail or make the Mac unresponsive." : " It would download, but could not be loaded."))
+        }
+    }
+
+    private var loadedHere: Bool { appState.loadedMLXModelIds.contains(model.id) }
+
+    private var fitDetail: String {
+        let need = String(format: "%.0f", model.estimatedRAMGB)
+        let free = String(format: "%.0f", headroomGB)
+        let total = String(format: "%.0f", LocalMLXEngine.physicalRAMGB)
+        switch fit {
+        case .fits: return ""
+        case .needsFreeMemory(let short):
+            return "Needs ~\(need) GB; \(free) GB is free now. Close apps or unload a model to free \(String(format: "%.0f", max(1, short.rounded(.up)))) GB."
+        case .overBudget:
+            return "Needs ~\(need) GB, above your GPU memory budget. Raise it in Settings or pick a smaller precision."
+        case .wontLoad:
+            return "Needs ~\(need) GB; this Mac has \(total) GB. Pick a smaller precision."
+        }
+    }
+
+    /// The precisions this model comes in, each marked by whether it fits in memory right now.
+    @ViewBuilder
+    private var precisionChips: some View {
+        if variants.count > 1 || onFindVariants != nil {
+            HStack(spacing: 5) {
+                ForEach(variants) { variant in
+                    let verdict = MLXMemoryBudget.fit(
+                        requiredRAMGB: variant.estimatedRAMGB,
+                        budgetRatio: appState.settings.mlxGpuMemoryBudgetRatio,
+                        availableGB: headroomGB,
+                        physicalGB: LocalMLXEngine.physicalRAMGB
+                    )
+                    Button {
+                        onSelectVariant(variant)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Circle().fill(color(for: verdict)).frame(width: 5, height: 5)
+                            Text(variant.quantization ?? "?")
+                            Text(String(format: "%.0f GB", variant.estimatedRAMGB))
+                                .foregroundColor(Color.white.opacity(0.5))
+                        }
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(variant.id == model.id ? Color(hex: "#9333EA").opacity(0.45) : Color.white.opacity(0.07))
+                        .foregroundColor(.white)
+                        .cornerRadius(4)
+                    }
+                    .buttonStyle(.plain)
+                    .help("\(variant.name): \(verdict.label)")
+                }
+                if let onFindVariants {
+                    Button {
+                        onFindVariants()
+                    } label: {
+                        if isFindingVariants {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Text("More…").font(.system(size: 9.5, weight: .semibold))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(Color(hex: "#C084FC"))
+                    .help("Look up other precisions of this model on Hugging Face")
+                    .disabled(isFindingVariants)
+                }
+                Spacer()
             }
         }
     }

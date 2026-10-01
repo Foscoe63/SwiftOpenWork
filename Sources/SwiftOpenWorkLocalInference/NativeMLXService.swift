@@ -919,6 +919,29 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             throw Self.modelNotDownloadedError(modelId: modelId, settings: settings)
         }
 
+        // Refuse a load that cannot succeed, before evicting anything for it. Weights larger than the
+        // machine can hold do not fail cleanly: the Mac swaps until it is unusable. Merely being
+        // short of *free* memory is not refused, because loading evicts the resident model and the
+        // system reclaims cache, so it is reported instead.
+        if let weights = LocalMLXEngine.weightsSizeGB(in: localDir) {
+            let required = weights * 1.084
+            let verdict = MLXMemoryBudget.fit(
+                requiredRAMGB: required,
+                budgetRatio: settings.mlxGpuMemoryBudgetRatio,
+                availableGB: LocalMLXEngine.freeRAMGB,
+                physicalGB: LocalMLXEngine.physicalRAMGB
+            )
+            if verdict.willLikelyFail {
+                throw NSError(domain: "NativeMLXService", code: 3, userInfo: [NSLocalizedDescriptionKey:
+                    String(format: "%@ needs about %.0f GB of memory and this Mac has %.0f GB, so it was not loaded. Pick a smaller precision (for example the 4-bit version) in Local Models.",
+                           modelId, required, LocalMLXEngine.physicalRAMGB)])
+            }
+            if case .needsFreeMemory(let short) = verdict {
+                onProgress(String(format: "Only %.0f GB is free and %@ needs about %.0f GB; loading may be slow while memory is reclaimed (about %.0f GB short)",
+                                  LocalMLXEngine.freeRAMGB, modelId, required, short))
+            }
+        }
+
         // One model resident at a time. Loading a second multi-gigabyte checkpoint beside the
         // first is the quickest way to exhaust unified memory on a machine that can just barely
         // hold one — the same policy GrizzyBot's generator applies.
