@@ -1136,6 +1136,12 @@ public final class AgentRunner {
         // leak into this turn as callable tools that no longer resolve.
         await MCPPromotedToolRegistry.shared.reset(owner: session.id)
 
+        // ai-memory: a pending "where we left off" handoff, served once per session and kept for
+        // its later turns. Empty when there is none or ai-memory is not running.
+        let handoffSection = await AIMemoryHooks.shared
+            .handoff(sessionId: session.id, cwd: workspace.folderPath)
+            .map { "\n\($0)\n" } ?? ""
+
         // System prompt with modern tool-calling instructions (supports both native API tools & markdown ReAct schemas)
         let systemPromptWithTools: String
         if inventoryPrompt {
@@ -1160,7 +1166,7 @@ public final class AgentRunner {
             systemPromptWithTools = """
             \(agent.systemPrompt)
             \(workspaceSection)
-            \(instructionsSection)
+            \(instructionsSection)\(handoffSection)
 
             You are an advanced, fully autonomous coding, systems, and research agent.
             Built-in tools (prefer native function/tool calling):

@@ -22,6 +22,9 @@ public final class AIMemoryHooks: @unchecked Sendable {
     private let session: URLSession
     private let lock = NSLock()
     private var openSessions: [String: String] = [:]   // sessionId -> cwd
+    /// Sessions whose handoff has been requested. The server hands one out once, so the answer
+    /// is kept here and re-served on later turns rather than fetched again.
+    private var handoffs: [String: String?] = [:]
 
     public init() {
         let env = ProcessInfo.processInfo.environment
@@ -86,6 +89,44 @@ public final class AIMemoryHooks: @unchecked Sendable {
                      body: ["session_id": sessionId, "cwd": cwd, "reason": reason],
                      timeout: 1.0)
         }
+    }
+
+    // MARK: - Handoff injection
+
+    /// The pending handoff for this session, fetched on the first call and cached after. The
+    /// server's text already carries its own untrusted-history boundary markers. Returns nil when
+    /// there is none, the server is down, or hooks are disabled; never throws or blocks for more
+    /// than the 1s fetch timeout.
+    public func handoff(sessionId: String, cwd: String) async -> String? {
+        guard enabled else { return nil }
+        // Claim the fetch so concurrent turns don't make a second request.
+        let cached: String?? = lock.withLock {
+            if let hit = handoffs[sessionId] { return hit }
+            handoffs[sessionId] = .some(nil)
+            return nil
+        }
+        if let cached { return cached }
+
+        guard let base,
+              var comps = URLComponents(url: base.appendingPathComponent("handoff"),
+                                        resolvingAgainstBaseURL: false)
+        else { return nil }
+        comps.queryItems = [
+            URLQueryItem(name: "agent", value: "other"),
+            URLQueryItem(name: "cwd", value: cwd),
+            URLQueryItem(name: "session_id", value: sessionId),
+        ]
+        guard let url = comps.url else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 1
+        guard let (data, resp) = try? await session.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let text = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty
+        else { return nil }
+        lock.withLock { handoffs[sessionId] = .some(text) }
+        return text
     }
 
     // MARK: - Transport
