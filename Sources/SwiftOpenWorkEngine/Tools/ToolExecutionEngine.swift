@@ -2574,7 +2574,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         return ProcessRun(
             output: didTimeOut
                 ? output + "\n\n[timed out after \(Int(timeoutSeconds))s and was terminated]"
-                : output,
+                : ShellSandbox.annotate(output: output, mode: settings.shellSandboxMode),
             exitCode: didTimeOut ? -2 : process.terminationStatus,
             timedOut: didTimeOut
         )
@@ -2742,7 +2742,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
 
             return ToolExecutionResult(
                 success: process.terminationStatus == 0,
-                output: output,
+                output: ShellSandbox.annotate(output: output, mode: settings.shellSandboxMode),
                 error: process.terminationStatus != 0 ? "Process exited with code \(process.terminationStatus)" : nil,
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )

@@ -385,7 +385,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
         // Secure by default. Existing installs keep whatever they have: settings.json already
         // carries this key, and decoding prefers the stored value over this default.
         sandboxAgentFileSystem: Bool = true,
-        shellSandboxMode: ShellSandboxMode = .off,
+        // On by default: the agent's shell cannot write outside the workspace. Existing installs
+        // have no stored value, so they pick this up too.
+        shellSandboxMode: ShellSandboxMode = .workspaceWrites,
         semanticSearchEnabled: Bool = false,
         embeddingModelId: String = AppSettings.defaultEmbeddingModelId,
         theme: AppTheme = .dark,

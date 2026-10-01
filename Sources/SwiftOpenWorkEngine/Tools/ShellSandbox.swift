@@ -81,6 +81,44 @@ public enum ShellSandbox {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    /// Commands that sandbox their own subprocesses: Xcode and SwiftPM evaluate manifests, run build
+    /// plugins and expand Swift macros under `sandbox-exec`, and macOS refuses a sandbox inside a
+    /// sandbox, so they fail with `sandbox_apply: Operation not permitted` when confined.
+    ///
+    /// Recognised only as a single plain invocation. A build is project-defined code that the
+    /// dedicated build tools already run unconfined; the point of keeping this narrow is that it must
+    /// not become a way to run anything: `swift -e`, `xcodebuild x; rm -rf ~`, a pipe or a
+    /// substitution all stay inside the sandbox.
+    public static func runsItsOwnSandbox(_ command: String) -> Bool {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed.rangeOfCharacter(from: CharacterSet(charactersIn: ";&|<>`$()\n\\\"'")) == nil else { return false }
+        var words = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        // Leading VAR=value assignments are harmless; DEVELOPER_DIR=... xcodebuild is common.
+        while let first = words.first, first.contains("="), !first.hasPrefix("-"), !first.hasPrefix("/") { words.removeFirst() }
+        guard let tool = words.first else { return false }
+        switch (tool as NSString).lastPathComponent {
+        case "xcodebuild":
+            return true
+        case "swift":
+            return words.count > 1 && ["build", "test", "run", "package"].contains(words[1])
+        default:
+            return false
+        }
+    }
+
+    /// Appended to a result that failed because a tool tried to nest a sandbox.
+    public static let nestedSandboxHint =
+        "\n\n[Shell Sandbox: this command tried to start a sandbox of its own (sandbox_apply: Operation not permitted), "
+        + "which macOS does not allow inside another. Builds are exempt when run as a single plain command "
+        + "(`xcodebuild …`, `swift build|test|run|package …`) or through build_project and run_tests; "
+        + "otherwise run it without chaining, or turn the Shell Sandbox off in Settings → Advanced.]"
+
+    public static func annotate(output: String, mode: ShellSandboxMode) -> String {
+        mode != .off && output.contains("sandbox_apply: Operation not permitted")
+            ? output + nestedSandboxHint : output
+    }
+
     /// The executable and arguments that run `shellPath -c command` under `mode`, or nil when the
     /// mode confines nothing.
     public static func wrap(
@@ -89,7 +127,7 @@ public enum ShellSandbox {
         mode: ShellSandboxMode,
         writableRoots: [String]
     ) -> (executable: String, arguments: [String])? {
-        guard mode != .off else { return nil }
+        guard mode != .off, !runsItsOwnSandbox(command) else { return nil }
         let profile = profile(writableRoots: writableRoots, allowNetwork: mode != .workspaceNoNetwork)
         return (executablePath, ["-p", profile, shellPath, "-c", command])
     }

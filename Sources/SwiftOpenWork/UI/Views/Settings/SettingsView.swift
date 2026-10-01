@@ -1250,7 +1250,7 @@ public struct SettingsView: View {
                         .toggleStyle(.switch)
                 }
 
-                SettingsRow(title: "Shell Sandbox", subtitle: "Run commands under macOS Seatbelt so writes outside the workspace, and optionally network access, are blocked by the OS itself", icon: "shield.lefthalf.filled") {
+                SettingsRow(title: "Shell Sandbox", subtitle: "Run commands under macOS Seatbelt so writes outside the workspace, and optionally network access, are blocked by the OS itself. Plain xcodebuild and swift build/test runs are exempt, since they sandbox their own plugins", icon: "shield.lefthalf.filled") {
                     Picker("", selection: $appState.settings.shellSandboxMode) {
                         ForEach(ShellSandboxMode.allCases) { mode in
                             Text(mode.displayName).tag(mode)
