@@ -30,6 +30,9 @@ let package = Package(
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMajor(from: "3.31.4")),
         .package(url: "https://github.com/huggingface/swift-huggingface.git", from: "0.9.0"),
         .package(url: "https://github.com/huggingface/swift-transformers.git", from: "1.3.0"),
+        // Not imported directly: declared only to cap the version. swift-collections 1.7 needs a
+        // newer standard library (BorrowingIteratorProtocol, Iterable) than the current toolchain.
+        .package(url: "https://github.com/apple/swift-collections.git", .upToNextMinor(from: "1.6.0")),
     ],
     targets: [
         // Models and small utilities: no dependencies on the rest of the app.
