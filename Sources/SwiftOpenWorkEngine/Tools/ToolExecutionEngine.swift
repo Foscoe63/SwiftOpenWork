@@ -1016,9 +1016,15 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 )
             }
             if Self.boolArgument(dict["interactive"]) == true, let runner = InteractiveCommandRegistry.runner {
-                return await executeInteractive(command: command, cwd: cwd, runner: runner, startTime: startTime)
+                return await executeInteractive(
+                    command: command, cwd: cwd, runner: runner, startTime: startTime,
+                    idleSeconds: Self.idleSeconds(from: dict["idle_seconds"])
+                )
             }
             return executeShell(command: command, cwd: cwd, startTime: startTime, callId: callId)
+
+        case "send_input":
+            return await executeSendInput(dict: dict, workspace: workspace, settings: settings, startTime: startTime)
 
         case "edit_file", "file_edit":
             let path = (dict["path"] as? String) ?? (dict["filename"] as? String) ?? (dict["file"] as? String) ?? ""
@@ -2577,6 +2583,54 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     /// Longest an interactive command may run. Longer than the plain shell's two minutes because a
     /// person has to read the prompt and answer it.
     static let interactiveTimeoutSeconds: TimeInterval = 600
+    /// How long output must stay quiet before an interactive call returns "still running".
+    static let defaultIdleSeconds: TimeInterval = 3
+
+    static func idleSeconds(from value: Any?) -> TimeInterval {
+        guard let seconds = intArgument(value) else { return defaultIdleSeconds }
+        return TimeInterval(min(60, max(1, seconds)))
+    }
+
+    /// Type into the interactive command that is waiting. The text is untrusted input to a program
+    /// the user may have started with a shell prompt in it, so it is gated like a command: refused
+    /// under the read-only safety level, and held to the same write-outside-the-workspace check.
+    private func executeSendInput(
+        dict: [String: Any], workspace: Workspace, settings: AppSettings, startTime: Double
+    ) async -> ToolExecutionResult {
+        func fail(_ message: String) -> ToolExecutionResult {
+            ToolExecutionResult(success: false, output: "", error: message,
+                                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+        }
+        guard let runner = InteractiveCommandRegistry.runner else {
+            return fail("Interactive terminals are not available in this build.")
+        }
+        switch settings.terminalSafetyLevel {
+        case .allowAll: break
+        case .safeOnly:
+            return fail("Blocked by Terminal Safety Level (\"Allow Safe Read-Only Commands\"): send_input can type anything into a running program. Switch to \"Always Ask\" or \"Unrestricted\" under Settings → Advanced.")
+        case .alwaysAsk:
+            return fail("Blocked: Terminal Safety Level is \"Always Ask Confirmation\" but no user approval was recorded for this input.")
+        }
+        let terminate = Self.boolArgument(dict["terminate"]) == true
+        let text = dict["text"] as? String ?? ""
+        let key = (dict["key"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let pressEnter = Self.boolArgument(dict["press_enter"]) ?? true
+        if !terminate, settings.sandboxAgentFileSystem,
+           let escape = Self.shellWriteTargetOutsideSandbox(command: text, workspace: workspace, settings: settings) {
+            return fail("Blocked by Sandbox Agent File System: this input writes to '\(escape)', which is outside the workspace and authorized folders.")
+        }
+        guard let input = InteractiveInput.bytes(text: text, pressEnter: pressEnter, key: key) else {
+            return fail("Unknown key '\(key ?? "")'. Known keys: \(InteractiveInput.knownKeys).")
+        }
+        let result = await runner.sendInput(
+            input, idleSeconds: Self.idleSeconds(from: dict["idle_seconds"]), terminate: terminate
+        )
+        let formatted = InteractiveCommandFormatting.format(result, timeoutSeconds: Self.interactiveTimeoutSeconds)
+        return ToolExecutionResult(
+            success: formatted.success, output: formatted.output, error: formatted.error,
+            durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        )
+    }
 
     /// Run `command` in the terminal the user can type into. Gating (safety level, path checks)
     /// has already happened; the Shell Sandbox still wraps it, since confinement should not depend
@@ -2585,7 +2639,8 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         command: String,
         cwd: String,
         runner: any InteractiveCommandRunner,
-        startTime: Double
+        startTime: Double,
+        idleSeconds: TimeInterval
     ) async -> ToolExecutionResult {
         let settings = PersistenceManager.shared.loadSettings()
         if let reason = ShellSandbox.unavailableReason(for: settings.shellSandboxMode) {
@@ -2604,7 +2659,8 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             cwd: (cwd as NSString).expandingTildeInPath,
             environment: environment,
             displayCommand: command,
-            timeoutSeconds: Self.interactiveTimeoutSeconds
+            timeoutSeconds: Self.interactiveTimeoutSeconds,
+            idleSeconds: idleSeconds
         )
         let formatted = InteractiveCommandFormatting.format(result, timeoutSeconds: Self.interactiveTimeoutSeconds)
         return ToolExecutionResult(

@@ -19,7 +19,7 @@ public enum ToolCallRepair {
     /// Every built-in tool the dispatcher handles, by canonical name.
     public static let builtInNames: [String] = [
         "file_read", "file_write", "edit_file", "multi_edit", "file_list", "file_copy", "file_move",
-        "file_delete", "glob", "grep", "find_symbol", "terminal_command", "build_project", "run_tests",
+        "file_delete", "glob", "grep", "find_symbol", "terminal_command", "send_input", "build_project", "run_tests",
         "git_status", "git_diff", "git_log", "git_commit", "changed_files", "revert_changes",
         "rename_symbol", "go_to_definition", "find_references", "symbol_info", "call_hierarchy",
         "code_diagnostics", "document_symbols", "setup_xcode_language_server", "fetch_url",

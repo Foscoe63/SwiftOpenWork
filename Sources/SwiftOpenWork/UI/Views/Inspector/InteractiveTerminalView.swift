@@ -63,7 +63,7 @@ final class InteractiveTerminalHost: NSObject, ObservableObject, LocalProcessTer
 
     func terminate() {
         guard isRunning else { return }
-        terminalView.process.terminate()
+        PTYProcess.terminateGroup(of: terminalView)
         isRunning = false
     }
 

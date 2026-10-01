@@ -24,7 +24,7 @@ public enum AgentRoleProfiles {
         ],
         "coder-agent": readCode + [
             "file_write", "edit_file", "multi_edit", "file_copy", "file_move", "rename_symbol",
-            "setup_xcode_language_server", "build_project", "run_tests", "terminal_command",
+            "setup_xcode_language_server", "build_project", "run_tests", "terminal_command", "send_input",
             "run_app", "quit_app", "screenshot_window", "accessibility_tree",
             "preview_start", "preview_check", "preview_logs", "preview_stop",
             "git_status", "git_diff", "git_log", "changed_files", "revert_changes",
@@ -78,7 +78,7 @@ public enum AgentRoleProfiles {
             "file_write", "edit_file", "get_current_date", "memory_store", "memory_recall",
         ],
         "devops-agent": readCode + [
-            "file_write", "edit_file", "multi_edit", "terminal_command", "build_project", "run_tests",
+            "file_write", "edit_file", "multi_edit", "terminal_command", "send_input", "build_project", "run_tests",
             "git_status", "git_diff", "git_log", "changed_files", "web_search", "fetch_url",
             "todo_write", "mcp_mcp-git",
         ],

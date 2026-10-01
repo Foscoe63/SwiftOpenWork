@@ -105,7 +105,7 @@ public enum ContextCompactor {
     private static let editTools: Set<String> = ["edit_file", "file_edit", "multi_edit", "edit_file_multi"]
     private static let deleteTools: Set<String> = ["file_delete", "delete_file", "rm"]
     private static let commandTools: Set<String> = [
-        "terminal_command", "run_command", "build_project", "run_tests",
+        "terminal_command", "run_command", "send_input", "build_project", "run_tests",
     ]
 
     /// Build a digest from the tool calls carried by `messages`.

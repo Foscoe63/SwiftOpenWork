@@ -1166,7 +1166,7 @@ public final class AgentRunner {
             setup_xcode_language_server,
             git_status, git_diff, git_log, changed_files, revert_changes,
             file_copy, file_move, file_delete,
-            terminal_command/run_command, fetch_url, web_search, ask_user, exit_plan_mode,
+            terminal_command/run_command (interactive:true for commands that prompt; answer them with send_input), fetch_url, web_search, ask_user, exit_plan_mode,
             todo_write, calculator, get_current_date, document_extract,
             preview_start, preview_check, preview_logs, preview_stop,
             gmail_list, gmail_search, google_calendar_list, google_calendar_upcoming.
@@ -2455,6 +2455,13 @@ public final class AgentRunner {
             return "Commits changes in an agent worktree."
         case "worktree_remove":
             return "Removes an agent worktree and its branch."
+        case "send_input":
+            // Typed text goes to a program that may be a shell or a REPL, so it asks wherever the
+            // command itself would have, and under the read-only level too.
+            if settings.terminalSafetyLevel != .allowAll {
+                return "Types input into a command running in the terminal."
+            }
+            return nil
         case "terminal_command", "run_command":
             if settings.terminalSafetyLevel == .alwaysAsk {
                 return "Runs a shell command on your Mac (Terminal Safety Level: Always Ask Confirmation)."
