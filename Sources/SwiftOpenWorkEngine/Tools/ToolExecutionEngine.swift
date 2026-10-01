@@ -176,6 +176,14 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 + (result.error.map { "error=\($0) " } ?? "")
                 + "output=\(AppLog.truncated(result.output))"
         )
+        // ai-memory: forward tool activity for long-term memory capture.
+        AIMemoryHooks.shared.noteToolUse(
+            cwd: workspace.folderPath,
+            toolName: toolName,
+            input: argumentsJson,
+            output: result.output,
+            success: result.success
+        )
         return result
     }
 

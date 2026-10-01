@@ -908,6 +908,10 @@ public final class AgentRunner {
 
         let lastPrompt = session.messages.last(where: { $0.role == .user })?.content ?? ""
 
+        // ai-memory: capture this turn's prompt (opens the session on the first turn).
+        AIMemoryHooks.shared.noteUserPrompt(
+            sessionId: session.id, cwd: workspace.folderPath, prompt: lastPrompt)
+
         // Delegation is the model's decision, made with `agent_spawn`.
         //
         // This used to be decided by keywords: any prompt containing "build", "create", "project",

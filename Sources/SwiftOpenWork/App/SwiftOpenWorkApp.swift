@@ -44,6 +44,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         NativeMLXService.shared.prepareForExit()
         // Language servers would exit on their own when stdin closes; this makes it certain.
         LiveConnections.terminateAll()
+        // ai-memory: flush a session-end for any open sessions while we still can.
+        AIMemoryHooks.shared.flushOnTerminate()
     }
 }
 
