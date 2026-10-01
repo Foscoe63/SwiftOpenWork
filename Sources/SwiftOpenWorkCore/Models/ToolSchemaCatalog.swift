@@ -396,7 +396,7 @@ public enum ToolSchemaCatalog {
         "file_move": #"{"type":"object","properties":{"source":{"type":"string"},"destination":{"type":"string"}},"required":["source","destination"]}"#,
         "file_delete": #"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
         "terminal_command": #"{"type":"object","properties":{"command":{"type":"string"},"cwd":{"type":"string"},"run_in_background":{"type":"boolean"}},"required":["command"]}"#,
-        "run_command": #"{"type":"object","properties":{"command":{"type":"string"},"run_in_background":{"type":"boolean"}},"required":["command"]}"#,
+        "run_command": #"{"type":"object","properties":{"command":{"type":"string"},"run_in_background":{"type":"boolean"},"interactive":{"type":"boolean","description":"Run in a terminal the user can see and type into. Use only for a command that prompts for input the user must give (a login, a confirmation, a wizard); the call waits until it exits."}},"required":["command"]}"#,
         "web_search": #"{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}"#,
         "fetch_url": #"{"type":"object","properties":{"url":{"type":"string","description":"http(s) URL to fetch"}},"required":["url"]}"#,
         "calculator": #"{"type":"object","properties":{"expression":{"type":"string"}},"required":["expression"]}"#,

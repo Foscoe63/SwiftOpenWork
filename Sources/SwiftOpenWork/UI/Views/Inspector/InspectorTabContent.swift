@@ -37,27 +37,32 @@ struct InspectorTabContent: View {
     }
 }
 
-/// The Terminal tab: a real shell, or the log of what the agent ran.
+/// The Terminal tab: your own shell, the agent's interactive commands, or the log of what it ran.
 struct TerminalPane: View {
     @ObservedObject var appState: AppState
-    @AppStorage("terminal.interactive") private var interactive = true
+    @AppStorage(TerminalMode.storageKey) private var modeRaw = TerminalMode.interactive.rawValue
+
+    private var mode: Binding<TerminalMode> {
+        Binding(get: { TerminalMode(rawValue: modeRaw) ?? .interactive }, set: { modeRaw = $0.rawValue })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $interactive) {
-                Text("Interactive").tag(true)
-                Text("Command Log").tag(false)
+            Picker("", selection: mode) {
+                Text("My Shell").tag(TerminalMode.interactive)
+                Text("Agent").tag(TerminalMode.agent)
+                Text("Command Log").tag(TerminalMode.log)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .help("Interactive is a real shell; Command Log shows what the agent ran")
+            .help("My Shell is yours; Agent is where the agent's interactive commands wait for you; Command Log shows what it ran")
             Divider()
-            if interactive {
-                InteractiveTerminalView(appState: appState)
-            } else {
-                IntegratedTerminalView(appState: appState)
+            switch mode.wrappedValue {
+            case .interactive: InteractiveTerminalView(appState: appState)
+            case .agent: AgentTerminalView(appState: appState)
+            case .log: IntegratedTerminalView(appState: appState)
             }
         }
     }

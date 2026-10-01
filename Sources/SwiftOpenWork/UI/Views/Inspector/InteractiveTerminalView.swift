@@ -86,7 +86,7 @@ final class InteractiveTerminalHost: NSObject, ObservableObject, LocalProcessTer
     nonisolated func processTerminated(source: TerminalView, exitCode: Int32?) {
         Task { @MainActor in
             self.isRunning = false
-            self.exitNote = exitCode.map { $0 == 0 ? "Shell exited." : "Shell exited with code \($0)." } ?? "Shell closed."
+            self.exitNote = PTYExitStatus.normalize(exitCode).map { $0 == 0 ? "Shell exited." : "Shell exited with code \($0)." } ?? "Shell closed."
         }
     }
 }

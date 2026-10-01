@@ -306,6 +306,20 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     /// `"80.0"` and `80.0` count too: a real export showed a local model sending
     /// `"offset":"80.0"`, which `Int(_:)` rejects, so the window was dropped and the whole file
     /// came back from line 1 — the model then asked again, and again.
+    /// A boolean the model may have sent as `true`, `"true"` or `1`.
+    public static func boolArgument(_ value: Any?) -> Bool? {
+        if let bool = value as? Bool { return bool }
+        if let number = value as? NSNumber { return number.intValue != 0 }
+        if let string = value as? String {
+            switch string.trimmingCharacters(in: .whitespaces).lowercased() {
+            case "true", "yes", "1": return true
+            case "false", "no", "0": return false
+            default: return nil
+            }
+        }
+        return nil
+    }
+
     public static func intArgument(_ value: Any?) -> Int? {
         if let int = value as? Int { return int }
         if let double = value as? Double, double.isFinite, double == double.rounded() { return Int(double) }
@@ -1000,6 +1014,9 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                     error: "Blocked: Terminal Safety Level is \"Always Ask Confirmation\" but no user approval was recorded for this command.",
                     durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                 )
+            }
+            if Self.boolArgument(dict["interactive"]) == true, let runner = InteractiveCommandRegistry.runner {
+                return await executeInteractive(command: command, cwd: cwd, runner: runner, startTime: startTime)
             }
             return executeShell(command: command, cwd: cwd, startTime: startTime, callId: callId)
 
@@ -2554,6 +2571,47 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 : output,
             exitCode: didTimeOut ? -2 : process.terminationStatus,
             timedOut: didTimeOut
+        )
+    }
+
+    /// Longest an interactive command may run. Longer than the plain shell's two minutes because a
+    /// person has to read the prompt and answer it.
+    static let interactiveTimeoutSeconds: TimeInterval = 600
+
+    /// Run `command` in the terminal the user can type into. Gating (safety level, path checks)
+    /// has already happened; the Shell Sandbox still wraps it, since confinement should not depend
+    /// on which way the command was launched.
+    private func executeInteractive(
+        command: String,
+        cwd: String,
+        runner: any InteractiveCommandRunner,
+        startTime: Double
+    ) async -> ToolExecutionResult {
+        let settings = PersistenceManager.shared.loadSettings()
+        if let reason = ShellSandbox.unavailableReason(for: settings.shellSandboxMode) {
+            return ToolExecutionResult(success: false, output: "", error: reason,
+                                       durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+        }
+        let shellPath = settings.terminalShell.isEmpty ? "/bin/zsh" : settings.terminalShell
+        let process = Process()
+        Self.configureLaunch(process, shellPath: shellPath, command: command, settings: settings, cwd: cwd)
+        var environment = ToolExecutionEngine.defaultEnvironment(custom: settings.customEnvironmentVariables)
+        environment["TERM"] = "xterm-256color"
+
+        let result = await runner.run(
+            executable: process.executableURL?.path ?? shellPath,
+            arguments: process.arguments ?? ["-c", command],
+            cwd: (cwd as NSString).expandingTildeInPath,
+            environment: environment,
+            displayCommand: command,
+            timeoutSeconds: Self.interactiveTimeoutSeconds
+        )
+        let formatted = InteractiveCommandFormatting.format(result, timeoutSeconds: Self.interactiveTimeoutSeconds)
+        return ToolExecutionResult(
+            success: formatted.success,
+            output: formatted.output,
+            error: formatted.error,
+            durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
         )
     }
 

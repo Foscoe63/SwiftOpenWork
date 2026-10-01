@@ -8,5 +8,7 @@ enum LocalInferenceWiring {
     static func install() {
         LocalInferenceRegistry.register(engine: NativeMLXService.shared, serverLauncher: LocalMLXEngine.shared)
         EmbedderRegistry.register(MLXEmbeddingService.shared)
+        // App.init runs on the main thread, where the main-actor host lives.
+        MainActor.assumeIsolated { InteractiveCommandRegistry.register(AgentTerminalHost.shared) }
     }
 }
