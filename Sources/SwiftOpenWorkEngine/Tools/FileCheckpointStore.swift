@@ -159,6 +159,20 @@ public actor FileCheckpointStore {
 
     // MARK: - Reverting
 
+    /// Write `contents` to a tracked file, but only if it still holds `expectedCurrent`.
+    ///
+    /// A hunk revert is computed from the text the reviewer is looking at. If the agent, an editor
+    /// or a formatter has changed the file since, writing that result would silently undo their
+    /// change, so a mismatch refuses and the caller reloads. The checkpoint is kept: the file still
+    /// differs from where the turn began, and the rest of the review still works.
+    @discardableResult
+    public func applyPartialRevert(path: String, expectedCurrent: String, contents: String) -> Bool {
+        guard entries[path] != nil,
+              let current = try? String(contentsOfFile: path, encoding: .utf8),
+              current == expectedCurrent else { return false }
+        return (try? contents.write(toFile: path, atomically: true, encoding: .utf8)) != nil
+    }
+
     /// Put every recorded file back as it was when the turn began.
     @discardableResult
     public func revertTurn(fileManager: FileManager = .default) -> RevertOutcome {

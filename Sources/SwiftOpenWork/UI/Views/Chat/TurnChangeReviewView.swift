@@ -17,6 +17,7 @@ public struct TurnChangeReviewView: View {
     @State private var selected: FileCheckpointStore.Change?
     @State private var isLoading = true
     @State private var confirmingRevertAll = false
+    @AppStorage("review.sideBySide") private var sideBySide = true
 
     public init(appState: AppState, root: String, onRevert: (() -> Void)? = nil) {
         self.appState = appState
@@ -53,6 +54,13 @@ public struct TurnChangeReviewView: View {
                 .font(.system(size: 12.5, weight: .semibold))
             Spacer()
             if !changes.isEmpty {
+                Picker("", selection: $sideBySide) {
+                    Text("Side by Side").tag(true)
+                    Text("Unified").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 170)
                 Button(confirmingRevertAll ? "Really revert all?" : "Revert all") {
                     if confirmingRevertAll {
                         Task { await revertAll() }
@@ -126,24 +134,44 @@ public struct TurnChangeReviewView: View {
     @ViewBuilder
     private var detail: some View {
         if let change = selected ?? changes.first {
-            VisualDiffInspectorView(
-                appState: appState,
-                filePath: relative(change.path),
-                // A created file diffs against nothing; a deleted one against nothing after.
-                originalText: change.before ?? "",
-                modifiedText: change.after ?? "",
-                // The agent already wrote this file. There is nothing left to apply, so the only
-                // real action is putting it back — "Apply & Save Changes" here did nothing at all.
-                onAccept: nil,
-                onReject: { Task { await revert(change) } },
-                rejectTitle: "Revert This File"
-            )
+            if sideBySide {
+                SideBySideDiffReviewView(
+                    appState: appState,
+                    path: change.path,
+                    displayPath: relative(change.path),
+                    before: change.before,
+                    after: change.after,
+                    onChanged: { Task { await reload(); onRevert?() } },
+                    onPreviousFile: { stepFile(-1) },
+                    onNextFile: { stepFile(1) }
+                )
+            } else {
+                VisualDiffInspectorView(
+                    appState: appState,
+                    filePath: relative(change.path),
+                    // A created file diffs against nothing; a deleted one against nothing after.
+                    originalText: change.before ?? "",
+                    modifiedText: change.after ?? "",
+                    // The agent already wrote this file. There is nothing left to apply, so the only
+                    // real action is putting it back — "Apply & Save Changes" here did nothing at all.
+                    onAccept: nil,
+                    onReject: { Task { await revert(change) } },
+                    rejectTitle: "Revert This File"
+                )
+
+            }
         } else {
             Color.clear
         }
     }
 
     // MARK: - Helpers
+
+    private func stepFile(_ delta: Int) {
+        guard !changes.isEmpty else { return }
+        let index = changes.firstIndex { $0.path == (selected ?? changes.first)?.path } ?? 0
+        selected = changes[min(changes.count - 1, max(0, index + delta))]
+    }
 
     private func relative(_ path: String) -> String {
         guard !root.isEmpty else { return path }
@@ -171,8 +199,10 @@ public struct TurnChangeReviewView: View {
         let latest = await FileCheckpointStore.shared.changes()
         await MainActor.run {
             changes = latest
-            if let current = selected, !latest.contains(where: { $0.path == current.path }) {
-                selected = nil
+            // Re-point at the fresh change, not the snapshot: a hunk revert rewrites the file, and a
+            // stale selection would keep drawing (and reverting against) the text from before it.
+            if let current = selected {
+                selected = latest.first { $0.path == current.path }
             }
             isLoading = false
             confirmingRevertAll = false
