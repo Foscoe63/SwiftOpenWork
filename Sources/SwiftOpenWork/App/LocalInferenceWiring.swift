@@ -7,5 +7,6 @@ import SwiftOpenWorkLocalInference
 enum LocalInferenceWiring {
     static func install() {
         LocalInferenceRegistry.register(engine: NativeMLXService.shared, serverLauncher: LocalMLXEngine.shared)
+        EmbedderRegistry.register(MLXEmbeddingService.shared)
     }
 }

@@ -171,6 +171,9 @@ public struct MCPServerConfig: Identifiable, Codable, Hashable, Sendable {
 }
 
 public struct AppSettings: Codable, Hashable, Sendable {
+    /// bge-small: 33M parameters, ~65MB, strong for its size on code and prose.
+    public static let defaultEmbeddingModelId = "BAAI/bge-small-en-v1.5"
+
     /// Which migrations have already run against this file. See `AppSettings.currentSchemaVersion`.
     public var settingsSchemaVersion: Int
 
@@ -210,6 +213,10 @@ public struct AppSettings: Codable, Hashable, Sendable {
     /// Runs shell commands under macOS Seatbelt so writes outside the workspace (and optionally
     /// network access) fail in the kernel, whatever the command does.
     public var shellSandboxMode: ShellSandboxMode
+    /// Adds a local embedding model to `search_workspace`, fused with the keyword ranking.
+    public var semanticSearchEnabled: Bool
+    /// Hugging Face id of the embedding model. Small by design: it sits in memory beside the chat model.
+    public var embeddingModelId: String
 
     // Appearance
     public var theme: AppTheme
@@ -375,6 +382,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
         // carries this key, and decoding prefers the stored value over this default.
         sandboxAgentFileSystem: Bool = true,
         shellSandboxMode: ShellSandboxMode = .off,
+        semanticSearchEnabled: Bool = false,
+        embeddingModelId: String = AppSettings.defaultEmbeddingModelId,
         theme: AppTheme = .dark,
         accentColor: AccentColorChoice = .purple,
         editorFontSize: Int = 14,
@@ -454,6 +463,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.askBeforeFetchingNewSites = askBeforeFetchingNewSites
         self.sandboxAgentFileSystem = sandboxAgentFileSystem
         self.shellSandboxMode = shellSandboxMode
+        self.semanticSearchEnabled = semanticSearchEnabled
+        self.embeddingModelId = embeddingModelId
         self.theme = theme
         self.accentColor = accentColor
         self.editorFontSize = editorFontSize
@@ -526,6 +537,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.askBeforeFetchingNewSites = try container.decodeIfPresent(Bool.self, forKey: .askBeforeFetchingNewSites) ?? def.askBeforeFetchingNewSites
         self.sandboxAgentFileSystem = try container.decodeIfPresent(Bool.self, forKey: .sandboxAgentFileSystem) ?? def.sandboxAgentFileSystem
         self.shellSandboxMode = try container.decodeIfPresent(ShellSandboxMode.self, forKey: .shellSandboxMode) ?? def.shellSandboxMode
+        self.semanticSearchEnabled = try container.decodeIfPresent(Bool.self, forKey: .semanticSearchEnabled) ?? def.semanticSearchEnabled
+        self.embeddingModelId = try container.decodeIfPresent(String.self, forKey: .embeddingModelId) ?? def.embeddingModelId
 
         self.theme = try container.decodeIfPresent(AppTheme.self, forKey: .theme) ?? def.theme
         self.accentColor = try container.decodeIfPresent(AccentColorChoice.self, forKey: .accentColor) ?? def.accentColor

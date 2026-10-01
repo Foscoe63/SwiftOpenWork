@@ -1255,6 +1255,12 @@ public struct SettingsView: View {
                 }
             }
 
+            SemanticSearchSettingsCard(
+                appState: appState,
+                enabled: $appState.settings.semanticSearchEnabled,
+                modelId: $appState.settings.embeddingModelId
+            )
+
             SettingsCard(title: "Authorized Workspace Directories", description: "Paths agents are granted access to read and write", icon: "folder.fill") {
                 ForEach(appState.settings.authorizedFolders, id: \.self) { folder in
                     HStack {

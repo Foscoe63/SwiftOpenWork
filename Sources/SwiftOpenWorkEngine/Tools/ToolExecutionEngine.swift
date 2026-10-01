@@ -1298,10 +1298,10 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 )
             }
             let topK = Self.intArgument(dict["top_k"]) ?? Self.intArgument(dict["limit"]) ?? 6
-            let hits = await CodeIndex.shared.search(query: query, root: workspace.folderPath, topK: topK)
+            let (hits, note) = await CodeIndex.shared.searchWithStatus(query: query, root: workspace.folderPath, topK: topK)
             return ToolExecutionResult(
                 success: true,
-                output: CodeIndex.format(hits, query: query),
+                output: CodeIndex.format(hits, query: query) + (note.map { "\n\n(\($0))" } ?? ""),
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
 

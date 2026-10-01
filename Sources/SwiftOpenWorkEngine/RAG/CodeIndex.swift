@@ -1,4 +1,6 @@
 import Foundation
+import SwiftOpenWorkCore
+import SwiftOpenWorkStorage
 
 /// A persistent, ranked index over a workspace's source files.
 ///
@@ -7,9 +9,11 @@ import Foundation
 /// an inverted index once, keeps it until files change, and ranks with BM25 — which discounts
 /// terms that appear everywhere and normalises for chunk length.
 ///
-/// It is lexical, not embedding-based: it will not connect "authentication" to a file that only
-/// ever says "login". Swapping in embeddings later is a change to `score`, not to the storage or
-/// the tool surface — the chunking and incremental invalidation stay as they are.
+/// BM25 alone is lexical: it will not connect "authentication" to a file that only ever says
+/// "login". When Semantic Search is on and an embedding model is registered, each chunk also gets a
+/// vector, built in the background and cached by chunk hash, and the two rankings are fused with
+/// reciprocal-rank fusion. BM25 is always the fallback: while vectors are still being built, when
+/// no model is installed, or when embedding fails, results are exactly what they were.
 public actor CodeIndex {
     public static let shared = CodeIndex()
 
@@ -40,11 +44,38 @@ public actor CodeIndex {
         var averageLength: Double
         /// path -> modification date, for incremental invalidation
         var stamps: [String: Date]
+        /// Content hash of each chunk, the key its vector is cached under.
+        var chunkKeys: [String]
     }
 
     private var cache: [String: Indexed] = [:]
+    private var stores: [String: EmbeddingStore] = [:]
+    private var embeddingTasks: [String: Task<Void, Never>] = [:]
+    private var semanticNotes: [String: String] = [:]
+    /// Roots whose embedding build failed. Not retried on every query; a rebuild clears it.
+    private var failedRoots: Set<String> = []
 
-    private init() {}
+    /// Chunks embedded per call to the model.
+    static let embeddingBatchSize = 16
+    /// A chunk is cut to this many characters before embedding; small encoders see about 512 tokens.
+    static let embeddingCharacterLimit = 1_800
+    /// Above this many chunks a workspace stays on BM25: the vectors would be slow to build and
+    /// large to keep, for a repository the lexical index already handles well.
+    static let maxEmbeddedChunks = 40_000
+
+    private let semanticEnabled: @Sendable () -> Bool
+    private let embedderProvider: @Sendable () -> (any TextEmbedder)?
+    private let storeDirectory: URL
+
+    init(
+        semanticEnabled: @escaping @Sendable () -> Bool = { PersistenceManager.shared.loadSettings().semanticSearchEnabled },
+        embedderProvider: @escaping @Sendable () -> (any TextEmbedder)? = { EmbedderRegistry.embedder },
+        storeDirectory: URL = AppIdentity.homeDataDirectory.appendingPathComponent("embeddings", isDirectory: true)
+    ) {
+        self.semanticEnabled = semanticEnabled
+        self.embedderProvider = embedderProvider
+        self.storeDirectory = storeDirectory
+    }
 
     // MARK: - Tokenisation
 
@@ -107,7 +138,9 @@ public actor CodeIndex {
 
         var postings: [String: [Int]] = [:]
         var lengths: [Int] = []
+        var chunkKeys: [String] = []
         for (index, chunk) in chunks.enumerated() {
+            chunkKeys.append(EmbeddingStore.key(for: chunk.text))
             let tokens = Self.tokenize(chunk.text)
             lengths.append(tokens.count)
             for term in Set(tokens) {
@@ -121,8 +154,13 @@ public actor CodeIndex {
             postings: postings,
             lengths: lengths,
             averageLength: max(1, average),
-            stamps: stamps
+            stamps: stamps,
+            chunkKeys: chunkKeys
         )
+        // A rebuilt index may hold chunks with no vector yet.
+        embeddingTasks[root]?.cancel()
+        embeddingTasks[root] = nil
+        failedRoots.remove(root)
         return chunks.count
     }
 
@@ -152,15 +190,68 @@ public actor CodeIndex {
 
     // MARK: - Searching
 
-    /// BM25 over the indexed chunks. Builds the index on first use for a root.
-    public func search(query: String, root: String, topK: Int = 8) -> [Hit] {
+    /// Ranked chunks for `query`: BM25 fused with vector similarity when vectors are available.
+    public func search(query: String, root: String, topK: Int = 8) async -> [Hit] {
+        await searchWithStatus(query: query, root: root, topK: topK).hits
+    }
+
+    /// As `search`, plus a one-line note when Semantic Search is on but this answer is lexical only,
+    /// so the model and the user are not left thinking a vector search ran.
+    public func searchWithStatus(query: String, root: String, topK: Int = 8) async -> (hits: [Hit], note: String?) {
         if cache[root] == nil { _ = build(root: root) }
-        guard let index = cache[root], !index.chunks.isEmpty else { return [] }
+        guard let index = cache[root], !index.chunks.isEmpty else { return ([], nil) }
 
         let terms = Set(Self.tokenize(query))
-        guard !terms.isEmpty else { return [] }
+        let lexical = terms.isEmpty ? [] : bm25Ranking(index: index, terms: terms)
 
-        // BM25 constants: k1 damps repeated terms, b controls length normalisation.
+        guard semanticEnabled() else { return (hit(lexical.prefix(topK), in: index), nil) }
+        guard let embedder = embedderProvider() else {
+            return (hit(lexical.prefix(topK), in: index), "Semantic search is on but no embedding model is loaded; results are keyword-only.")
+        }
+        startEmbeddingIfNeeded(root: root, index: index, embedder: embedder)
+
+        let store = stores[root] ?? loadStore(root: root, embedder: embedder)
+        stores[root] = store
+        guard store.count > 0 else {
+            let building = embeddingTasks[root] != nil
+            return (hit(lexical.prefix(topK), in: index), building
+                ? "Semantic index is still being built; results are keyword-only for now."
+                : semanticNotes[root] ?? "Semantic index is empty; results are keyword-only.")
+        }
+
+        var vectorRanking: [Int] = []
+        do {
+            let queryVector = try await embedder.embed([query], isQuery: true).first ?? []
+            // The index may have been rebuilt while the query was being embedded.
+            guard cache[root]?.chunkKeys == index.chunkKeys else {
+                return (hit(lexical.prefix(topK), in: index), nil)
+            }
+            let unit = HybridRanking.normalized(queryVector)
+            var scored: [(Int, Float)] = []
+            for (position, key) in index.chunkKeys.enumerated() {
+                guard let vector = store.vector(forKey: key) else { continue }
+                scored.append((position, HybridRanking.dot(unit, vector)))
+            }
+            vectorRanking = scored.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 > $1.1 }.prefix(100).map(\.0)
+        } catch {
+            semanticNotes[root] = "Semantic search failed (\(error.localizedDescription)); results are keyword-only."
+            return (hit(lexical.prefix(topK), in: index), semanticNotes[root])
+        }
+
+        let fused = HybridRanking.reciprocalRankFusion(
+            [Array(lexical.prefix(100).map(\.index)), vectorRanking], topK: topK
+        )
+        let hits = fused.map { Hit(chunk: index.chunks[$0.index], score: $0.score) }
+        let covered = store.count < index.chunks.count
+        return (hits, covered && embeddingTasks[root] != nil ? "Semantic index is still being built; results use the part embedded so far." : nil)
+    }
+
+    private func hit<S: Sequence>(_ ranked: S, in index: Indexed) -> [Hit] where S.Element == (index: Int, score: Double) {
+        ranked.map { Hit(chunk: index.chunks[$0.index], score: $0.score) }
+    }
+
+    /// BM25 constants: k1 damps repeated terms, b controls length normalisation.
+    private func bm25Ranking(index: Indexed, terms: Set<String>) -> [(index: Int, score: Double)] {
         let k1 = 1.5
         let b = 0.75
         let total = Double(index.chunks.count)
@@ -183,12 +274,92 @@ public actor CodeIndex {
 
         return scores
             .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
-            .prefix(topK)
-            .map { Hit(chunk: index.chunks[$0.key], score: $0.value) }
+            .map { (index: $0.key, score: $0.value) }
+    }
+
+    // MARK: - Embeddings
+
+    private func storeURL(root: String, embedder: any TextEmbedder) -> URL {
+        EmbeddingStore.fileURL(root: root, embedderId: embedder.identifier, in: storeDirectory)
+    }
+
+    private func loadStore(root: String, embedder: any TextEmbedder) -> EmbeddingStore {
+        EmbeddingStore.load(from: storeURL(root: root, embedder: embedder))
+    }
+
+    /// Embed every chunk that has no cached vector, off the caller's path.
+    ///
+    /// Search never waits for this: it answers from BM25 and the vectors that exist, and each run
+    /// saves as it goes, so an interrupted build resumes rather than restarts.
+    private func startEmbeddingIfNeeded(root: String, index: Indexed, embedder: any TextEmbedder) {
+        guard embeddingTasks[root] == nil, !failedRoots.contains(root),
+              index.chunks.count <= Self.maxEmbeddedChunks else { return }
+        var store = stores[root] ?? loadStore(root: root, embedder: embedder)
+        let keys = Set(index.chunkKeys)
+        store.retain(keys: keys)
+        stores[root] = store
+
+        var seen = Set<String>()
+        let missing: [(key: String, text: String)] = index.chunks.enumerated().compactMap { position, chunk in
+            let key = index.chunkKeys[position]
+            guard store.vector(forKey: key) == nil, seen.insert(key).inserted else { return nil }
+            return (key, String(chunk.text.prefix(Self.embeddingCharacterLimit)))
+        }
+        guard !missing.isEmpty else { return }
+
+        let url = storeURL(root: root, embedder: embedder)
+        embeddingTasks[root] = Task.detached(priority: .utility) { [weak self] in
+            var batchStart = 0
+            while batchStart < missing.count, !Task.isCancelled {
+                let batch = Array(missing[batchStart..<min(batchStart + Self.embeddingBatchSize, missing.count)])
+                do {
+                    let vectors = try await embedder.embed(batch.map(\.text), isQuery: false)
+                    guard vectors.count == batch.count else { throw EmbeddingError.countMismatch }
+                    await self?.record(root: root, pairs: zip(batch.map(\.key), vectors.map(HybridRanking.normalized)).map { ($0, $1) })
+                } catch {
+                    await self?.embeddingFailed(root: root, error: error)
+                    return
+                }
+                batchStart += Self.embeddingBatchSize
+            }
+            await self?.embeddingFinished(root: root, url: url, cancelled: Task.isCancelled)
+        }
+    }
+
+    private func record(root: String, pairs: [(String, [Float])]) {
+        var store = stores[root] ?? EmbeddingStore()
+        for (key, vector) in pairs { store.insert(vector, forKey: key) }
+        stores[root] = store
+    }
+
+    private func embeddingFailed(root: String, error: Error) {
+        semanticNotes[root] = "Semantic indexing stopped (\(error.localizedDescription)); results are keyword-only."
+        failedRoots.insert(root)
+        embeddingTasks[root] = nil
+    }
+
+    private func embeddingFinished(root: String, url: URL, cancelled: Bool) {
+        if !cancelled { semanticNotes[root] = nil }
+        embeddingTasks[root] = nil
+        stores[root]?.save(to: url)
+    }
+
+    /// Wait for the background embedding of `root` to finish. For tests and for callers that want
+    /// the semantic half ready before they ask.
+    func waitForEmbeddings(root: String) async {
+        await embeddingTasks[root]?.value
+    }
+
+    enum EmbeddingError: LocalizedError {
+        case countMismatch
+        var errorDescription: String? { "the embedding model returned the wrong number of vectors" }
     }
 
     public func invalidate(root: String) {
         cache.removeValue(forKey: root)
+        embeddingTasks[root]?.cancel()
+        embeddingTasks[root] = nil
+        failedRoots.remove(root)
     }
 
     public func indexedChunkCount(root: String) -> Int {
