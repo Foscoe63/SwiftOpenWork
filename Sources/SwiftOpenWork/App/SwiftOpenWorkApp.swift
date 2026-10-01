@@ -219,6 +219,26 @@ public struct SwiftOpenWorkApp: App {
             }
         }
         .defaultSize(width: 760, height: 560)
+
+        MenuBarExtra(isInserted: Binding(
+            get: { appState.settings.showMenuBarMonitor },
+            // MenuBarExtra writes this binding back while SwiftUI is updating views (and when the
+            // user drags the item out of the menu bar). Publishing from inside that update
+            // loops forever, so only a real change is written, and not in the update's stack.
+            set: { newValue in
+                guard appState.settings.showMenuBarMonitor != newValue else { return }
+                DispatchQueue.main.async {
+                    appState.settings.showMenuBarMonitor = newValue
+                    appState.updateSettings(appState.settings)
+                }
+            }
+        )) {
+            MenuBarMonitorView(appState: appState)
+        } label: {
+            Image(systemName: appState.isGenerating || !appState.backgroundRuns.isEmpty
+                  ? "bolt.circle.fill" : "bolt.circle")
+        }
+        .menuBarExtraStyle(.window)
     }
 
     @Environment(\.openWindow) private var openWindow

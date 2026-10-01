@@ -1182,6 +1182,11 @@ public struct SettingsView: View {
                     Toggle("", isOn: $appState.settings.playNotificationSounds)
                         .toggleStyle(.switch)
                 }
+
+                SettingsRow(title: "Menu Bar Monitor", subtitle: "Show loaded models, memory and background runs in the menu bar, with quick actions", icon: "menubar.rectangle") {
+                    Toggle("", isOn: $appState.settings.showMenuBarMonitor)
+                        .toggleStyle(.switch)
+                }
             }
         }
     }

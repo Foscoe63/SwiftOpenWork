@@ -199,6 +199,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var planModeEnabled: Bool
     public var maxTurnTokens: Int
     public var playNotificationSounds: Bool
+    /// A menu bar item showing loaded models, memory and background work. Off by default: an
+    /// upgrade should not add something to the menu bar unasked.
+    public var showMenuBarMonitor: Bool
 
     // Permissions & Shell
     public var authorizedFolders: [String]
@@ -370,6 +373,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         planModeEnabled: Bool = false,
         maxTurnTokens: Int = 2_000_000,
         playNotificationSounds: Bool = true,
+        showMenuBarMonitor: Bool = false,
         // Only the workspace is reachable unless the user adds folders. This was the whole home
         // directory, which made the file sandbox cover everything a credential lives in.
         // Existing installs keep their stored list.
@@ -456,6 +460,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.planModeEnabled = planModeEnabled
         self.maxTurnTokens = maxTurnTokens
         self.playNotificationSounds = playNotificationSounds
+        self.showMenuBarMonitor = showMenuBarMonitor
         self.authorizedFolders = authorizedFolders
         self.terminalSafetyLevel = terminalSafetyLevel
         self.terminalShell = terminalShell
@@ -529,6 +534,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.planModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .planModeEnabled) ?? false
         self.maxTurnTokens = try container.decodeIfPresent(Int.self, forKey: .maxTurnTokens) ?? 2_000_000
         self.playNotificationSounds = try container.decodeIfPresent(Bool.self, forKey: .playNotificationSounds) ?? def.playNotificationSounds
+        self.showMenuBarMonitor = try container.decodeIfPresent(Bool.self, forKey: .showMenuBarMonitor) ?? def.showMenuBarMonitor
 
         self.authorizedFolders = try container.decodeIfPresent([String].self, forKey: .authorizedFolders) ?? def.authorizedFolders
         self.terminalSafetyLevel = try container.decodeIfPresent(TerminalSafetyLevel.self, forKey: .terminalSafetyLevel) ?? def.terminalSafetyLevel
