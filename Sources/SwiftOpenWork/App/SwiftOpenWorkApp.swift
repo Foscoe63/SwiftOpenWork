@@ -88,6 +88,13 @@ public struct SwiftOpenWorkApp: App {
         .commands {
             SidebarCommands()
 
+            CommandGroup(after: .windowArrangement) {
+                Button("Move \(appState.inspectorTab.title) to Its Own Window") {
+                    openWindow(id: "pane", value: appState.inspectorTab)
+                }
+                .keyboardShortcut("d", modifiers: [.command, .option])
+            }
+
             // Find (⌘F), Find Next and Use Selection for Find, which reach the editor's find bar.
             TextEditingCommands()
 
@@ -202,7 +209,19 @@ public struct SwiftOpenWorkApp: App {
                 .keyboardShortcut(",", modifiers: .command)
             }
         }
+
+        // A pane torn off the inspector: the editor, preview, sub-agent tree or terminal in a
+        // window of its own, for a second display. One window per pane; opening it again focuses it.
+        WindowGroup("Pane", id: "pane", for: InspectorTab.self) { $tab in
+            if let tab {
+                DetachedPaneWindow(appState: appState, tab: tab)
+                    .preferredColorScheme(colorScheme(for: appState.settings.theme))
+            }
+        }
+        .defaultSize(width: 760, height: 560)
     }
+
+    @Environment(\.openWindow) private var openWindow
 
     private func colorScheme(for theme: AppTheme) -> ColorScheme? {
         switch theme {

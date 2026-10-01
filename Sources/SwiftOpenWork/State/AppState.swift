@@ -58,7 +58,7 @@ public enum NavigationDestination: String, CaseIterable, Identifiable {
     }
 }
 
-public enum InspectorTab: String, CaseIterable, Identifiable {
+public enum InspectorTab: String, CaseIterable, Identifiable, Codable, Hashable {
     /// First, because reading and fixing what the agent wrote is the loop the rest supports.
     case editor = "editor"
     case preview = "preview"
@@ -141,6 +141,10 @@ public final class AppState: ObservableObject {
     @Published public var isInspectorOpen: Bool = WindowLayoutStore.isInspectorOpen {
         didSet { WindowLayoutStore.isInspectorOpen = isInspectorOpen }
     }
+    /// Inspector panes currently open in their own windows. The inspector shows a placeholder for
+    /// these: the editor, the preview's web view and the terminal each have one live instance, and
+    /// two windows cannot both host it.
+    @Published public var detachedPanes: Set<InspectorTab> = []
     @Published public var inspectorTab: InspectorTab = WindowLayoutStore.inspectorTab {
         didSet { WindowLayoutStore.inspectorTab = inspectorTab }
     }

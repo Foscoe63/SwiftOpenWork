@@ -62,3 +62,45 @@ struct TerminalPane: View {
         }
     }
 }
+
+/// Stands in for a pane that is open in its own window.
+struct DetachedPanePlaceholder: View {
+    @ObservedObject var appState: AppState
+    let tab: InspectorTab
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "macwindow.on.rectangle")
+                .font(.system(size: 26))
+                .foregroundColor(.secondary)
+            Text("\(tab.title) is open in its own window")
+                .font(.system(size: 12, weight: .semibold))
+            HStack {
+                Button("Show Window") { openWindow(id: "pane", value: tab) }
+                Button("Bring Back Here") { dismissWindow(id: "pane", value: tab) }
+            }
+            .controlSize(.small)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+    }
+}
+
+/// The contents of a detached pane's window.
+struct DetachedPaneWindow: View {
+    @ObservedObject var appState: AppState
+    let tab: InspectorTab
+
+    var body: some View {
+        InspectorTabContent(appState: appState, tab: tab)
+            .frame(minWidth: 420, minHeight: 320)
+            .background(ThemeColors.paneBg(for: appState.settings.theme, translucent: false))
+            .navigationTitle("\(tab.title) — \(appState.currentWorkspace.name)")
+            // The pane has one live instance, so while this window exists the inspector shows a
+            // placeholder rather than a second copy.
+            .onAppear { appState.detachedPanes.insert(tab) }
+            .onDisappear { appState.detachedPanes.remove(tab) }
+    }
+}

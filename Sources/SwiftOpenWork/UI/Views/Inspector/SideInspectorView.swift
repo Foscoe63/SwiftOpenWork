@@ -3,6 +3,7 @@ import SwiftOpenWorkEngine
 
 public struct SideInspectorView: View {
     @ObservedObject var appState: AppState
+    @Environment(\.openWindow) private var openWindow
 
     public init(appState: AppState) {
         self.appState = appState
@@ -17,7 +18,11 @@ public struct SideInspectorView: View {
                 .background(ThemeColors.border(for: appState.settings.theme))
 
             // Tab Content
-            InspectorTabContent(appState: appState, tab: appState.inspectorTab)
+            if appState.detachedPanes.contains(appState.inspectorTab) {
+                DetachedPanePlaceholder(appState: appState, tab: appState.inspectorTab)
+            } else {
+                InspectorTabContent(appState: appState, tab: appState.inspectorTab)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ThemeColors.paneBg(for: appState.settings.theme, translucent: appState.settings.useTranslucentBackground))
@@ -68,6 +73,16 @@ public struct SideInspectorView: View {
                 .help(tab.title)
             }
 
+            Button {
+                openWindow(id: "pane", value: appState.inspectorTab)
+            } label: {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                    .font(.system(size: 12))
+                    .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                    .frame(width: 24, height: 40)
+            }
+            .buttonStyle(.hitTestable)
+            .help("Open \(appState.inspectorTab.title) in its own window")
         }
         .padding(6)
     }
