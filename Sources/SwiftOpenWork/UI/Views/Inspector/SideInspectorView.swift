@@ -17,32 +17,7 @@ public struct SideInspectorView: View {
                 .background(ThemeColors.border(for: appState.settings.theme))
 
             // Tab Content
-            switch appState.inspectorTab {
-            case .editor:
-                EditorPane(appState: appState)
-            case .preview:
-                PreviewPane(appState: appState)
-            case .subagents:
-                SubAgentTreeVisualizer(appState: appState)
-            case .comms:
-                // The selection is corrected in `AppState.settings.didSet`, not here. Mutating
-                // an `@Published` from a view body's `onAppear` — which is what this used to do
-                // — publishes a change during a view update, and `inspectorTab.didSet` writes to
-                // `WindowLayoutStore` on top of that.
-                if appState.settings.showInterAgentCommunicationLogs {
-                    InterAgentCommLogView(appState: appState)
-                } else {
-                    SubAgentTreeVisualizer(appState: appState)
-                }
-            case .artifacts:
-                ArtifactsPanelView(appState: appState)
-            case .files:
-                FilesPanelView(appState: appState)
-            case .tools:
-                ToolsPanelView(appState: appState)
-            case .terminal:
-                terminalView
-            }
+            InspectorTabContent(appState: appState, tab: appState.inspectorTab)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ThemeColors.paneBg(for: appState.settings.theme, translucent: appState.settings.useTranslucentBackground))
@@ -92,13 +67,9 @@ public struct SideInspectorView: View {
                 .buttonStyle(.hitTestable)
                 .help(tab.title)
             }
+
         }
         .padding(6)
-    }
-
-    // MARK: - Interactive Terminal View
-    private var terminalView: some View {
-        IntegratedTerminalView(appState: appState)
     }
 }
 
