@@ -937,7 +937,8 @@ public final class AgentRunner {
 
         let loadedSettings = PersistenceManager.shared.loadSettings()
         let maxIterations = max(1, loadedSettings.maxAutonomousIterations)
-        let maxTurnTokens = max(1, loadedSettings.maxTurnTokens)
+        // 0 means the user turned the budget off.
+        let maxTurnTokens = loadedSettings.maxTurnTokens <= 0 ? Int.max : loadedSettings.maxTurnTokens
         var planModeActive = loadedSettings.planModeEnabled
         let allCatalogTools = PersistenceManager.shared.loadTools()
         var availableTools = allCatalogTools.filter { $0.isEnabled }
@@ -2410,6 +2411,31 @@ public final class AgentRunner {
         sessionId: String = "",
         workspaceRoot: String = ""
     ) -> String? {
+        let reason = baseApprovalReason(
+            toolName: toolName, argumentsJson: argumentsJson, settings: settings,
+            sessionId: sessionId, workspaceRoot: workspaceRoot
+        )
+        // "Allow All" in the composer means the agent is not interrupted: file edits, deletes, MCP
+        // writes, app launches and commits stop asking too. What stays is a guard that is not
+        // about trusting the agent: leaving plan mode, secret files, and the fetch-site policy
+        // (which has its own setting).
+        guard reason != nil, settings.terminalSafetyLevel == .allowEverything else { return reason }
+        let canonical = ToolCallRepair.builtInCanonical(toolName) ?? toolName
+        let stillAsks: Set<String> = [
+            "exit_plan_mode", "fetch_url",
+            "file_read", "read_file", "document_extract", "extract_document", "read_pdf_or_image",
+            "grep", "search_code", "code_search",
+        ]
+        return stillAsks.contains(canonical) ? reason : nil
+    }
+
+    private static func baseApprovalReason(
+        toolName: String,
+        argumentsJson: String = "{}",
+        settings: AppSettings,
+        sessionId: String = "",
+        workspaceRoot: String = ""
+    ) -> String? {
         // Decide on what the call *is*, not on how the model spelled it — and on the arguments the
         // dispatcher will actually use. `delete` and `remove` resolve to file_delete, and `read`
         // with a `file_path` reads that path; a check on the raw name and keys would wave both
@@ -2468,7 +2494,7 @@ public final class AgentRunner {
         case "send_input":
             // Typed text goes to a program that may be a shell or a REPL, so it asks wherever the
             // command itself would have, and under the read-only level too.
-            if settings.terminalSafetyLevel != .allowAll {
+            if settings.terminalSafetyLevel != .allowAll, settings.terminalSafetyLevel != .allowEverything {
                 return "Types input into a command running in the terminal."
             }
             return nil

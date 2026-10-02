@@ -723,6 +723,10 @@ public struct ComposerView: View {
                 .buttonStyle(.hitTestable)
                 .help("Plan mode blocks writes until exit_plan_mode. Also toggled with /plan.")
 
+                approvalSwitch
+
+                turnBudgetMenu
+
                 Spacer()
 
                 if let meter = contextMeter, meter.isWorthShowing {
@@ -736,6 +740,77 @@ public struct ComposerView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 12)
+    }
+
+    /// Ask / Safe / Allow for agent shell commands. It edits the one setting every agent and
+    /// sub-agent reads, so it applies to whichever agent is selected.
+    private var approvalSwitch: some View {
+        HStack(spacing: 0) {
+            ForEach(TerminalSafetyLevel.allCases) { level in
+                let selected = appState.settings.terminalSafetyLevel == level
+                Button {
+                    appState.settings.terminalSafetyLevel = level
+                } label: {
+                    Text(level.shortName)
+                        .font(.system(size: 10, weight: .medium))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(selected ? approvalTint(level).opacity(0.25) : Color.clear)
+                        .foregroundColor(selected ? approvalTint(level) : ThemeColors.textSecondary(for: appState.settings.theme))
+                }
+                .buttonStyle(.hitTestable)
+                .help(level.helpText)
+            }
+        }
+        .background(ThemeColors.cardBg(for: appState.settings.theme))
+        .cornerRadius(4)
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(ThemeColors.border(for: appState.settings.theme), lineWidth: 1)
+        )
+    }
+
+    private func approvalTint(_ level: TerminalSafetyLevel) -> Color {
+        switch level {
+        case .alwaysAsk: return .blue
+        case .safeOnly: return .green
+        case .allowAll: return .orange
+        case .allowEverything: return .red
+        }
+    }
+
+    /// The per-turn token budget, adjustable (or off) without opening Settings.
+    private var turnBudgetMenu: some View {
+        let budget = appState.settings.maxTurnTokens
+        let presets = [1_000_000, 2_000_000, 5_000_000, 10_000_000]
+        return Menu {
+            ForEach(presets, id: \.self) { value in
+                Button {
+                    appState.settings.maxTurnTokens = value
+                } label: {
+                    Text("\(value / 1_000_000)M tokens per turn" + (budget == value ? "  ✓" : ""))
+                }
+            }
+            Divider()
+            Button {
+                appState.settings.maxTurnTokens = 0
+            } label: {
+                Text("No limit" + (budget <= 0 ? "  ✓" : ""))
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "gauge.with.dots.needle.67percent")
+                    .font(.system(size: 10))
+                Text(budget <= 0 ? "Budget: Off" : "Budget: \(budget / 1_000_000)M")
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .foregroundColor(budget <= 0 ? .orange : ThemeColors.textSecondary(for: appState.settings.theme))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Token budget for one turn. A turn halts with a Continue prompt when it goes over. Choose No limit to turn it off.")
     }
 
     private var contextMeter: ContextMeter? {

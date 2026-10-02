@@ -59,6 +59,8 @@ public enum TerminalSafetyLevel: String, Codable, CaseIterable, Identifiable, Se
     case alwaysAsk = "alwaysAsk"
     case safeOnly = "safeOnly"
     case allowAll = "allowAll"
+    /// Shell commands *and* every other tool prompt (file edits, MCP writes, app launches).
+    case allowEverything = "allowEverything"
 
     public var id: String { rawValue }
 
@@ -67,6 +69,26 @@ public enum TerminalSafetyLevel: String, Codable, CaseIterable, Identifiable, Se
         case .alwaysAsk: return "Always Ask Confirmation"
         case .safeOnly: return "Allow Safe Read-Only Commands"
         case .allowAll: return "Unrestricted (Developer Mode)"
+        case .allowEverything: return "Allow Everything (No Approval Prompts)"
+        }
+    }
+
+    /// Label for the composer's three-way switch.
+    public var shortName: String {
+        switch self {
+        case .alwaysAsk: return "Ask"
+        case .safeOnly: return "Safe"
+        case .allowAll: return "Allow"
+        case .allowEverything: return "Allow All"
+        }
+    }
+
+    public var helpText: String {
+        switch self {
+        case .alwaysAsk: return "Ask: every shell command waits for your approval."
+        case .safeOnly: return "Safe: read-only commands run on their own; anything else is blocked."
+        case .allowAll: return "Allow: shell commands run without asking. File edits, MCP writes and app launches still ask."
+        case .allowEverything: return "Allow All: nothing asks — shell commands, file edits and deletes, MCP writes, app launches. Secret-file reads and plan-mode exit still ask."
         }
     }
 }
@@ -197,6 +219,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var autoCompactContext: Bool
     public var contextCompactionThresholdTokens: Int
     public var planModeEnabled: Bool
+    /// Halts a turn once its token use passes this. 0 turns the limit off.
     public var maxTurnTokens: Int
     public var playNotificationSounds: Bool
     /// A menu bar item showing loaded models, memory and background work. Off by default: an

@@ -2108,8 +2108,18 @@ public struct SettingsView: View {
             WorkspaceRulesCard(appState: appState)
 
             SettingsCard(title: "Autonomous ReAct Loop & Hierarchy (continued)", description: "Token budgets and multi-agent limits", icon: "gauge.with.dots.needle.67percent") {
-                SettingsRow(title: "Max Turn Tokens (\(appState.settings.maxTurnTokens / 1000)k)", subtitle: "Halt a single turn when estimated token use exceeds this budget", icon: "gauge.with.dots.needle.67percent") {
-                    Stepper("", value: $appState.settings.maxTurnTokens, in: 100_000...5_000_000, step: 100_000)
+                SettingsRow(title: "Limit Turn Tokens", subtitle: "Halt a single turn when its token use exceeds the budget. Turn off to let turns run without a cap", icon: "gauge.with.dots.needle.67percent") {
+                    Toggle("", isOn: Binding(
+                        get: { appState.settings.maxTurnTokens > 0 },
+                        set: { appState.settings.maxTurnTokens = $0 ? 2_000_000 : 0 }
+                    ))
+                    .toggleStyle(.switch)
+                }
+
+                if appState.settings.maxTurnTokens > 0 {
+                    SettingsRow(title: "Max Turn Tokens (\(appState.settings.maxTurnTokens / 1000)k)", subtitle: "Budget for a single turn", icon: "gauge.with.dots.needle.67percent") {
+                        Stepper("", value: $appState.settings.maxTurnTokens, in: 100_000...20_000_000, step: 100_000)
+                    }
                 }
 
                 SettingsRow(title: "Allow Sub-Agent Spawning", subtitle: "Enable lead agents to launch child agents", icon: "person.2.fill") {

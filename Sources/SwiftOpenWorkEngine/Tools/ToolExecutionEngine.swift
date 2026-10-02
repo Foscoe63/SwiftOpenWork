@@ -1002,7 +1002,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 )
             }
             switch settings.terminalSafetyLevel {
-            case .allowAll:
+            case .allowAll, .allowEverything:
                 break
             case .safeOnly:
                 if !ToolExecutionEngine.isSafeReadOnlyCommand(command) {
@@ -2613,7 +2613,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             return fail("Interactive terminals are not available in this build.")
         }
         switch settings.terminalSafetyLevel {
-        case .allowAll: break
+        case .allowAll, .allowEverything: break
         case .safeOnly:
             return fail("Blocked by Terminal Safety Level (\"Allow Safe Read-Only Commands\"): send_input can type anything into a running program. Switch to \"Always Ask\" or \"Unrestricted\" under Settings → Advanced.")
         case .alwaysAsk:
