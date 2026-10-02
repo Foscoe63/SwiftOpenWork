@@ -80,10 +80,17 @@ Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibil
 - **Turn-change review** — a footer appears when a turn touched files; per-file diffs (side-by-side or unified), revert one or all. A session-wide view lists everything the session touched, with git's diff
 - **Restore files to any point in the conversation** — right-click a message → *Restore Files to Before This Turn*. Checkpoints are sealed on disk per turn, survive quit/relaunch, and the sheet names every file it will rewrite or delete before it touches anything. The agent's own `revert_changes` stays scoped to the current turn: a person choosing a point in their own transcript is doing something different from an agent silently rewinding ten turns of work
 - **Live command output** — a build or test run streams into the tool card and the terminal panel while it runs, instead of showing nothing until it exits
+- **Menu bar monitor** (optional, off by default) — memory gauge, loaded models with unload, background runs. Inspector tabs can open in their own windows (Cmd-Opt-D), and local models show quantisation variants judged against free memory
 - **Fork a conversation** from any message — right-click it. The branch is the conversation only: files the discarded turns changed are still on disk, and the fork says which
 - Context compaction keeps a factual digest of what dropped turns did (files edited, commands run, failures), so a long session does not forget its own work. It fires at *milestones* — a green test run, a clean tree — as well as on token pressure, so it trades detail for room when history is most disposable
 - **Shortcuts & Siri** — "Ask SwiftOpenWork" and "Run Automation" App Intents run the same agent loop. Approvals are refused rather than awaited when nothing is on screen to grant them, and the result reports what it skipped
 - **Plan mode** (read-only tools + `exit_plan_mode`)
+- **Approval switch under the prompt box** — **Ask / Safe / Allow / Allow All**, for whichever agent is selected. *Ask* waits for you on every shell command; *Safe* runs read-only commands and blocks the rest; *Allow* runs shell commands freely while file edits, MCP writes and app launches still ask; *Allow All* asks about none of those. Reading secret files, leaving plan mode and the fetch-site policy keep asking even under Allow All. The same setting is Settings → Advanced → Safety Level
+- **Turn token budget** — a **Budget** menu beside the switch (1M / 2M / 5M / 10M / No limit), mirrored in Settings → Advanced (*Limit Turn Tokens*). A turn that passes it halts with a Continue prompt; with the limit off it never does
+- **OS-level shell sandbox** — `run_command` runs under macOS Seatbelt, so writes outside the workspace (and optionally non-loopback network) are refused by the kernel rather than by command-text checks. On by default (`workspaceWrites`); a single plain `xcodebuild` / `swift build|test|run|package` is exempt because macOS refuses a sandbox inside a sandbox
+- **Interactive commands** — `terminal_command` with `interactive: true` runs in a visible PTY terminal; `send_input` types text, presses keys or ends the session, and is gated like a command
+- **ai-memory** — agent lifecycle is forwarded to [ai-memory](https://github.com/akitaonrails/ai-memory) for automatic capture, and its handoff is injected into the system prompt
+- **Hybrid search** — `search_workspace` fuses BM25 with semantic vectors from a small on-device MLX encoder, downloaded only when you ask for it in Settings; BM25 alone is the fallback
 - Approval gates for destructive / MCP write actions. MCP read/write classification is **fail-closed**: a tool is a read only when a known server advertises it and it is absent from that server's write list, so unknown servers ask. Expect more prompts than a name-prefix heuristic would produce — that is the point
 - Sub-agent spawning and inter-agent messaging in the Side Inspector
 
@@ -526,7 +533,7 @@ without submitting.
 | 📄 | **Per-repo rules** | Drop `SWIFTOPENWORK.md` or `AGENTS.md` at the workspace root (`OPENWORK.md` from 1.1 is still read) — build commands, house style, what not to touch |
 | 🤖 | **Agents & skills** | Per-agent tools; enabled skills land in the system prompt |
 | 🧠 | **Code intelligence** | Nothing to configure for Swift packages. Xcode projects: ask the agent to run `setup_xcode_language_server` (needs `brew install xcode-build-server`). Other languages: install the server listed under *Code intelligence* |
-| 🎛️ | **Advanced** | Plan Mode, Max Turn Tokens, sub-agent depth, collaboration room |
+| 🎛️ | **Advanced** | Plan Mode, Safety Level, turn token limit (or none), shell sandbox, sub-agent depth, collaboration room |
 | 🧠 | **Context** | Settings → Preferences — auto-compaction and the token threshold that triggers it |
 | 🎚️ | **GPU budget** | Settings → Apple Silicon MLX — the budget ratio caps MLX's buffer cache *and* decides which models are badged as fitting |
 | 🗣️ | **Voice** | Settings → Extensions — dictation and read-aloud each have a switch, plus a picker for the spoken voice |
