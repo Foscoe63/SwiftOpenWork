@@ -1,4 +1,5 @@
 {
+  "originHash" : "3f8fa6d3d6a02a739f207e07205129b404679dd79dc7e5c504875ca805a962cc",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -154,6 +155,15 @@
       }
     },
     {
+      "identity" : "swiftterm",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/migueldeicaza/SwiftTerm.git",
+      "state" : {
+        "revision" : "5d14406844143538cd8f8851d2d8a67c1fe443e5",
+        "version" : "1.20.0"
+      }
+    },
+    {
       "identity" : "yams",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/jpsim/Yams.git",
@@ -172,5 +182,5 @@
       }
     }
   ],
-  "version" : 2
+  "version" : 3
 }
