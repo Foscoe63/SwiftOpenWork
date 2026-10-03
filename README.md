@@ -93,6 +93,7 @@ Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibil
 - **Hybrid search** — `search_workspace` fuses BM25 with semantic vectors from a small on-device MLX encoder, downloaded only when you ask for it in Settings; BM25 alone is the fallback
 - Approval gates for destructive / MCP write actions. MCP read/write classification is **fail-closed**: a tool is a read only when a known server advertises it and it is absent from that server's write list, so unknown servers ask. Expect more prompts than a name-prefix heuristic would produce — that is the point
 - Sub-agent spawning and inter-agent messaging in the Side Inspector
+- **Least-privilege agents** — every built-in agent gets Hindsight recall and retain by tool name (reflect only for lead, research, architect and security), never the whole server. New agents start from a minimal tool and skill baseline, and the agent editor can grant single MCP tools
 
 ### Group chats
 
@@ -145,6 +146,7 @@ The code-intelligence tools run real language servers, started on first use and 
 - Cloud & remote: OpenAI-compatible, Anthropic (Claude 5 models use adaptive thinking; thinking blocks are kept across tool rounds), Groq, OpenRouter, DeepSeek, Mistral, Gemini, custom endpoints
 - **Retries and honest failures on every HTTP provider** — a 429/502/503/504/529 is retried with backoff (honouring `Retry-After`), while a malformed request or bad key fails immediately with the response body attached instead of a bare status code; a reply cut off by the max-token limit or a refusal says so inline rather than surfacing as a JSON-parsing error
 - Provider probing, model listing, Keychain-backed API keys
+- **Text-only conversions of multimodal checkpoints load.** A config can declare an image pathway while the converted weights have no vision tower (distilled and re-quantised Qwen3.5/3.8 MoE uploads ship this way). Vision is now chosen from the weights as well as the config, so such models load through the text path instead of failing and sitting out the retry cooldown, are not badged as image-capable, and a cooldown message now carries the original load error
 
 ### Schedules & automations
 
