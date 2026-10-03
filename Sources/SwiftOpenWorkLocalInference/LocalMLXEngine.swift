@@ -107,6 +107,24 @@ public final class LocalMLXEngine: @unchecked Sendable {
         return false
     }
 
+    /// Whether the checkpoint's weights include a vision tower.
+    ///
+    /// A config can declare an image pathway (`image_token_id`) while the converted weights are
+    /// text-only — distilled and re-quantised Qwen3.5/3.8 MoE uploads ship this way. Routing those
+    /// through the VLM factory fails on the missing tower, and the user sees a model that downloads
+    /// and lists fine but can never chat. Only sharded checkpoints are inspected (their
+    /// `model.safetensors.index.json` lists every key); with no index, trust the config.
+    public static func weightsContainVisionTower(in directory: URL) -> Bool {
+        let indexURL = directory.appendingPathComponent("model.safetensors.index.json")
+        guard let data = try? Data(contentsOf: indexURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let map = json["weight_map"] as? [String: Any] else { return true }
+        return map.keys.contains {
+            $0.contains("vision_tower") || $0.contains("visual.") || $0.contains("vision_model")
+                || $0.contains("multi_modal_projector") || $0.contains("embed_vision")
+        }
+    }
+
     public static func assessCompatibility(
         requiredRAMGB: Double,
         budgetRatio: Double = AppSettings.default.mlxGpuMemoryBudgetRatio
@@ -698,6 +716,7 @@ public final class LocalMLXEngine: @unchecked Sendable {
             // check called blind, so every screenshot sent to it would have been refused as
             // unviewable by the model that could actually have read it.
             isVLM = Self.declaresVisionSupport(config: json)
+                && Self.weightsContainVisionTower(in: directory)
             if let declared = Self.declaredContextWindow(config: json) {
                 contextWindow = declared
             }

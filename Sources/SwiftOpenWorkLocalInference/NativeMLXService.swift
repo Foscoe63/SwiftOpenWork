@@ -17,6 +17,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
 
     private var loadedContainers: [String: ModelContainer] = [:]
     private var recentLoadFailures: [String: Date] = [:]
+    private var recentLoadFailureReasons: [String: String] = [:]
     /// Loads already running. A load that overran its deadline keeps going, and the next turn
     /// waits on the same task instead of starting a second copy of a 48GB read.
     /// `token` is identity: a completing load must not install itself after `unload` / `deinit`
@@ -816,7 +817,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
             throw NSError(
                 domain: "NativeMLXService",
                 code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "Skipping in-process MLX for '\(modelId)': a load attempt failed or timed out recently. Download it from the Local Models tab, or wait a few minutes before retrying."]
+                userInfo: [NSLocalizedDescriptionKey: "Skipping in-process MLX for '\(modelId)': a load attempt failed or timed out recently\(lock.withLock { recentLoadFailureReasons[modelId] }.map { " (\($0))" } ?? ""). Wait a few minutes before retrying."]
             )
         }
 
@@ -857,6 +858,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
                     self.lock.withLock {
                         guard self.inFlightLoads[modelId]?.token === token else { return }
                         self.recentLoadFailures[modelId] = Date()
+                        self.recentLoadFailureReasons[modelId] = error.localizedDescription
                         self.inFlightLoads[modelId] = nil
                     }
                     throw error
@@ -955,9 +957,12 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         // `Chat.Message.images` are dropped without a word, so a vision model captured a
         // screenshot, was told it was attached, and then reasoned its way around never having
         // seen it. `MLXVLM` was not even linked.
-        let usesVision = (try? Data(contentsOf: localDir.appendingPathComponent("config.json")))
+        let declaresVision = (try? Data(contentsOf: localDir.appendingPathComponent("config.json")))
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
             .map { LocalMLXEngine.declaresVisionSupport(config: $0) } ?? false
+        // A declared image pathway is not enough: text-only conversions keep `image_token_id` but
+        // drop the tower, and the VLM factory cannot load them.
+        let usesVision = declaresVision && LocalMLXEngine.weightsContainVisionTower(in: localDir)
 
         onProgress("Loading \(modelId) from \(localDir.path)\(usesVision ? " (vision)" : "")")
         if usesVision {
