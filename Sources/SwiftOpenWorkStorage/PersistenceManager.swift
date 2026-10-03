@@ -553,6 +553,15 @@ public final class PersistenceManager: Sendable {
             UserDefaults.standard.set(true, forKey: profilesKey)
         }
 
+        // Memory moved to Hindsight: every agent gets recall/retain (reflect for the ones that
+        // reason across sessions) instead of the native memory tools, once, so an agent whose
+        // Hindsight tools the user later removes on purpose is not refilled every launch.
+        let hindsightKey = "agentHindsightTools.v1"
+        if !UserDefaults.standard.bool(forKey: hindsightKey) {
+            if AgentRoleProfiles.migrateToHindsight(&items) { modified = true }
+            UserDefaults.standard.set(true, forKey: hindsightKey)
+        }
+
         // Sanitize any invalid or obsolete SF symbols loaded from user's disk cache
         for i in 0..<items.count {
             if items[i].avatar == "person.crop.circle.badge.sparkables" || items[i].avatar == "person.crop.circle.badge.sparkles" {

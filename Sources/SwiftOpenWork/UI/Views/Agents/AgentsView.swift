@@ -53,13 +53,13 @@ public struct AgentsView: View {
         .sheet(isPresented: $showingAddAgent) {
             // Seeded from Settings' defaults. They existed but nothing read them, so a user who
             // set a default temperature got 0.7 anyway and had no way to tell.
-            agentEditModal(agent: Agent(
+            agentEditModal(agent: newAgentWithBaseline(Agent(
                 name: "New Agent",
                 role: "Specialist",
                 temperature: appState.settings.defaultTemperature,
                 maxTokens: appState.settings.defaultMaxTokens,
                 reasoningEffort: appState.settings.defaultReasoningEffort
-            ))
+            )))
         }
         .sheet(isPresented: $showingTemplates, onDismiss: {
             if let agent = pendingTemplateAgent {
@@ -68,17 +68,26 @@ public struct AgentsView: View {
             }
         }) {
             AgentTemplatePicker(theme: appState.settings.theme, accent: appState.settings.accentColor) { template in
-                pendingTemplateAgent = template.makeAgent(
+                pendingTemplateAgent = newAgentWithBaseline(template.makeAgent(
                     temperature: appState.settings.defaultTemperature,
                     maxTokens: appState.settings.defaultMaxTokens,
                     reasoningEffort: appState.settings.defaultReasoningEffort
-                )
+                ))
                 showingTemplates = false
             }
         }
         .sheet(item: $editingAgent) { agent in
             agentEditModal(agent: agent)
         }
+    }
+
+    /// A new agent starts from the least-privilege baseline (read-only tools, Hindsight recall and
+    /// retain, one skill) rather than an empty allowlist, which would mean every tool. The editor
+    /// opens on it, so the user widens or narrows it before saving.
+    private func newAgentWithBaseline(_ agent: Agent) -> Agent {
+        var agent = agent
+        AgentRoleProfiles.applyNewAgentBaseline(to: &agent)
+        return agent
     }
 
     // MARK: - Header Bar
@@ -427,6 +436,60 @@ public struct AgentEditModalView: View {
         self.onCancel = onCancel
     }
 
+    /// Individual tools of each running MCP server. The server row above admits all of a server's
+    /// tools; these admit one at a time, which is what a memory server such as Hindsight needs —
+    /// an agent wants `recall` and `retain`, not `delete_bank`. Entries use the namespaced name
+    /// the model calls (`mcp__<server>__<tool>`), which `SubAgentExecutor.toolSet` matches exactly.
+    @ViewBuilder
+    private var mcpToolPicker: some View {
+        let advertised = MCPAdvertisedSnapshot.current
+        let servers = appState.settings.mcpServers.filter { server in
+            server.isEnabled && (advertised[server.id] ?? []).contains { MCPToolGate.isToolEnabled(server: server, toolName: $0) }
+        }
+        if !servers.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Divider()
+                Text("MCP Tools")
+                    .font(.system(size: 12, weight: .bold))
+                Text("Pick single tools from a server. Ticking the whole server above allows all of its tools.")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(.secondary)
+                ForEach(servers) { server in
+                    let names = (advertised[server.id] ?? [])
+                        .filter { MCPToolGate.isToolEnabled(server: server, toolName: $0) }
+                        .sorted()
+                    Text(server.name)
+                        .font(.system(size: 11, weight: .semibold))
+                    ForEach(names, id: \.self) { name in
+                        let id = "mcp__\(server.id)__\(name)"
+                        let wholeServer = "mcp_\(server.id)"
+                        Toggle(isOn: Binding(
+                            get: { draft.allowedToolIds.contains(id) || draft.allowedToolIds.contains(wholeServer) },
+                            set: { on in
+                                if on {
+                                    if !draft.allowedToolIds.contains(id) { draft.allowedToolIds.append(id) }
+                                } else {
+                                    // Narrowing a whole-server grant: keep the others, drop this one.
+                                    if draft.allowedToolIds.contains(wholeServer) {
+                                        draft.allowedToolIds.removeAll { $0 == wholeServer }
+                                        for other in names where other != name {
+                                            let otherId = "mcp__\(server.id)__\(other)"
+                                            if !draft.allowedToolIds.contains(otherId) { draft.allowedToolIds.append(otherId) }
+                                        }
+                                    }
+                                    draft.allowedToolIds.removeAll { $0 == id }
+                                }
+                            }
+                        )) {
+                            Text(name)
+                                .font(.system(size: 11, design: .monospaced))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -570,6 +633,8 @@ public struct AgentEditModalView: View {
                             }
                         }
                     }
+
+                    mcpToolPicker
 
                     Divider()
 

@@ -14,13 +14,13 @@ public enum AgentRoleProfiles {
         "find_references", "go_to_definition", "symbol_info", "call_hierarchy", "code_diagnostics",
     ]
 
-    public static let toolsByAgentId: [String: [String]] = [
+    static let baseToolsByAgentId: [String: [String]] = [
         "lead-assistant": [
             "agent_spawn", "agent_message", "todo_write", "ask_user", "exit_plan_mode",
             "file_read", "file_list", "grep", "glob", "workspace_semantic_search",
-            "memory_store", "memory_recall", "get_current_date",
+            "get_current_date",
             "git_status", "git_diff", "git_log", "changed_files", "build_project", "run_tests",
-            "revert_changes", "mcp_mcp-memory", "mcp_mcp-git",
+            "revert_changes", "mcp_mcp-git",
         ],
         "coder-agent": readCode + [
             "file_write", "edit_file", "multi_edit", "file_copy", "file_move", "rename_symbol",
@@ -35,8 +35,8 @@ public enum AgentRoleProfiles {
             "web_search", "fetch_url", "document_extract", "image_analyze", "mlx_vision_describe",
             "workspace_semantic_search", "file_read", "file_list", "grep", "glob",
             "find_symbol", "document_symbols", "git_log",
-            "memory_store", "memory_recall", "get_current_date", "calculator",
-            "mcp_mcp-fetch", "mcp_mcp-memory",
+            "get_current_date", "calculator",
+            "mcp_mcp-fetch",
         ],
         "reviewer-agent": readCode + [
             "git_diff", "git_status", "git_log", "changed_files",
@@ -46,8 +46,8 @@ public enum AgentRoleProfiles {
             "file_read", "file_list", "glob", "grep", "workspace_semantic_search",
             "find_symbol", "document_symbols", "call_hierarchy", "find_references", "git_log",
             "web_search", "fetch_url",
-            "agent_spawn", "memory_store", "memory_recall", "todo_write", "ask_user",
-            "mcp_mcp-memory", "mcp_mcp-filesystem",
+            "agent_spawn", "todo_write", "ask_user",
+            "mcp_mcp-filesystem",
         ],
 
         // Specialists carried over from Radiant.
@@ -60,7 +60,7 @@ public enum AgentRoleProfiles {
         ],
         "sales-agent": [
             "web_search", "fetch_url", "document_extract", "file_read", "file_list", "file_write",
-            "edit_file", "memory_store", "memory_recall", "get_current_date", "calculator",
+            "edit_file", "get_current_date", "calculator",
             "gmail_search", "mcp_mcp-fetch",
         ],
         "design-agent": [
@@ -71,11 +71,11 @@ public enum AgentRoleProfiles {
         ],
         "education-agent": [
             "file_read", "file_list", "grep", "glob", "document_extract", "web_search", "fetch_url",
-            "calculator", "memory_store", "memory_recall", "get_current_date",
+            "calculator", "get_current_date",
         ],
         "finance-agent": [
             "calculator", "web_search", "fetch_url", "document_extract", "file_read", "file_list",
-            "file_write", "edit_file", "get_current_date", "memory_store", "memory_recall",
+            "file_write", "edit_file", "get_current_date",
         ],
         "devops-agent": readCode + [
             "file_write", "edit_file", "multi_edit", "terminal_command", "send_input", "build_project", "run_tests",
@@ -95,25 +95,100 @@ public enum AgentRoleProfiles {
         "admin-finance-agent": [
             "file_read", "file_list", "file_write", "edit_file", "glob", "grep", "document_extract",
             "calculator", "get_current_date", "gmail_list", "gmail_search",
-            "memory_store", "memory_recall", "todo_write", "web_search", "fetch_url",
+            "todo_write", "web_search", "fetch_url",
         ],
         "sales-marketing-agent": [
             "web_search", "fetch_url", "document_extract", "file_read", "file_list", "file_write",
             "edit_file", "glob", "grep", "calculator", "get_current_date", "gmail_search",
-            "memory_store", "memory_recall", "todo_write", "mcp_mcp-fetch",
+            "todo_write", "mcp_mcp-fetch",
         ],
         "operations-pm-agent": [
             "file_read", "file_list", "file_write", "edit_file", "glob", "grep", "document_extract",
             "calculator", "get_current_date", "google_calendar_list", "google_calendar_upcoming",
-            "memory_store", "memory_recall", "todo_write",
+            "todo_write",
         ],
         "comms-organizer-agent": [
             "file_read", "file_list", "file_write", "file_copy", "file_move", "edit_file", "glob", "grep",
             "document_extract", "image_analyze", "mlx_vision_describe",
             "gmail_list", "gmail_search", "google_calendar_list", "google_calendar_upcoming",
-            "memory_store", "memory_recall", "get_current_date", "todo_write", "mcp_mcp-memory",
+            "get_current_date", "todo_write",
         ],
     ]
+
+    // MARK: - Hindsight memory
+
+    /// The Hindsight MCP server's id in the shipped settings.
+    public static let hindsightServerId = "mcp-hindsight"
+
+    /// Hindsight tool entries are written by their namespaced name (`mcp__<server>__<tool>`, as
+    /// `MCPNamespacedTool` builds it — that type lives in Engine, which Storage cannot import), not
+    /// as `mcp_<server>`: the whole-server form would admit all 36 of Hindsight's tools, including
+    /// `clear_memories` and `delete_bank`. An agent only ever needs the three below.
+    public static func hindsightTool(_ name: String) -> String {
+        "mcp__\(hindsightServerId)__\(name)"
+    }
+
+    /// Every agent: `recall` to read what is already known, `retain` to store a lasting fact.
+    /// (`sync_retain` is the blocking twin of `retain`; nothing here waits on it.)
+    public static let hindsightCore = ["recall", "retain"].map(hindsightTool)
+
+    /// `reflect` reasons across many memories to answer a question. Only the agents that plan,
+    /// research or audit across sessions use it; for the rest `recall` is enough.
+    public static let hindsightWithReflect = hindsightCore + [hindsightTool("reflect")]
+
+    static let reflectingAgentIds: Set<String> = ["lead-assistant", "research-agent", "architect-agent", "security-agent"]
+
+    /// Tools to match on and strip when memory moves to Hindsight: the native pair is switched off
+    /// and the Memory Graph server would be a second, unsynced store.
+    static let retiredMemoryTools: Set<String> = ["memory_store", "memory_recall", "mcp_mcp-memory"]
+
+    /// `allowedToolIds` per agent id: the role tools above plus its Hindsight tools.
+    public static let toolsByAgentId: [String: [String]] = baseToolsByAgentId.reduce(into: [:]) { result, entry in
+        result[entry.key] = entry.value + (reflectingAgentIds.contains(entry.key) ? hindsightWithReflect : hindsightCore)
+    }
+
+    // MARK: - New agents
+
+    /// What a brand-new agent starts with, from the Agents tab's "New Agent" or a persona template.
+    /// A read-only, least-privilege set — no shell, no writes, no delegation — that the user then
+    /// widens in the editor. A new agent with an empty allowlist would otherwise get every tool.
+    public static let newAgentTools: [String] = [
+        "file_read", "file_list", "grep", "glob", "workspace_semantic_search",
+        "web_search", "fetch_url", "get_current_date", "todo_write",
+    ] + hindsightCore
+
+    public static let newAgentSkills: [String] = ["source-evaluation-skill"]
+
+    /// Gives `agent` the new-agent baseline unless it already carries a list of its own.
+    public static func applyNewAgentBaseline(to agent: inout Agent) {
+        if agent.allowedToolIds.isEmpty { agent.allowedToolIds = newAgentTools }
+        if (agent.allowedSkillIds ?? []).isEmpty { agent.allowedSkillIds = newAgentSkills }
+    }
+
+    /// Brings an install up to the Hindsight tool set, once: built-ins get their role's tools (the
+    /// native memory tools and the Memory Graph server dropped), and any other agent with an
+    /// allowlist of its own just gains `recall` and `retain`. Agents with an empty allowlist
+    /// already get everything. Returns true when anything changed.
+    @discardableResult
+    public static func migrateToHindsight(_ agents: inout [Agent]) -> Bool {
+        var changed = false
+        for i in agents.indices where !agents[i].allowedToolIds.isEmpty {
+            var tools = agents[i].allowedToolIds.filter { !retiredMemoryTools.contains($0) }
+            let wanted: [String]
+            if agents[i].isBuiltIn, let profile = toolsByAgentId[agents[i].id] {
+                wanted = profile.filter { $0.hasPrefix("mcp__\(hindsightServerId)__") }
+            } else {
+                wanted = hindsightCore
+            }
+            for tool in wanted where !tools.contains(tool) { tools.append(tool) }
+            if tools != agents[i].allowedToolIds {
+                agents[i].allowedToolIds = tools
+                agents[i].updatedAt = Date()
+                changed = true
+            }
+        }
+        return changed
+    }
 
     /// Which skills each agent is shown (`Agent.allowedSkillIds`). Skills used to go to every agent.
     /// `project:<folder>` names a skill in the repository's `.swiftopenwork/skills/`.
