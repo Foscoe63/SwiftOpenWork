@@ -133,6 +133,17 @@ public enum SubAgentExecutor {
         }
     }
 
+    /// Whether `agent` may use an MCP tool. Servers are switched on globally in Settings; this is
+    /// the per-agent half, so one agent can have a server that another does not. An empty
+    /// allowlist admits everything, as it does for built-in tools.
+    static func agentAllowsMCP(toolId: String, toolName: String, agent: Agent, settings: AppSettings) -> Bool {
+        let allowed = agent.allowedToolIds
+        if allowed.isEmpty || allowed.contains(toolId) || allowed.contains(toolName) { return true }
+        guard let parsed = MCPNamespacedTool.parse(toolName),
+              let server = settings.mcpServers.first(where: { $0.id == parsed.serverId }) else { return false }
+        return allowed.contains("mcp_\(server.id)") || allowed.contains("mcp_\(server.name)")
+    }
+
     /// A role profile lists a whole server as `mcp_<server id or name>`; that admits every tool
     /// the server advertises. (Individual MCP tools are matched by their own name above.)
     static func allowsServer(of tool: Tool, in allowed: [String], settings: AppSettings) -> Bool {

@@ -977,16 +977,16 @@ public final class AgentRunner {
             forPrompt: lastPrompt,
             servers: loadedSettings.mcpServers
         )
-        let mcpTools: [Tool]
+        let allMcpTools: [Tool]
         if groupToolless {
             // This speaker gets no tools, so waiting on MCP servers to warm would only delay it.
-            mcpTools = []
+            allMcpTools = []
         } else if casualChat || inventoryPrompt {
-            mcpTools = await MCPClientManager.shared.cachedMcpToolDefs()
+            allMcpTools = await MCPClientManager.shared.cachedMcpToolDefs()
             await MCPClientManager.shared.warmAllInBackground()
         } else if !preferMCP.isEmpty {
             // Brief wait only for the servers the prompt actually needs — no status chip spam.
-            mcpTools = await MCPClientManager.shared.mcpToolDefs(
+            allMcpTools = await MCPClientManager.shared.mcpToolDefs(
                 preferServerIds: preferMCP,
                 perServerTimeout: .seconds(8),
                 overallTimeout: .seconds(6),
@@ -994,7 +994,7 @@ public final class AgentRunner {
             )
         } else {
             // Cache-first: never stall the bubble on every enabled npx server.
-            mcpTools = await MCPClientManager.shared.mcpToolDefs(
+            allMcpTools = await MCPClientManager.shared.mcpToolDefs(
                 preferServerIds: preferMCP,
                 perServerTimeout: .seconds(8),
                 overallTimeout: .seconds(6),
@@ -1002,7 +1002,14 @@ public final class AgentRunner {
             )
         }
 
-        var mcpPromptSummary = ""
+        
+
+        // Servers are enabled globally; the agent's own list decides which of them it is offered.
+        let mcpTools = allMcpTools.filter {
+            SubAgentExecutor.agentAllowsMCP(toolId: $0.id, toolName: $0.name, agent: agent, settings: loadedSettings)
+        }
+
+var mcpPromptSummary = ""
         if inventoryPrompt {
             // Inventory: compact status only — no tool dump, no tool calling.
             let reports = await MCPClientManager.shared.mcpStatusReports(probe: false)
@@ -1769,6 +1776,12 @@ public final class AgentRunner {
                         resultError = "blocked in plan mode"
                         resultOutput = "Error: plan mode is on, so `\(toolName)` (it changes files or runs commands) was not run. Propose your plan, then call `exit_plan_mode` once the user approves."
                         accumulator.appendNotice("Blocked `\(toolName)` in plan mode.")
+                    } else if MCPNamespacedTool.isNamespaced(toolName),
+                              !SubAgentExecutor.agentAllowsMCP(toolId: toolName, toolName: toolName, agent: agent, settings: loadedSettings) {
+                        resultSuccess = false
+                        resultError = "tool is not enabled for this agent"
+                        resultOutput = "Error: `\(toolName)` is not enabled for this agent, so it was not run. Use another tool, or tell the user it is unavailable."
+                        accumulator.appendNotice("Blocked `\(toolName)`: not enabled for this agent.")
                     } else if !MCPNamespacedTool.isNamespaced(toolName),
                               disabledToolNames.contains(Self.canonicalToolName(toolName)) {
                         resultSuccess = false
