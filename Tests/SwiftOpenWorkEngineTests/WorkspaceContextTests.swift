@@ -133,3 +133,30 @@ final class WorkspaceContextTests: XCTestCase {
         XCTAssertTrue(snapshot.projectKinds.contains("Swift package"))
     }
 }
+
+final class WorkspaceContextNestedLayoutTests: XCTestCase {
+    /// `MacClean/MacClean/Utilities/X.swift` was read as `MacClean/Utilities/X.swift` twice: the
+    /// listing showed `MacClean/` and nothing below it.
+    func testPromptShowsNestedSourceFolderAndFullPathExample() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("wc-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("App/Utilities"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("build/Junk"), withIntermediateDirectories: true)
+
+        let block = WorkspaceContext.promptBlock(WorkspaceContext.snapshot(folderPath: root.path, git: { _ in (nil, [], 0) }))
+        XCTAssertTrue(block.contains("`App/` contains: Utilities/"), block)
+        XCTAssertTrue(block.contains("\(root.path)/App/Utilities/"), block)
+        XCTAssertFalse(block.contains("`build/` contains"), block)
+    }
+}
+
+final class SubAgentPromptWorkspaceTests: XCTestCase {
+    /// A sub-agent was told the project was at the user's path while it ran in a worktree
+    /// elsewhere, and spent its budget on paths that did not exist.
+    func testSubAgentPromptCarriesWorkspaceBlock() throws {
+        let source = try String(contentsOfFile: #filePath.replacingOccurrences(
+            of: "Tests/SwiftOpenWorkEngineTests/WorkspaceContextTests.swift",
+            with: "Sources/SwiftOpenWorkEngine/Agents/SubAgentExecutor.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("WorkspaceContext.promptBlock(WorkspaceContext.snapshot(folderPath: effectiveWorkspace.folderPath))"))
+    }
+}

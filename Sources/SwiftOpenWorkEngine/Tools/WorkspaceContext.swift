@@ -14,15 +14,25 @@ public enum WorkspaceContext {
         public var projectKinds: [String]
         /// Top-level entries, directories first.
         public var topLevel: [String]
+        /// Children of the first top-level folders, so a nested layout (`App/App/Utilities/`) is
+        /// visible up front instead of being found by failed reads. Folder name to its entries.
+        public var nested: [(folder: String, entries: [String])]
         public var gitBranch: String?
         /// Paths reported by `git status --porcelain`, already trimmed to a useful count.
         public var gitChanges: [String]
         public var gitChangeCount: Int
 
+        public static func == (a: Snapshot, b: Snapshot) -> Bool {
+            a.path == b.path && a.projectKinds == b.projectKinds && a.topLevel == b.topLevel
+                && a.nested.map { [$0.folder] + $0.entries } == b.nested.map { [$0.folder] + $0.entries }
+                && a.gitBranch == b.gitBranch && a.gitChanges == b.gitChanges && a.gitChangeCount == b.gitChangeCount
+        }
+
         public init(
             path: String,
             projectKinds: [String] = [],
             topLevel: [String] = [],
+            nested: [(folder: String, entries: [String])] = [],
             gitBranch: String? = nil,
             gitChanges: [String] = [],
             gitChangeCount: Int = 0
@@ -30,6 +40,7 @@ public enum WorkspaceContext {
             self.path = path
             self.projectKinds = projectKinds
             self.topLevel = topLevel
+            self.nested = nested
             self.gitBranch = gitBranch
             self.gitChanges = gitChanges
             self.gitChangeCount = gitChangeCount
@@ -91,6 +102,27 @@ public enum WorkspaceContext {
         return sorted.prefix(limit).map { $0.1 ? "\($0.0)/" : $0.0 }
     }
 
+    /// Entries of the first few top-level folders that hold source, skipping build output and
+    /// folders that only hold project metadata.
+    public static func nestedEntries(
+        at path: String,
+        topLevel: [String],
+        folders: Int = 6,
+        limit: Int = 12,
+        fileManager: FileManager = .default
+    ) -> [(folder: String, entries: [String])] {
+        let skipped: Set<String> = ["build", "node_modules", "DerivedData", "Pods", "Resources", "docs"]
+        var result: [(folder: String, entries: [String])] = []
+        for entry in topLevel where entry.hasSuffix("/") {
+            let name = String(entry.dropLast())
+            if skipped.contains(name) || name.hasSuffix(".xcodeproj") || name.hasSuffix(".xcworkspace") { continue }
+            let children = topLevelEntries(at: (path as NSString).appendingPathComponent(name), limit: limit, fileManager: fileManager)
+            if !children.isEmpty { result.append((entry, children)) }
+            if result.count >= folders { break }
+        }
+        return result
+    }
+
     /// Render the prompt block. Returns an empty string when there is no usable workspace, so the
     /// caller can interpolate it unconditionally.
     public static func promptBlock(_ snapshot: Snapshot) -> String {
@@ -114,6 +146,12 @@ public enum WorkspaceContext {
         if !snapshot.topLevel.isEmpty {
             lines.append("Top level: \(snapshot.topLevel.joined(separator: "  "))")
         }
+        for item in snapshot.nested {
+            lines.append("`\(item.folder)` contains: \(item.entries.joined(separator: "  "))")
+        }
+        if let first = snapshot.nested.first(where: { !$0.entries.isEmpty }) {
+            lines.append("Paths are written in full from the workspace path, e.g. `\(snapshot.path)/\(first.folder)\(first.entries[0])`.")
+        }
         lines.append(
             "Relative paths in file tools resolve against this folder. Use `grep` and `glob` to "
             + "locate code before reading it — do not guess paths."
@@ -131,10 +169,12 @@ public enum WorkspaceContext {
             return Snapshot(path: folderPath)
         }
         let facts = git(folderPath)
+        let topLevel = topLevelEntries(at: folderPath, fileManager: fileManager)
         return Snapshot(
             path: folderPath,
             projectKinds: detectProjectKinds(at: folderPath, fileManager: fileManager),
-            topLevel: topLevelEntries(at: folderPath, fileManager: fileManager),
+            topLevel: topLevel,
+            nested: nestedEntries(at: folderPath, topLevel: topLevel, fileManager: fileManager),
             gitBranch: facts.branch,
             gitChanges: facts.changes,
             gitChangeCount: facts.total

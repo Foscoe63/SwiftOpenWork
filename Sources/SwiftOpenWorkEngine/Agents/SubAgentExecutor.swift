@@ -227,6 +227,8 @@ public enum SubAgentExecutor {
             : "Your working directory is the user's own checkout, so changing files there needs a person's approval and will be refused and reported. Read, search, build and report instead.")
 
         Your working directory is \(effectiveWorkspace.folderPath)\(worktree != nil ? " — an isolated worktree. Changes here do not affect the user's checkout." : ".")
+        \(worktree != nil ? "The task below may name the user's checkout, \(workspace.folderPath). Read and edit the same files under your working directory instead, with paths written in full from it." : "")
+        \(WorkspaceContext.promptBlock(WorkspaceContext.snapshot(folderPath: effectiveWorkspace.folderPath)))
 
         Do the work with the tools you have. When the objective is met, reply with a short \
         report and make no further tool calls. Do not ask for confirmation; do not describe \

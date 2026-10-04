@@ -500,6 +500,21 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             }
             let offset = Self.intArgument(dict["offset"]) ?? Self.intArgument(dict["start_line"])
             let limit = Self.intArgument(dict["limit"]) ?? Self.intArgument(dict["max_lines"])
+            // A missing path with exactly one likely target inside the workspace is a slip, not a
+            // question: a "Did you mean" hint was ignored and the same wrong path sent again,
+            // burning a sub-agent's step budget. Read the one candidate and say so.
+            if !FileManager.default.fileExists(atPath: (fullPath as NSString).expandingTildeInPath) {
+                let nearby = Self.similarPaths(toMissing: fullPath, in: workspace.folderPath)
+                if nearby.count == 1 {
+                    let rootPath = (workspace.folderPath as NSString).expandingTildeInPath
+                    let corrected = (rootPath as NSString).appendingPathComponent(nearby[0])
+                    var result = readFile(path: corrected, offset: offset, limit: limit, workspaceRoot: workspace.folderPath, startTime: startTime)
+                    if result.success {
+                        result.output = "Note: '\(path)' does not exist; read '\(corrected)' instead. Use this full path from now on.\n" + result.output
+                        return result
+                    }
+                }
+            }
             return readFile(path: fullPath, offset: offset, limit: limit, workspaceRoot: workspace.folderPath, startTime: startTime)
 
         case "file_write", "write_file", "create_file", "save_file":

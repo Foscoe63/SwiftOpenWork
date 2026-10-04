@@ -103,11 +103,21 @@ final class AgentLoopTranscriptTests: XCTestCase {
         try FileManager.default.createDirectory(atPath: root + "/ProTerm/Source", withIntermediateDirectories: true)
         try "x".write(toFile: root + "/ProTerm/Source/SSHSessionManager.swift", atomically: true, encoding: .utf8)
 
+        // One likely target: read it, and say which file it was.
         let mangled = await run("file_read", #"{"path":"ProTermSourceSSHSessionManager.swift"}"#)
-        XCTAssertTrue(mangled.error?.contains("Did you mean: `ProTerm/Source/SSHSessionManager.swift`") ?? false, mangled.error ?? "")
+        XCTAssertTrue(mangled.success, mangled.error ?? "")
+        XCTAssertTrue(mangled.output.contains("ProTerm/Source/SSHSessionManager.swift"), mangled.output)
+        XCTAssertTrue(mangled.output.contains("does not exist"), mangled.output)
 
         let wrongFolder = await run("file_read", #"{"path":"Source/SSHSessionManager.swift"}"#)
-        XCTAssertTrue(wrongFolder.error?.contains("ProTerm/Source/SSHSessionManager.swift") ?? false, wrongFolder.error ?? "")
+        XCTAssertTrue(wrongFolder.output.contains("ProTerm/Source/SSHSessionManager.swift"), wrongFolder.output)
+
+        // Several equally likely targets: no guessing, name them.
+        try FileManager.default.createDirectory(atPath: root + "/Other", withIntermediateDirectories: true)
+        try "y".write(toFile: root + "/Other/SSHSessionManager.swift", atomically: true, encoding: .utf8)
+        let ambiguous = await run("file_read", #"{"path":"Missing/SSHSessionManager.swift"}"#)
+        XCTAssertFalse(ambiguous.success)
+        XCTAssertTrue(ambiguous.error?.contains("Did you mean") ?? false, ambiguous.error ?? "")
 
         let nothingLikeIt = await run("file_read", #"{"path":"Nope.swift"}"#)
         XCTAssertTrue(nothingLikeIt.error?.contains("use `glob`") ?? false, nothingLikeIt.error ?? "")
