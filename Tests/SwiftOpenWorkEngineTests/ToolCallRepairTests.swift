@@ -42,6 +42,7 @@ final class ToolCallRepairTests: XCTestCase {
         XCTAssertTrue(message.contains("`file_read`"), message)
         XCTAssertFalse(message.contains("MCP servers are enabled"), "an unknown built-in is not an MCP problem")
         XCTAssertTrue(ToolCallRepair.unknownToolMessage("zzz", mcpServerSummary: "acme (`a1`)").contains("acme"))
+        XCTAssertTrue(ToolCallRepair.unknownToolMessage("acme_call", mcpServerSummary: "acme (`a1`)").contains("`mcp_call`"))
     }
 
     // MARK: Arguments

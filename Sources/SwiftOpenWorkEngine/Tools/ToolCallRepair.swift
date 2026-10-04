@@ -154,7 +154,7 @@ public enum ToolCallRepair {
         }
         message += " Built-in tools include: file_read, edit_file, multi_edit, file_write, grep, glob, file_list, terminal_command, build_project."
         if let servers = mcpServerSummary {
-            message += " Enabled MCP servers: \(servers) (their tools are named mcp__<serverId>__<tool>)."
+            message += " Enabled MCP servers: \(servers) (their tools are named mcp__<serverId>__<tool>). A server is not itself a tool: call one of its tools directly, or use `mcp_call` with {\"server\", \"tool\", \"arguments\"}."
         }
         return message
     }
