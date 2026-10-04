@@ -815,7 +815,7 @@ public struct ComposerView: View {
 
     private var contextMeter: ContextMeter? {
         guard let session = appState.currentSession else { return nil }
-        return ContextMeter.forSession(session.messages, contextWindow: appState.currentModel.contextWindow)
+        return ContextMeter.forSession(session, contextWindow: appState.currentModel.contextWindow)
     }
 
     /// Context exhaustion looks like the model getting stupid, not like an error, so the only

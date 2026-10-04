@@ -249,6 +249,21 @@ public enum ContextCompactor {
         return (head + [note] + tail, true)
     }
 
+    /// What a person asking to compact *now* gets: old tool results folded to previews, then the
+    /// middle of the conversation replaced by a digest. Unlike the automatic paths there is no
+    /// pressure test, because the person has already decided.
+    public static func compactNow(
+        _ messages: [ChatMessage],
+        keepRecent: Int = 6
+    ) -> (messages: [ChatMessage], didCompact: Bool, tokensBefore: Int, tokensAfter: Int) {
+        let before = estimatedTokens(messages)
+        let folded = foldOldToolResults(messages, keepLast: 2, batch: 1)
+        let compacted = compactIfNeeded(folded, thresholdTokens: 0, keepRecent: keepRecent)
+        let after = estimatedTokens(compacted.messages)
+        let changed = compacted.didCompact || folded.map(\.content) != messages.map(\.content)
+        return (compacted.messages, changed, before, after)
+    }
+
     public static func estimateTokens(_ messages: [ChatMessage]) -> Int {
         let chars = messages.reduce(0) { $0 + $1.content.count + ($1.reasoning?.count ?? 0) }
         return max(1, chars / 4)

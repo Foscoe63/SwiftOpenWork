@@ -245,3 +245,51 @@ final class ContextCompactionTests: XCTestCase {
         XCTAssertFalse(folded.contains { $0.content.contains("compacted") })
     }
 }
+
+final class ManualCompactionAndMeterTests: XCTestCase {
+    private func history(turns: Int) -> [ChatMessage] {
+        var out = [ChatMessage(sessionId: "s", role: .user, content: "the task")]
+        for i in 0..<turns {
+            out.append(ChatMessage(sessionId: "s", role: .assistant, content: "step \(i)"))
+            out.append(ChatMessage(sessionId: "s", role: .tool, content: String(repeating: "x", count: 6_000)))
+        }
+        return out
+    }
+
+    func testCompactNowShrinksALongHistoryAndKeepsTheTask() {
+        let messages = history(turns: 20)
+        let result = ContextCompactor.compactNow(messages)
+        XCTAssertTrue(result.didCompact)
+        XCTAssertLessThan(result.tokensAfter, result.tokensBefore / 4)
+        XCTAssertEqual(result.messages.first?.content, "the task")
+        XCTAssertTrue(result.messages.contains { $0.content.contains("[Context compacted]") })
+    }
+
+    func testCompactNowLeavesAShortHistoryAlone() {
+        let messages = [ChatMessage(sessionId: "s", role: .user, content: "hi"),
+                        ChatMessage(sessionId: "s", role: .assistant, content: "hello")]
+        XCTAssertFalse(ContextCompactor.compactNow(messages).didCompact)
+    }
+
+    /// 440k reported against a 262k window, from a chat holding a fraction of that.
+    func testMeterFallsBackToAnEstimateWhenTheReportExceedsTheWindow() {
+        var reply = ChatMessage(sessionId: "s", role: .assistant, content: "done")
+        reply.promptTokens = 439_594
+        var session = Session()
+        session.messages = [ChatMessage(sessionId: "s", role: .user, content: "go"), reply]
+        let meter = ContextMeter.forSession(session, contextWindow: 262_000)
+        XCTAssertEqual(meter?.isEstimate, true)
+        XCTAssertLessThan(meter?.used ?? .max, 262_000)
+        XCTAssertTrue(meter?.label.hasPrefix("~") ?? false)
+    }
+
+    func testMeterKeepsAPlausibleProviderFigure() {
+        var reply = ChatMessage(sessionId: "s", role: .assistant, content: String(repeating: "y", count: 90_000))
+        reply.promptTokens = 40_000
+        var session = Session()
+        session.messages = [ChatMessage(sessionId: "s", role: .user, content: "go"), reply]
+        let meter = ContextMeter.forSession(session, contextWindow: 262_000)
+        XCTAssertEqual(meter?.isEstimate, false)
+        XCTAssertEqual(meter?.used, 40_000)
+    }
+}

@@ -21,9 +21,13 @@ public struct ContextMeter: Equatable, Sendable {
     /// The selected model's window.
     public var limit: Int
 
-    public init(used: Int, limit: Int) {
+    /// True when `used` is our own estimate of the transcript, not the provider's number.
+    public var isEstimate: Bool
+
+    public init(used: Int, limit: Int, isEstimate: Bool = false) {
         self.used = used
         self.limit = limit
+        self.isEstimate = isEstimate
     }
 
     public var fraction: Double {
@@ -46,11 +50,14 @@ public struct ContextMeter: Equatable, Sendable {
     }
 
     public var label: String {
-        "\(Self.abbreviate(used)) / \(Self.abbreviate(limit))"
+        "\(isEstimate ? "~" : "")\(Self.abbreviate(used)) / \(Self.abbreviate(limit))"
     }
 
     public var help: String {
         let percent = Int((fraction * 100).rounded())
+        if isEstimate {
+            return "About \(percent)% of this model's context window is in use (estimated from the transcript; the provider's own count was not usable)."
+        }
         switch pressure {
         case .comfortable, .filling:
             return "\(percent)% of this model's context window is in use."
@@ -80,5 +87,42 @@ public struct ContextMeter: Equatable, Sendable {
             return nil
         }
         return ContextMeter(used: used, limit: contextWindow)
+    }
+
+    /// Fixed allowance for the system prompt and tool schemas, which the transcript lacks.
+    public static let overheadTokens = 12_000
+
+    /// Our estimate of what the next request carries: the model-facing transcript, three
+    /// characters a token, plus `overheadTokens`.
+    public static func estimatedUsage(of history: [ChatMessage]) -> Int {
+        var characters = 0
+        let hasToolMessages = history.contains { $0.role == .tool }
+        for message in history {
+            characters += message.content.count
+            for call in message.toolCalls {
+                characters += call.argumentsJson.count
+                if !hasToolMessages { characters += call.resultOutput?.count ?? 0 }
+            }
+        }
+        return characters / 3 + overheadTokens
+    }
+
+    /// The meter for a session.
+    ///
+    /// The provider's count is preferred, but a local server can report a figure that is not one
+    /// request's size — 440k against a 262k window, from a chat holding about 55k — and a number
+    /// the model could never have received is worse than none. When the report is over the window,
+    /// or far above what the transcript can account for (the chat was compacted since), the
+    /// estimate is shown instead, marked with `~`.
+    public static func forSession(_ session: Session, contextWindow: Int) -> ContextMeter? {
+        guard contextWindow > 0 else { return nil }
+        let estimate = estimatedUsage(of: session.modelHistory())
+        guard let reported = session.messages.last(where: { $0.promptTokens > 0 })?.promptTokens else {
+            return nil
+        }
+        if reported > contextWindow || reported > estimate * 2 {
+            return ContextMeter(used: estimate, limit: contextWindow, isEstimate: true)
+        }
+        return ContextMeter(used: reported, limit: contextWindow)
     }
 }

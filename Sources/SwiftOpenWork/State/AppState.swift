@@ -1422,6 +1422,26 @@ public final class AppState: ObservableObject {
             }
             return true
 
+        case "/compact":
+            guard let session = currentSession, let idx = sessions.firstIndex(where: { $0.id == session.id }) else { return true }
+            guard !session.isGroup else {
+                showToast("/compact is not available in group chats")
+                return true
+            }
+            let result = ContextCompactor.compactNow(session.modelHistory())
+            guard result.didCompact else {
+                showToast("Nothing to compact yet")
+                return true
+            }
+            // The chat you see is untouched; only the transcript the model is sent shrinks.
+            sessions[idx].modelContext = ModelContextSnapshot(
+                coveredMessageIds: session.messages.map(\.id),
+                messages: result.messages
+            )
+            persistence.saveSessions(sessions)
+            showToast("Compacted: ~\(ContextMeter.abbreviate(result.tokensBefore)) → ~\(ContextMeter.abbreviate(result.tokensAfter)) tokens")
+            return true
+
         case "/plan":
             settings.planModeEnabled.toggle()
             showToast(settings.planModeEnabled
@@ -1467,6 +1487,7 @@ public final class AppState: ObservableObject {
                     - `/model <name>` - Switch active model provider or open Providers catalog
                     - `/plan` - Toggle plan mode (read-only until exit_plan_mode)
                     - `/clear` - Clear messages in this session
+                    - `/compact` - Shrink what the model is sent; your chat stays as is
                     - `/settings` - Jump to App Settings
                     - `/tools` - Inspect MCP & built-in tools
                     - `/memory` - Search or view long-term memory
