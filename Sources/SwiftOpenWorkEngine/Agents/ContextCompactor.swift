@@ -186,12 +186,22 @@ public enum ContextCompactor {
     ///
     /// Uses a lower bar than the budget path — there is no point summarising four messages — but
     /// does not wait for pressure, because waiting means compacting at a worse moment later.
+    ///
+    /// A green build is only a milestone if something was built. An exploration turn — read the
+    /// files, build once to see the baseline — reaches the same green build with nothing changed,
+    /// and compacting there throws away exactly the files just read and not yet used. The next step
+    /// re-reads them, the next build compacts again, and the session circles without ever editing.
+    /// So the stretch about to be dropped must contain a file write, edit or delete.
     public static func compactAtMilestone(
         _ messages: [ChatMessage],
         minimumMessages: Int = 12,
         keepRecent: Int = 6
     ) -> (messages: [ChatMessage], didCompact: Bool) {
         guard messages.count >= minimumMessages else { return (messages, false) }
+        let doomed = digest(of: Array(messages.dropLast(keepRecent)))
+        guard !(doomed.filesWritten.isEmpty && doomed.filesEdited.isEmpty && doomed.filesDeleted.isEmpty) else {
+            return (messages, false)
+        }
         // Threshold 0 forces the existing path to act; it already keeps the task and a digest.
         return compactIfNeeded(messages, thresholdTokens: 0, keepRecent: keepRecent)
     }

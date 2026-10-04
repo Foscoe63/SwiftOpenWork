@@ -76,6 +76,7 @@ final class MilestoneCompactionTests: XCTestCase {
         for i in 0..<19 {
             messages.append(ChatMessage(sessionId: "s", role: .assistant, content: "step \(i)"))
         }
+        messages[3].toolCalls = [Self.call("edit_file", #"{"path":"A.swift"}"#)]
         XCTAssertLessThan(ContextCompactor.estimateTokens(messages), 200, "fixture must be cheap")
 
         let result = ContextCompactor.compactAtMilestone(messages)
@@ -84,5 +85,24 @@ final class MilestoneCompactionTests: XCTestCase {
         XCTAssertEqual(result.messages.first?.content, "Fix the failing test",
                        "the task must survive; forgetting it is how an agent finishes the wrong job")
         XCTAssertEqual(result.messages.last?.content, "step 18")
+    }
+
+    private static func call(_ tool: String, _ args: String) -> ToolCallInfo {
+        ToolCallInfo(toolName: tool, argumentsJson: args, status: .success)
+    }
+
+    /// Read files, build once green, nothing changed: not a milestone worth forgetting the reads for.
+    /// A real session compacted here twice and then re-read the same files in a circle.
+    func testMilestoneCompactionSkipsAnExplorationOnlyStretch() {
+        var messages: [ChatMessage] = [ChatMessage(sessionId: "s", role: .user, content: "Review this")]
+        for i in 0..<19 {
+            messages.append(ChatMessage(sessionId: "s", role: .assistant, content: "step \(i)"))
+        }
+        messages[2].toolCalls = [Self.call("read_file", #"{"path":"A.swift"}"#)]
+        messages[4].toolCalls = [Self.call("build_project", "{}")]
+
+        let result = ContextCompactor.compactAtMilestone(messages)
+        XCTAssertFalse(result.didCompact)
+        XCTAssertEqual(result.messages.count, messages.count)
     }
 }

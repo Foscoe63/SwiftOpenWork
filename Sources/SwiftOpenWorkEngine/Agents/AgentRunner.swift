@@ -119,7 +119,11 @@ public final class AgentStreamAccumulator {
         }
         
         // 2. Exact line-level repetition (3+ identical non-empty trimmed lines)
+        // Code lines are left out: a model drafting an edit quotes the same snippet as "from" and
+        // "to", which reads as consecutive identical lines. A contiguous code spiral is still
+        // caught by check 1.
         let rawLines = text.components(separatedBy: .newlines)
+            .filter { !Self.looksLikeCode($0) }
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty && $0.count > 15 }
         
@@ -165,29 +169,44 @@ public final class AgentStreamAccumulator {
             }
         }
 
-        // 4. Repeated N-gram phrases in trailing window: an identical 8-word sequence 3+ times.
+        // 4. Repeated N-gram phrases in trailing window: an identical 12-word sequence 4+ times.
         //
-        // This was 5 words, which natural text meets constantly: "by getting today's date and"
-        // three times in a plan, "describes a distinct configuration value" down a list of
-        // settings. Eight identical words, three times, in a thousand characters is a loop.
-        let words = text.suffix(1000).lowercased()
+        // This was 5 words, then 8 words three times. Both flag ordinary work. A model planning a
+        // batch of reads lists the same files three times ("read the AI service, learning manager,
+        // scheduled cleanup manager, notification service…"), and one drafting an edit quotes the
+        // same snippet in its "from" and "to" forms. Two real turns were cut off mid-plan that way,
+        // and the retry replanned from scratch and tripped it again. A true spiral is also caught
+        // by checks 1 and 2, so this one only needs to catch long phrases that keep coming back.
+        // Code lines are left out: identifiers and call syntax repeat legitimately.
+        let prose = text.suffix(1500)
+            .components(separatedBy: .newlines)
+            .filter { !Self.looksLikeCode($0) }
+            .joined(separator: " ")
+        let words = prose.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
 
-        let gramLength = 8
-        if words.count >= 20 {
+        let gramLength = 12
+        if words.count >= 30 {
             var ngrams: [String: Int] = [:]
             for i in 0..<(words.count - gramLength + 1) {
                 let gram = words[i..<(i + gramLength)].joined(separator: " ")
                 let currentCount = (ngrams[gram] ?? 0) + 1
                 ngrams[gram] = currentCount
-                if currentCount >= 3 {
+                if currentCount >= 4 {
                     return true
                 }
             }
         }
 
         return false
+    }
+
+    /// A line that is source code rather than prose: indented, or carrying call/brace syntax.
+    nonisolated static func looksLikeCode(_ line: String) -> Bool {
+        if line.hasPrefix("    ") || line.hasPrefix("\t") { return true }
+        let syntax: Set<Character> = ["{", "}", ";", "(", ")", "=", "<", ">", "[", "]"]
+        return line.filter { syntax.contains($0) }.count >= 2
     }
 
     public func addToolCall(_ toolCall: ToolCallInfo) {

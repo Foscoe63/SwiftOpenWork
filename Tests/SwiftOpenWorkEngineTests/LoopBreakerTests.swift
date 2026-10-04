@@ -70,6 +70,31 @@ final class LoopBreakerTests: XCTestCase {
         XCTAssertTrue(AgentStreamAccumulator.detectsRepetitionLoop(in: spiral))
     }
 
+    /// A model planning a batch of reads lists the same files three times. Real turn, cut off mid-plan.
+    func testARepeatedFileListInAPlanIsNotFlagged() {
+        let text = """
+        I'll load them in batches: the AI service, learning manager, scheduled cleanup manager, notification service, duplicate file finder, large file finder, cleanup result, and test files. Let's start with services and models first.
+
+        I'll keep reading through the codebase to get a grasp of the overall picture. Let me load multiple files in parallel for efficiency. I'll go ahead and read the AI service, learning manager, scheduled cleanup manager, notification service, duplicate file finder, large file finder, cleanup result, and test files. I'll go ahead and read the AI service, learning manager, scheduled cleanup manager, notification service, duplicate file finder, large file finder, cleanup result, and
+        """
+        XCTAssertFalse(AgentStreamAccumulator.detectsRepetitionLoop(in: text))
+    }
+
+    /// A model drafting an edit quotes the same snippet as "from" and "to". Real turn.
+    func testRepeatedCodeInADraftedEditIsNotFlagged() {
+        let snippet = "        Text(ByteCountFormatter.string(fromByteCount: visibleFiles.map { $0.size }.reduce(0, +), countStyle: .file))\n"
+        let text = "Current code:\n" + snippet + "Change to:\n" + snippet + "Alternatively:\n" + snippet
+            + "But note: we are in an HStack, so let's change the HStack to a VStack for the text."
+        XCTAssertFalse(AgentStreamAccumulator.detectsRepetitionLoop(in: text))
+    }
+
+    /// A long phrase that keeps coming back, with a little variation between lines, is still a loop.
+    func testALongPhraseRepeatedManyTimesIsStillFlagged() {
+        let phrase = "so I need to read the cleanup engine file again before I can decide what to change next"
+        let text = (0..<6).map { "Step \($0): \(phrase) and then continue." }.joined(separator: "\n\n")
+        XCTAssertTrue(AgentStreamAccumulator.detectsRepetitionLoop(in: text))
+    }
+
     // MARK: - The gate that keeps the cost bounded
 
     func testCounterFiresOnlyEveryNthTick() {
