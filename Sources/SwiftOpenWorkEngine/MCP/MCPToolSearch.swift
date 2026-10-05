@@ -45,7 +45,8 @@ public enum MCPToolSearch {
 
     /// The first sentence of a description, short enough for a one-line listing.
     public static func oneLine(_ description: String, limit: Int = 90) -> String {
-        let flat = description.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+        // Some servers pad descriptions with runs of spaces and newlines.
+        let flat = description.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         let sentence = flat.range(of: ". ").map { String(flat[..<$0.lowerBound]) } ?? flat
         return sentence.count <= limit ? sentence : String(sentence.prefix(limit - 1)) + "…"
     }
