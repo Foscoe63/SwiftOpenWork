@@ -158,7 +158,7 @@ public struct ChatView: View {
     }
 
     private func refreshTurnChangeCount() async {
-        let count = await FileCheckpointStore.shared.changes().count
+        let count = await FileCheckpointStore.shared.changes(session: appState.currentSession?.id).count
         await MainActor.run { turnChangeCount = count }
     }
 

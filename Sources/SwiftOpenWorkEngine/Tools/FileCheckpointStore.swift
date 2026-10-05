@@ -31,8 +31,26 @@ public actor FileCheckpointStore {
         public var failed: [String]
     }
 
-    private var entries: [String: Entry] = [:]
-    private var turnLabel: String?
+    /// One session's checkpoint window: its current turn's entries.
+    private struct Window {
+        var entries: [String: Entry] = [:]
+        var label: String?
+    }
+
+    /// Windows by session id. This used to be one global window, so a Loop, automation or
+    /// Shortcut run starting mid-turn wiped the foreground chat's undo, and `revert_changes` in
+    /// either run reverted the other's edits.
+    private var windows: [String: Window] = [:]
+
+    /// The window a call belongs to: the session passed, else the agent run it is part of (tool
+    /// calls run inside `AgentRunContext`), else a shared default for callers with neither.
+    private func key(_ session: String?) -> String {
+        session ?? AgentRunContext.current?.sessionId ?? ""
+    }
+
+    private func entries(_ session: String?) -> [String: Entry] {
+        windows[key(session)]?.entries ?? [:]
+    }
 
     private init() {}
 
@@ -42,12 +60,16 @@ public actor FileCheckpointStore {
     ///
     /// Undo is deliberately scoped to the most recent turn: an agent that can silently roll back
     /// work from ten turns ago is more dangerous than one that cannot roll back at all.
-    public func beginTurn(label: String? = nil) {
-        entries.removeAll()
-        turnLabel = label
+    public func beginTurn(label: String? = nil, session: String? = nil) {
+        windows[key(session)] = Window(label: label)
     }
 
-    public func currentTurnLabel() -> String? { turnLabel }
+    public func currentTurnLabel(session: String? = nil) -> String? { windows[key(session)]?.label }
+
+    /// Forget a session's window, when the session is deleted.
+    public func discard(session: String) {
+        windows.removeValue(forKey: session)
+    }
 
     // MARK: - Recording
 
@@ -55,26 +77,27 @@ public actor FileCheckpointStore {
     ///
     /// Only the *first* capture per path is kept: the point of reference is where the turn
     /// started, not the state between two edits within it.
-    public func record(path: String, fileManager: FileManager = .default) {
-        guard entries[path] == nil else { return }
+    public func record(path: String, session: String? = nil, fileManager: FileManager = .default) {
+        let k = key(session)
+        guard windows[k]?.entries[path] == nil else { return }
         let existing = fileManager.fileExists(atPath: path)
             ? try? String(contentsOfFile: path, encoding: .utf8)
             : nil
         // A binary file reads as nil even though it exists; storing that would turn a revert into
         // a delete. Record it as untouched rather than risk destroying it.
         if fileManager.fileExists(atPath: path), existing == nil { return }
-        entries[path] = Entry(previousContents: existing, firstTouched: Date())
+        windows[k, default: Window()].entries[path] = Entry(previousContents: existing, firstTouched: Date())
     }
 
     // MARK: - Reporting
 
     /// What the current turn has changed, compared against what was recorded.
-    public func summary(fileManager: FileManager = .default) -> Summary {
+    public func summary(session: String? = nil, fileManager: FileManager = .default) -> Summary {
         var created: [String] = []
         var modified: [String] = []
         var deleted: [String] = []
 
-        for (path, entry) in entries {
+        for (path, entry) in entries(session) {
             let existsNow = fileManager.fileExists(atPath: path)
             switch (entry.previousContents, existsNow) {
             case (nil, true):
@@ -95,15 +118,15 @@ public actor FileCheckpointStore {
         )
     }
 
-    public func trackedPaths() -> [String] { entries.keys.sorted() }
+    public func trackedPaths(session: String? = nil) -> [String] { entries(session).keys.sorted() }
 
     /// The turn's baseline, for `SessionCheckpointStore` to seal into durable history.
     ///
     /// This window still gets discarded on the next `beginTurn`. What survives is the copy on
     /// disk, which only the user can reach — the agent's own `revert_changes` stays scoped to the
     /// turn it is running in.
-    public func baseline() -> [FileBaseline] {
-        entries.map { path, entry in
+    public func baseline(session: String? = nil) -> [FileBaseline] {
+        entries(session).map { path, entry in
             FileBaseline(
                 path: path,
                 previousContents: entry.previousContents,
@@ -126,9 +149,9 @@ public actor FileCheckpointStore {
     }
 
     /// Everything the turn changed, newest state included, ready to render.
-    public func changes(fileManager: FileManager = .default) -> [Change] {
+    public func changes(session: String? = nil, fileManager: FileManager = .default) -> [Change] {
         var out: [Change] = []
-        for (path, entry) in entries {
+        for (path, entry) in entries(session) {
             let existsNow = fileManager.fileExists(atPath: path)
             let now = existsNow ? try? String(contentsOfFile: path, encoding: .utf8) : nil
             switch (entry.previousContents, existsNow) {
@@ -147,9 +170,10 @@ public actor FileCheckpointStore {
 
     /// Revert a single file and stop tracking it, leaving the rest of the turn intact.
     @discardableResult
-    public func revert(path: String, fileManager: FileManager = .default) -> Bool {
-        guard let entry = entries[path] else { return false }
-        defer { entries.removeValue(forKey: path) }
+    public func revert(path: String, session: String? = nil, fileManager: FileManager = .default) -> Bool {
+        let k = key(session)
+        guard let entry = windows[k]?.entries[path] else { return false }
+        defer { windows[k]?.entries.removeValue(forKey: path) }
         if let previous = entry.previousContents {
             return (try? previous.write(toFile: path, atomically: true, encoding: .utf8)) != nil
         }
@@ -166,8 +190,8 @@ public actor FileCheckpointStore {
     /// change, so a mismatch refuses and the caller reloads. The checkpoint is kept: the file still
     /// differs from where the turn began, and the rest of the review still works.
     @discardableResult
-    public func applyPartialRevert(path: String, expectedCurrent: String, contents: String) -> Bool {
-        guard entries[path] != nil,
+    public func applyPartialRevert(path: String, expectedCurrent: String, contents: String, session: String? = nil) -> Bool {
+        guard entries(session)[path] != nil,
               let current = try? String(contentsOfFile: path, encoding: .utf8),
               current == expectedCurrent else { return false }
         return (try? contents.write(toFile: path, atomically: true, encoding: .utf8)) != nil
@@ -175,12 +199,13 @@ public actor FileCheckpointStore {
 
     /// Put every recorded file back as it was when the turn began.
     @discardableResult
-    public func revertTurn(fileManager: FileManager = .default) -> RevertOutcome {
+    public func revertTurn(session: String? = nil, fileManager: FileManager = .default) -> RevertOutcome {
         var restored: [String] = []
         var removed: [String] = []
         var failed: [String] = []
 
-        for (path, entry) in entries {
+        let k = key(session)
+        for (path, entry) in windows[k]?.entries ?? [:] {
             if let previous = entry.previousContents {
                 do {
                     try previous.write(toFile: path, atomically: true, encoding: .utf8)
@@ -197,7 +222,7 @@ public actor FileCheckpointStore {
                 }
             }
         }
-        entries.removeAll()
+        windows[k]?.entries.removeAll()
         return RevertOutcome(
             restored: restored.sorted(),
             removed: removed.sorted(),

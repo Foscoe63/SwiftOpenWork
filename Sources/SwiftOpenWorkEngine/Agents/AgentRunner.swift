@@ -1087,7 +1087,7 @@ var mcpPromptSummary = ""
 
         // Undo is scoped to one turn, so the window opens here rather than at session start.
         if group?.startsTurn ?? true {
-            await FileCheckpointStore.shared.beginTurn(label: session.id)
+            await FileCheckpointStore.shared.beginTurn(label: session.id, session: session.id)
         }
         if let notice = group?.notice { accumulator.appendNotice(notice) }
 

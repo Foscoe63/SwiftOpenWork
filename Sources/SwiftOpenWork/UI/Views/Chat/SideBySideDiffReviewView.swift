@@ -249,9 +249,10 @@ struct SideBySideDiffReviewView: View {
         guard let diff, diff.hunks.indices.contains(index), let after else { return }
         let contents = diff.reverting([index])
         let path = path
+        let session = appState.currentSession?.id
         Task {
             let ok = await FileCheckpointStore.shared.applyPartialRevert(
-                path: path, expectedCurrent: after, contents: contents
+                path: path, expectedCurrent: after, contents: contents, session: session
             )
             if ok {
                 failure = nil

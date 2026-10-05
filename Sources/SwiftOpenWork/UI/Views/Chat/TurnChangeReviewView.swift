@@ -196,7 +196,7 @@ public struct TurnChangeReviewView: View {
     }
 
     private func reload() async {
-        let latest = await FileCheckpointStore.shared.changes()
+        let latest = await FileCheckpointStore.shared.changes(session: appState.currentSession?.id)
         await MainActor.run {
             changes = latest
             // Re-point at the fresh change, not the snapshot: a hunk revert rewrites the file, and a
@@ -210,7 +210,7 @@ public struct TurnChangeReviewView: View {
     }
 
     private func revert(_ change: FileCheckpointStore.Change) async {
-        _ = await FileCheckpointStore.shared.revert(path: change.path)
+        _ = await FileCheckpointStore.shared.revert(path: change.path, session: appState.currentSession?.id)
         await reload()
         await MainActor.run {
             appState.showToast("Reverted \(relative(change.path))")
@@ -219,7 +219,7 @@ public struct TurnChangeReviewView: View {
     }
 
     private func revertAll() async {
-        let outcome = await FileCheckpointStore.shared.revertTurn()
+        let outcome = await FileCheckpointStore.shared.revertTurn(session: appState.currentSession?.id)
         await reload()
         await MainActor.run {
             let count = outcome.restored.count + outcome.removed.count
