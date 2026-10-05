@@ -216,7 +216,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         let configPath = (directory as NSString).appendingPathComponent("buildServer.json")
         let before = Self.readForDiff(configPath)
 
-        let config = runProcess(
+        let config = await runProcess(
             command: XcodeBuildServer.configCommand(executable: buildServer, developerDirectory: developerDirectory,
                                                     flag: container.flag, container: container.name, scheme: scheme),
             cwd: directory, timeoutSeconds: 180, callId: callId
@@ -233,7 +233,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         let requested = dict["build"] as? Bool
         var buildFailed = false
         if requested == true || (requested == nil && !hasBuild) {
-            let build = runProcess(
+            let build = await runProcess(
                 command: XcodeBuildServer.buildCommand(developerDirectory: developerDirectory, flag: container.flag,
                                                        container: container.name, scheme: scheme),
                 cwd: directory, timeoutSeconds: 1800, callId: callId
@@ -601,7 +601,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 }
             }
 
-            let run = runProcess(command: effectiveCommand, cwd: root, timeoutSeconds: 600, callId: callId)
+            let run = await runProcess(command: effectiveCommand, cwd: root, timeoutSeconds: 600, callId: callId)
             var summary = BuildDiagnostics.summarize(
                 command: effectiveCommand,
                 exitCode: run.exitCode,
@@ -1044,7 +1044,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                     idleSeconds: Self.idleSeconds(from: dict["idle_seconds"])
                 )
             }
-            return executeShell(command: command, cwd: cwd, startTime: startTime, callId: callId)
+            return await executeShell(command: command, cwd: cwd, startTime: startTime, callId: callId)
 
         case "send_input":
             return await executeSendInput(dict: dict, workspace: workspace, settings: settings, startTime: startTime)
@@ -2537,7 +2537,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         cwd: String,
         timeoutSeconds: TimeInterval,
         callId: String? = nil
-    ) -> ProcessRun {
+    ) async -> ProcessRun {
         let settings = PersistenceManager.shared.loadSettings()
         let shellPath = settings.terminalShell.isEmpty ? "/bin/zsh" : settings.terminalShell
         let process = Process()
@@ -2578,6 +2578,8 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         }
         timer.resume()
 
+        let exitWaiter = ProcessExitWaiter()
+        process.terminationHandler = { _ in exitWaiter.processExited() }
         do {
             try process.run()
         } catch {
@@ -2585,7 +2587,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             pipe.fileHandleForReading.readabilityHandler = nil
             return ProcessRun(output: "Failed to launch: \(error.localizedDescription)", exitCode: -1, timedOut: false)
         }
-        process.waitUntilExit()
+        let stopped = await exitWaiter.wait(pid: process.processIdentifier)
         timer.cancel()
         // Wait for the pipe to close, but not forever: a background process the command started
         // (`npm run dev &`) holds it open, and reading to end-of-file would hang the tool call.
@@ -2594,6 +2596,9 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         LiveToolOutput.conclude(callId: callId, exitCode: process.terminationStatus)
 
         let (output, didTimeOut) = state.finalize()
+        if stopped {
+            return ProcessRun(output: output + "\n\n" + ProcessExitWaiter.stoppedNote, exitCode: -3, timedOut: false)
+        }
         return ProcessRun(
             output: didTimeOut
                 ? output + "\n\n[timed out after \(Int(timeoutSeconds))s and was terminated]"
@@ -2699,7 +2704,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         cwd: String,
         startTime: Double,
         callId: String? = nil
-    ) -> ToolExecutionResult {
+    ) async -> ToolExecutionResult {
         let settings = PersistenceManager.shared.loadSettings()
         let shellPath = settings.terminalShell.isEmpty ? "/bin/zsh" : settings.terminalShell
         let process = Process()
@@ -2743,9 +2748,11 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         }
         timeoutTimer.resume()
 
+        let exitWaiter = ProcessExitWaiter()
+        process.terminationHandler = { _ in exitWaiter.processExited() }
         do {
             try process.run()
-            process.waitUntilExit()
+            let stopped = await exitWaiter.wait(pid: process.processIdentifier)
             timeoutTimer.cancel()
             // Let the handler drain what was written just before exit, but never wait on a pipe a
             // surviving background process still holds open — that used to hang the call forever.
@@ -2754,6 +2761,14 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             LiveToolOutput.conclude(callId: callId, exitCode: process.terminationStatus)
 
             let (output, didTimeOut) = state.finalize()
+            if stopped {
+                return ToolExecutionResult(
+                    success: false,
+                    output: output,
+                    error: ProcessExitWaiter.stoppedNote,
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
             if didTimeOut {
                 return ToolExecutionResult(
                     success: false,
@@ -2874,6 +2889,66 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             output: out,
             durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
         )
+    }
+}
+
+/// Waits for a launched process without blocking a thread, and stops it when the waiting task is
+/// cancelled. `waitUntilExit()` pinned a cooperative thread for the whole run and ignored Stop, so
+/// a 10-minute build kept going after the user pressed it.
+public final class ProcessExitWaiter: @unchecked Sendable {
+    static let stoppedNote = "[stopped: the run was cancelled, so the command and everything it started were terminated]"
+
+    private let lock = NSLock()
+    private var exited = false
+    private var stopped = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    public init() {}
+
+    /// Call from `Process.terminationHandler`, which must be set before `run()`.
+    public func processExited() {
+        lock.lock()
+        exited = true
+        let waiting = continuation
+        continuation = nil
+        lock.unlock()
+        waiting?.resume()
+    }
+
+    /// Marks the run stopped, unless the process already exited on its own.
+    private func stopIfRunning() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if !exited { stopped = true }
+        return stopped
+    }
+
+    /// Returns once the process has exited. If the task is cancelled first, the process tree is
+    /// terminated and this still waits for the exit, then returns true.
+    public func wait(pid: Int32) async -> Bool {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (waiting: CheckedContinuation<Void, Never>) in
+                park(waiting)
+            }
+        } onCancel: {
+            if self.stopIfRunning() { ProcessTree.terminate(pid) }
+        }
+        return wasStopped()
+    }
+
+    private func park(_ waiting: CheckedContinuation<Void, Never>) {
+        lock.lock()
+        if exited {
+            lock.unlock()
+            waiting.resume()
+        } else {
+            continuation = waiting
+            lock.unlock()
+        }
+    }
+
+    private func wasStopped() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return stopped
     }
 }
 
