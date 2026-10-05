@@ -250,7 +250,7 @@ public actor SessionCheckpointStore {
     /// Every path that runs a turn calls this, including the headless ones — an automation that
     /// rewrote six files at 3am is exactly the run you want to be able to undo.
     public static func sealCurrentTurn(sessionId: String, messageId: String?, label: String) async {
-        let baseline = await FileCheckpointStore.shared.baseline()
+        let baseline = await FileCheckpointStore.shared.baseline(session: sessionId)
         guard !baseline.isEmpty else { return }
         await shared.record(
             sessionId: sessionId,

@@ -63,4 +63,34 @@ public enum AutoContinuePolicy {
         guard let last = lines.last else { return false }
         return last.hasSuffix("?")
     }
+
+    /// Phrases that announce a tool call the model is about to make.
+    static let intentPhrases = [
+        "let me start", "let me check", "let me get", "let me list", "let me emit", "let me search",
+        "let me proceed", "let me call", "let me look", "let me read", "let me run", "let me open",
+        "i will start by", "i will now check", "i'll start by", "now let me", "first, let me",
+        "tools are loaded", "tool definitions",
+    ]
+
+    /// Whether a step's text *ends* by announcing an action it never took ("Now let me check the
+    /// logs:"), which is a stall worth nudging. Only the last sentence counts, so a finished answer
+    /// that says "now let me explain" early on, or closes with "let me know if…", is not a stall.
+    public static func endsWithUnfulfilledIntent(_ text: String) -> Bool {
+        let lines = text
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard let lastLine = lines.last?.lowercased() else { return false }
+        if lastLine.hasSuffix("?") { return false }
+        // The last sentence of the last line.
+        let body = lastLine.trimmingCharacters(in: CharacterSet(charactersIn: ".!:…").union(.whitespaces))
+        var lastSentence = Substring(body)
+        for boundary in [". ", "! ", "? "] {
+            if let range = lastSentence.range(of: boundary, options: .backwards) {
+                lastSentence = lastSentence[range.upperBound...]
+            }
+        }
+        if lastSentence.contains("let me know") { return false }
+        return intentPhrases.contains { lastSentence.contains($0) }
+    }
 }

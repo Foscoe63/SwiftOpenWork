@@ -61,3 +61,27 @@ final class AutoContinuePolicyTests: XCTestCase {
         XCTAssertTrue(AutoContinuePolicy.shouldAutoContinue(haltReason: nil, finalText: "", pendingTodos: true))
     }
 }
+
+/// The in-turn "stop narrating" nudge: only a step that *ends* on an announced action is a stall.
+final class UnfulfilledIntentTests: XCTestCase {
+    func testTrailingAnnouncedActionIsAStall() {
+        XCTAssertTrue(AutoContinuePolicy.endsWithUnfulfilledIntent(
+            "Now let me check TerminalManager to see if scroll position restoration is already implemented:"))
+        XCTAssertTrue(AutoContinuePolicy.endsWithUnfulfilledIntent("I found the bug. Let me read Config.swift..."))
+    }
+
+    func testFinishedAnswersAreNotStalls() {
+        XCTAssertFalse(AutoContinuePolicy.endsWithUnfulfilledIntent(
+            "I renamed the function and updated callers. Now let me know if you'd like changes."))
+        XCTAssertFalse(AutoContinuePolicy.endsWithUnfulfilledIntent(
+            "First, let me explain the fix.\nThe bug was an off-by-one in the parser."))
+        XCTAssertFalse(AutoContinuePolicy.endsWithUnfulfilledIntent("Should I check the logs too? Let me check?"))
+        XCTAssertFalse(AutoContinuePolicy.endsWithUnfulfilledIntent(""))
+    }
+
+    func testNudgeNoLongerNamesAFallbackTool() throws {
+        let source = try String(contentsOf: SourceTree.url("Engine/Agents/AgentRunner.swift"), encoding: .utf8)
+        XCTAssertFalse(source.contains(#"?? "mcp_call""#), "the nudge pointed models at a tool that may not exist")
+    }
+}
+

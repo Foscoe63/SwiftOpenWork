@@ -1173,7 +1173,7 @@ public struct SettingsView: View {
                 // `AgentRunner` has always read this; it had no control anywhere, so the only way
                 // to change the threshold was to hand-edit settings.json.
                 if appState.settings.autoCompactContext {
-                    SettingsRow(title: "Compaction Threshold (\(appState.settings.contextCompactionThresholdTokens / 1000)k tokens)", subtitle: "Transcript size that triggers a summarize pass", icon: "arrow.down.right.and.arrow.up.left") {
+                    SettingsRow(title: "Compaction Threshold (\(appState.settings.contextCompactionThresholdTokens / 1000)k tokens)", subtitle: "Transcript size that triggers a summarize pass (never above 70% of the model's window)", icon: "arrow.down.right.and.arrow.up.left") {
                         Stepper("", value: $appState.settings.contextCompactionThresholdTokens, in: 8000...256_000, step: 4000)
                     }
                 }

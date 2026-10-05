@@ -90,3 +90,16 @@ final class ToolCallCollectorTests: XCTestCase {
         XCTAssertEqual(collector.snapshot()[0].argumentsJson, #"{"x":1}"#)
     }
 }
+
+/// Sub-agents collect tool calls through `ToolCallBox`, which must also keep the latest snapshot.
+final class SubAgentToolCallBoxTests: XCTestCase {
+    func testSubAgentBoxKeepsTheCompleteSnapshot() {
+        let box = ToolCallBox()
+        box.add([ToolCallInfo(id: "c1", toolName: "file_read", argumentsJson: "{}")])
+        box.add([ToolCallInfo(id: "c1", toolName: "file_read", argumentsJson: #"{"path":"a"}"#)])
+        let held = box.drain()
+        XCTAssertEqual(held.count, 1)
+        XCTAssertEqual(held[0].argumentsJson, #"{"path":"a"}"#, "sub-agents used to run the first, empty snapshot")
+        XCTAssertTrue(box.drain().isEmpty, "drain empties the box")
+    }
+}

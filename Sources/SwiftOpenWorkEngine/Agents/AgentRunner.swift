@@ -1093,7 +1093,7 @@ var mcpPromptSummary = ""
 
         // Undo is scoped to one turn, so the window opens here rather than at session start.
         if group?.startsTurn ?? true {
-            await FileCheckpointStore.shared.beginTurn(label: session.id)
+            await FileCheckpointStore.shared.beginTurn(label: session.id, session: session.id)
         }
         if let notice = group?.notice { accumulator.appendNotice(notice) }
 
@@ -1138,6 +1138,9 @@ var mcpPromptSummary = ""
         var workingMessages = group.map {
             GroupChat.flatten(session.messages, speakerId: baseAgent.id, names: $0.names)
         } ?? session.modelHistory()
+        // What the person asked for this turn. The transcript is the whole session, so compaction
+        // must be told which request is current or it keeps only the session's first one.
+        let currentRequestId = workingMessages.last(where: ContextCompactor.isPersonRequest)?.id
         // The last step's reply, when the turn ended on an answer rather than on tool calls.
         var finalStepText: String?
 
@@ -1285,7 +1288,7 @@ var mcpPromptSummary = ""
             // been paid on the uncompacted one — and it happens at a milestone rather than
             // mid-task.
             if loadedSettings.autoCompactContext, reachedMilestoneThisIteration {
-                let compacted = ContextCompactor.compactAtMilestone(workingMessages)
+                let compacted = ContextCompactor.compactAtMilestone(workingMessages, currentRequestId: currentRequestId)
                 workingMessages = compacted.messages
                 if compacted.didCompact {
                     accumulator.appendNotice("Milestone reached — earlier steps compacted.")
@@ -1296,7 +1299,12 @@ var mcpPromptSummary = ""
             if loadedSettings.autoCompactContext {
                 let compacted = ContextCompactor.compactIfNeeded(
                     workingMessages,
-                    thresholdTokens: loadedSettings.contextCompactionThresholdTokens
+                    thresholdTokens: ContextCompactor.compactionThreshold(
+                        settingTokens: loadedSettings.contextCompactionThresholdTokens,
+                        contextWindow: model.contextWindow
+                    ),
+                    currentRequestId: currentRequestId,
+                    extraCharacters: systemPromptWithTools.count
                 )
                 workingMessages = compacted.messages
                 if compacted.didCompact {
@@ -1475,7 +1483,6 @@ var mcpPromptSummary = ""
             // If no tool calls were requested from this turn:
             if pendingCallsToExecute.isEmpty {
                 let newlyGeneratedDelta = String(accumulator.fullText.dropFirst(turnTextBefore.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-                let lowercaseDelta = newlyGeneratedDelta.lowercased()
                 if newlyGeneratedDelta.isEmpty && nativeEmittedToolCalls.isEmpty {
                     // Empty model turn — do not silently finalize an blank streaming bubble.
                     if iteration < 2 {
@@ -1489,42 +1496,22 @@ var mcpPromptSummary = ""
                     halted = true
                     break
                 } else {
-                    let hasUnfulfilledActionIntent = (
-                        lowercaseDelta.contains("let me start") ||
-                        lowercaseDelta.contains("let me check") ||
-                        lowercaseDelta.contains("let me get") ||
-                        lowercaseDelta.contains("let me list") ||
-                        lowercaseDelta.contains("let me emit") ||
-                        lowercaseDelta.contains("let me search") ||
-                        lowercaseDelta.contains("let me proceed") ||
-                        lowercaseDelta.contains("let me call") ||
-                        lowercaseDelta.contains("i will start by") ||
-                        lowercaseDelta.contains("i will now check") ||
-                        lowercaseDelta.contains("now let me") ||
-                        lowercaseDelta.contains("tools are loaded") ||
-                        lowercaseDelta.contains("tool definitions") ||
-                        lowercaseDelta.contains("first, let me")
-                    ) && newlyGeneratedDelta.count < 1200 && iteration < 6
+                    // Only text that *ends* on an announced action counts: matching anywhere
+                    // nudged finished answers ("…now let me know if you'd like changes").
+                    let hasUnfulfilledActionIntent = AutoContinuePolicy.endsWithUnfulfilledIntent(newlyGeneratedDelta)
+                        && newlyGeneratedDelta.count < 1200 && iteration < 6
 
                     if hasUnfulfilledActionIntent {
-                        let toolHint: String = {
-                            if let t = availableTools.first(where: { $0.name.contains("call_tool_by_name") }) {
-                                return t.name
-                            }
-                            if let t = availableTools.first(where: { $0.name.contains("get_tool_definitions") }) {
-                                return t.name
-                            }
-                            return availableTools.first(where: { $0.category == .mcp })?.name ?? "mcp_call"
-                        }()
+                        // No tool is named: this used to point at `call_tool_by_name`, the first MCP
+                        // tool, or a literal `mcp_call` with `{}`, which failed when no MCP server
+                        // was connected and steered the model away from the tool it meant.
                         let nudgeMsg = ChatMessage(
                             sessionId: session.id,
                             role: .user,
                             content: """
-                            [System Command]: Stop narrating. Immediately emit a native tool call for `\(toolHint)`, for example:
-                            ```tool_call
-                            {"tool": "\(toolHint)", "parameters": {}}
-                            ```
-                            Do not write more prose before the tool call.
+                            [System Command]: You described a next step but did not call a tool. \
+                            If you meant to act, call the tool you intended now, with real arguments, \
+                            and no more prose first. If you are finished, give the final answer.
                             """
                         )
                         // What it said goes in first, or the nudge answers a message the model

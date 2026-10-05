@@ -741,7 +741,10 @@ public final class AppState: ObservableObject {
         persistence.saveSessions(sessions)
         // Snapshots of a transcript nobody can open are just disk use.
         let id = session.id
-        Task { await SessionCheckpointStore.shared.deleteAll(forSession: id) }
+        Task {
+            await SessionCheckpointStore.shared.deleteAll(forSession: id)
+            await FileCheckpointStore.shared.discard(session: id)
+        }
         refreshRestorePoints()
     }
 

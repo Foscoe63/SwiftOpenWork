@@ -293,3 +293,59 @@ final class ManualCompactionAndMeterTests: XCTestCase {
         XCTAssertEqual(meter?.used, 40_000)
     }
 }
+
+/// The transcript is the whole session, so "the first user message" is turn 1's prompt. The
+/// request being worked on now must survive compaction too.
+final class CurrentRequestCompactionTests: XCTestCase {
+    private func longSession() -> (messages: [ChatMessage], currentId: String) {
+        var messages = [ChatMessage(sessionId: "s", role: .user, content: "Turn one: add a README")]
+        for i in 0..<10 {
+            messages.append(ChatMessage(sessionId: "s", role: .assistant, content: String(repeating: "old \(i) ", count: 200)))
+        }
+        let current = ChatMessage(sessionId: "s", role: .user, content: "Now port the parser to Rust")
+        messages.append(current)
+        for i in 0..<20 {
+            messages.append(ChatMessage(sessionId: "s", role: .assistant, content: String(repeating: "new \(i) ", count: 200)))
+        }
+        messages.append(ChatMessage(sessionId: "s", role: .user, content: "[System Command]: Stop narrating."))
+        return (messages, current.id)
+    }
+
+    func testCurrentRequestSurvivesCompaction() {
+        let (messages, currentId) = longSession()
+        let (out, did) = ContextCompactor.compactIfNeeded(messages, thresholdTokens: 500, currentRequestId: currentId)
+        XCTAssertTrue(did)
+        XCTAssertEqual(out.first?.content, "Turn one: add a README")
+        XCTAssertTrue(out.contains { $0.id == currentId }, "the current request used to fall in the dropped middle")
+    }
+
+    func testWithoutAnIdTheLatestPersonMessageIsKept() {
+        let (messages, currentId) = longSession()
+        let (out, did) = ContextCompactor.compactIfNeeded(messages, thresholdTokens: 500)
+        XCTAssertTrue(did)
+        XCTAssertTrue(out.contains { $0.id == currentId }, "injected [System…] nudges are not the request")
+    }
+
+    func testRepeatedCompactionKeepsTheCurrentRequest() {
+        let (messages, currentId) = longSession()
+        let once = ContextCompactor.compactIfNeeded(messages, thresholdTokens: 500, keepRecent: 4, currentRequestId: currentId).messages
+        var grown = once
+        for i in 0..<10 {
+            grown.append(ChatMessage(sessionId: "s", role: .assistant, content: String(repeating: "more \(i) ", count: 200)))
+        }
+        let twice = ContextCompactor.compactIfNeeded(grown, thresholdTokens: 500, keepRecent: 4, currentRequestId: currentId).messages
+        XCTAssertTrue(twice.contains { $0.id == currentId })
+    }
+
+    func testThresholdNeverExceedsMostOfTheWindow() {
+        XCTAssertEqual(ContextCompactor.compactionThreshold(settingTokens: 100_000, contextWindow: 8_192), 5_734)
+        XCTAssertEqual(ContextCompactor.compactionThreshold(settingTokens: 100_000, contextWindow: 1_000_000), 100_000)
+        XCTAssertEqual(ContextCompactor.compactionThreshold(settingTokens: 32_000, contextWindow: 0), 32_000)
+    }
+
+    func testToolCallArgumentsCountTowardTheEstimate() {
+        var message = ChatMessage(sessionId: "s", role: .assistant, content: "")
+        message.toolCalls = [ToolCallInfo(toolName: "file_write", argumentsJson: String(repeating: "x", count: 30_000), status: .success)]
+        XCTAssertGreaterThan(ContextCompactor.estimateTokens([message]), 9_000, "a large file_write body used to count as nothing")
+    }
+}
