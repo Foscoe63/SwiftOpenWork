@@ -209,3 +209,109 @@ final class MultiAgentDelegationTests: XCTestCase {
         XCTAssertFalse(view.contains(#"appState.agents.first(where: { $0.id == "coder-agent" })"#))
     }
 }
+
+/// `agent_message` answered "Message sent" and delivered nothing: the inspector log was the only
+/// reader. These pin that a message now reaches the agent it names.
+final class AgentMailboxTests: XCTestCase {
+
+    private let letter = AgentMailbox.Letter(fromAgentId: "lead", fromAgentName: "Lead", content: "use Foo.bar")
+
+    func testARunningAgentReceivesAMessageOnce() {
+        let box = AgentMailbox()
+        let coder = box.register(sessionId: "chat", agentId: "coder-agent", agentName: "Coder", task: "t")
+        XCTAssertEqual(box.send(sessionId: "chat", toAgentId: "coder-agent", letter: letter), .delivered(1))
+        XCTAssertEqual(box.drain(coder), [letter])
+        XCTAssertEqual(box.drain(coder), [], "reading empties the inbox")
+    }
+
+    func testAMessageForAnAgentNotRunningIsHeldForItsNextRunInThatChatOnly() {
+        let box = AgentMailbox()
+        XCTAssertEqual(box.send(sessionId: "chat", toAgentId: "coder-agent", letter: letter), .held)
+        let elsewhere = box.register(sessionId: "other-chat", agentId: "coder-agent", agentName: "Coder", task: "t")
+        XCTAssertEqual(box.drain(elsewhere), [], "another chat's message is not this run's")
+        let coder = box.register(sessionId: "chat", agentId: "coder-agent", agentName: "Coder", task: "t")
+        XCTAssertEqual(box.drain(coder), [letter])
+    }
+
+    func testParallelRunsOfOneAgentEachGetTheMessage() {
+        let box = AgentMailbox()
+        let a = box.register(sessionId: "chat", agentId: "coder-agent", agentName: "Coder", task: "a")
+        let b = box.register(sessionId: "chat", agentId: "coder-agent", agentName: "Coder", task: "b")
+        XCTAssertEqual(box.send(sessionId: "chat", toAgentId: "coder-agent", letter: letter), .delivered(2))
+        XCTAssertEqual(box.drain(a).count, 1)
+        XCTAssertEqual(box.drain(b).count, 1)
+        XCTAssertEqual(box.running(in: "chat", excluding: a).map(\.task), ["b"])
+    }
+
+    func testAFinishedRunStopsReceivingAndHeldMessagesAreCapped() {
+        let box = AgentMailbox()
+        let coder = box.register(sessionId: "chat", agentId: "coder-agent", agentName: "Coder", task: "t")
+        box.unregister(coder)
+        XCTAssertTrue(box.running(in: "chat").isEmpty)
+        for _ in 0..<(AgentMailbox.heldLimit + 5) {
+            _ = box.send(sessionId: "chat", toAgentId: "coder-agent", letter: letter)
+        }
+        let next = box.register(sessionId: "chat", agentId: "coder-agent", agentName: "Coder", task: "t")
+        XCTAssertEqual(box.drain(next).count, AgentMailbox.heldLimit)
+    }
+
+    func testTheNoteSaysWhoSentItAndThatItIsNotTheUser() {
+        let note = AgentMailbox.note(for: [letter])
+        XCTAssertTrue(note.contains("From Lead (`lead`): use Foo.bar"))
+        XCTAssertTrue(note.contains("not the user's"))
+    }
+}
+
+@MainActor
+final class AgentMessageToolTests: XCTestCase {
+
+    private let model = ModelInfo(id: "m", name: "M", providerId: "p")
+    private var frame: AgentRunContext.Frame {
+        AgentRunContext.Frame(
+            provider: ModelProvider(id: "p", name: "P", type: .cloud, kind: .openai, isEnabled: true, models: [model]),
+            model: model, depth: 0, sessionId: "message-tool-\(name)"
+        )
+    }
+    private let sender = Agent(id: "test-sender", name: "Sender")
+    private let workspace = Workspace(name: "t", folderPath: NSTemporaryDirectory())
+
+    private func send(_ json: String) async -> ToolExecutionResult {
+        await AgentRunContext.$current.withValue(frame) {
+            await ToolExecutionEngine.shared.execute(
+                toolName: "agent_message", argumentsJson: json, workspace: workspace, currentAgent: sender
+            )
+        }
+    }
+
+    /// A missing recipient silently went to the lead.
+    func testARecipientIsRequiredAndMustExist() async {
+        let missing = await send(#"{"content":"hi"}"#)
+        XCTAssertFalse(missing.success)
+        XCTAssertTrue(missing.error?.contains("to_agent_id") ?? false)
+
+        let unknown = await send(#"{"to_agent_id":"nobody-agent","content":"hi"}"#)
+        XCTAssertFalse(unknown.success)
+        XCTAssertNil(unknown.createdAgentMessage)
+    }
+
+    func testAMessageReachesARunningAgentsInbox() async {
+        let session = frame.sessionId ?? ""
+        let inbox = AgentMailbox.shared.register(sessionId: session, agentId: "coder-agent", agentName: "Coder", task: "t")
+        defer { AgentMailbox.shared.unregister(inbox) }
+
+        let result = await send(#"{"to_agent_id":"coder-agent","content":"the API is Foo.bar(x:)"}"#)
+        XCTAssertTrue(result.success, result.error ?? "")
+        XCTAssertTrue(result.output.contains("Delivered"))
+        XCTAssertEqual(AgentMailbox.shared.drain(inbox).map(\.content), ["the API is Foo.bar(x:)"])
+        XCTAssertEqual(result.createdAgentMessage?.toAgentId, "coder-agent", "the inspector still sees it")
+    }
+
+    func testAMessageToAnAgentNotRunningSaysItIsHeld() async {
+        let result = await send(#"{"to_agent_id":"coder-agent","content":"later"}"#)
+        XCTAssertTrue(result.success)
+        XCTAssertTrue(result.output.contains("not running"))
+        let inbox = AgentMailbox.shared.register(sessionId: frame.sessionId ?? "", agentId: "coder-agent", agentName: "Coder", task: "t")
+        defer { AgentMailbox.shared.unregister(inbox) }
+        XCTAssertEqual(AgentMailbox.shared.drain(inbox).map(\.content), ["later"])
+    }
+}

@@ -66,7 +66,7 @@ Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibil
 | 💬 | Interaction — `ask_user`, `exit_plan_mode`, `todo_write` |
 | 👁️ | **Perception** — `screenshot_window` (see any running app's window), `accessibility_tree` (read it as text — cheap, and works with text-only models), `run_app` (launch it and report what happened) |
 | 🌍 | **Live preview** — `preview_start` (detect and run the dev server, or serve a static site), `preview_check` (reload and report console errors, failed requests, visible text and a screenshot — for any preview tab), `preview_logs`, `preview_stop` |
-| 🌿 | Isolation — `worktree_create`, `worktree_list`, `worktree_remove`, `git_commit` (confined to agent worktrees) |
+| 🌿 | Isolation — `worktree_create`, `worktree_list`, `worktree_remove`, `worktree_merge`, `git_commit` (confined to agent worktrees) |
 | 🧮 | Utilities — `calculator`, `get_current_date`, `document_extract` |
 | 📧 | Optional Google — `gmail_*`, `google_calendar_*` |
 
@@ -92,7 +92,7 @@ Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibil
 - **ai-memory** — agent lifecycle is forwarded to [ai-memory](https://github.com/akitaonrails/ai-memory) for automatic capture, and its handoff is injected into the system prompt
 - **Hybrid search** — `search_workspace` fuses BM25 with semantic vectors from a small on-device MLX encoder, downloaded only when you ask for it in Settings; BM25 alone is the fallback
 - Approval gates for destructive / MCP write actions. MCP read/write classification is **fail-closed**: a tool is a read only when a known server advertises it and it is absent from that server's write list, so unknown servers ask. Expect more prompts than a name-prefix heuristic would produce — that is the point
-- Sub-agent spawning and inter-agent messaging in the Side Inspector
+- **Sub-agents** — the lead delegates with `agent_spawn`; several spawns in one step run at the same time (up to 4, one at a time on a local model), each in its own worktree, and the lead can ask for more steps (`max_steps`) or a reasoning level (`effort`). Sub-agents think as hard as the lead unless told otherwise. `agent_message` reaches a running agent at its next step, or waits for its next run in the same chat. `worktree_merge` brings a sub-agent's branch into your checkout, as uncommitted edits by default (`apply`) or as a merge commit on a clean checkout (`merge`), and always asks first. Spawns and messages also show in the Side Inspector
 - **Least-privilege agents** — every built-in agent gets Hindsight recall and retain by tool name (reflect only for lead, research, architect and security), never the whole server. New agents start from a minimal tool and skill baseline, and the agent editor can grant single MCP tools
 
 ### Group chats

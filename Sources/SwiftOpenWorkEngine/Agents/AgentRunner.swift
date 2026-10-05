@@ -956,6 +956,12 @@ public final class AgentRunner {
 
         let loadedSettings = PersistenceManager.shared.loadSettings()
         let maxIterations = max(1, loadedSettings.maxAutonomousIterations)
+        // This turn's inbox for `agent_message`: sub-agents it spawns can reach it, and it reads
+        // what arrived after each round of tool results.
+        let mailboxId = AgentMailbox.shared.register(
+            sessionId: session.id, agentId: baseAgent.id, agentName: baseAgent.name, task: "leading this chat"
+        )
+        defer { AgentMailbox.shared.unregister(mailboxId) }
         // 0 means the user turned the budget off.
         let maxTurnTokens = loadedSettings.maxTurnTokens <= 0 ? Int.max : loadedSettings.maxTurnTokens
         var planModeActive = loadedSettings.planModeEnabled
@@ -1574,10 +1580,22 @@ var mcpPromptSummary = ""
             // guard below in order (approval, repeat breakers, unchanged-read notes) and only its
             // execution is taken from here, so the bookkeeping is the same as a serial run. The run
             // ends at the first call that is not read-only: later reads may depend on its effect.
+            //
+            // Sub-agents join the run when a step delegates more than one task. Each works in its
+            // own worktree, so they cannot write over each other, and three delegations used to
+            // take three times as long for no reason. On a local model they stay in order: the
+            // engine runs one generation at a time, so starting them together gains nothing.
             var prefetched: [String: Task<ToolExecutionResult, Never>] = [:]
+            let spawnsRunTogether = Self.spawnsRunTogether(toolQueue.map(\.tool), provider: provider)
+            var spawnsStarted = 0
             let leadingReads = toolQueue.prefix { call in
-                Self.isParallelSafe(call.tool)
-                    && !disabledToolNames.contains(Self.canonicalToolName(call.tool))
+                let isSpawn = Self.canonicalToolName(call.tool) == "agent_spawn"
+                if isSpawn {
+                    guard spawnsRunTogether, spawnsStarted < Self.maxParallelSubAgents else { return false }
+                } else if !Self.isParallelSafe(call.tool) {
+                    return false
+                }
+                let ok = !disabledToolNames.contains(Self.canonicalToolName(call.tool))
                     && Self.approvalReason(
                         toolName: call.tool,
                         argumentsJson: Self.sanitizeToolArgumentsJson(toolName: call.tool, argumentsJson: call.args),
@@ -1585,13 +1603,23 @@ var mcpPromptSummary = ""
                         sessionId: session.id,
                         workspaceRoot: workspace.folderPath
                     ) == nil
+                if ok && isSpawn { spawnsStarted += 1 }
+                return ok
             }
             if leadingReads.count > 1 {
-                let frame = AgentRunContext.Frame(provider: provider, model: model, depth: 0, sessionId: session.id)
+                let frame = AgentRunContext.Frame(
+                    provider: provider, model: model, depth: 0, sessionId: session.id,
+                    reasoningEffort: effectiveReasoningEffort
+                )
                 for call in leadingReads {
                     let args = Self.sanitizeToolArgumentsJson(toolName: call.tool, argumentsJson: call.args)
                     let name = call.tool
                     let id = call.id
+                    // A sub-agent runs for minutes, so its card shows from the start, not only once
+                    // the ones before it have finished.
+                    if Self.canonicalToolName(name) == "agent_spawn" {
+                        accumulator.updateToolCall(ToolCallInfo(id: id, toolName: name, argumentsJson: args, status: .running))
+                    }
                     prefetched[id] = Task {
                         await AgentRunContext.$current.withValue(frame) {
                             await ToolExecutionEngine.shared.execute(
@@ -1677,7 +1705,8 @@ var mcpPromptSummary = ""
                     callInfo.status = .running
                     accumulator.updateToolCall(callInfo)
                 } else {
-                    accumulator.addToolCall(callInfo)
+                    // An upsert: a sub-agent started early already has its card.
+                    accumulator.updateToolCall(callInfo)
                 }
 
                 let signature = Self.callSignature(toolName, argsJson)
@@ -1835,10 +1864,19 @@ var mcpPromptSummary = ""
                         """
                         accumulator.appendNotice("Blocked a repeated failing call to \(toolName).")
                     } else {
-                        let runFrame = AgentRunContext.Frame(provider: provider, model: model, depth: 0, sessionId: session.id)
+                        let runFrame = AgentRunContext.Frame(
+                            provider: provider, model: model, depth: 0, sessionId: session.id,
+                            reasoningEffort: effectiveReasoningEffort
+                        )
                         let result: ToolExecutionResult
                         if let early = prefetched.removeValue(forKey: callId) {
-                            result = await early.value
+                            // The early call runs in its own task, so Stop has to be passed on:
+                            // a sub-agent started early would otherwise run to its deadline.
+                            result = await withTaskCancellationHandler {
+                                await early.value
+                            } onCancel: {
+                                early.cancel()
+                            }
                         } else {
                             result = await AgentRunContext.$current.withValue(runFrame) {
                                 await ToolExecutionEngine.shared.execute(
@@ -2060,6 +2098,18 @@ var mcpPromptSummary = ""
             }
             workingMessages.append(contentsOf: notesAfterResults)
 
+            // What other agents sent this turn with `agent_message`, after the results so the
+            // call/result pairing is intact.
+            let letters = AgentMailbox.shared.drain(mailboxId)
+            if !letters.isEmpty {
+                workingMessages.append(ChatMessage(
+                    sessionId: session.id,
+                    role: .user,
+                    content: AgentMailbox.note(for: letters)
+                ))
+                accumulator.appendNotice("\(letters.count) message\(letters.count == 1 ? "" : "s") from other agents.")
+            }
+
             // MCP escalation. Repeating a call that cannot succeed is the most common way a turn
             // burns its whole step budget, so warn once, then take the tools away.
             if !warnedMcpStall, mcpDeadEnds >= 3 {
@@ -2177,11 +2227,16 @@ var mcpPromptSummary = ""
             : "Only delegate with `agent_spawn` when the user asks for another agent to do something."
         let localCost = provider.type == .local
             ? " This session runs on a local model, so sub-agents run one at a time and each costs a full prompt re-read: delegate sparingly."
+            : " Several agent_spawn calls in one step run at the same time (up to \(maxParallelSubAgents)), each in its own worktree: "
+                + "put independent sub-tasks in the same step, and give each the files it owns so they do not overlap."
+        let messaging = agent.canCommunicateWithOthers
+            ? " A running sub-agent can be sent a message with agent_message; it reads it at its next step."
             : ""
         // A lead that did not know this handed ten features to one sub-agent with an 8-step,
         // 10-minute budget, twice, and got nothing back either time.
         let limits = budget.map {
-            "\nEach sub-agent gets \($0.steps) steps and \($0.minutes) minutes, then is stopped mid-task. "
+            "\nEach sub-agent gets \($0.steps) steps and \($0.minutes) minutes, then is stopped mid-task; "
+                + "for a bigger piece pass max_steps (up to \(min(SubAgentExecutor.maxRequestableSteps, $0.steps * 3))). "
                 + "Delegate one self-contained change per agent_spawn, never a list of features."
                 + " Its report is its own account: verify what matters (a file it says it wrote, a claim about the code) before telling the user."
         } ?? ""
@@ -2192,7 +2247,8 @@ var mcpPromptSummary = ""
         \(when)
         A sub-agent runs unattended with its own tools, in an isolated git worktree when the workspace \
         is a repository, and its report comes back as the tool result. Changes it makes stay on its \
-        branch until merged; say so rather than claiming they are in the user's checkout.\(localCost)\(limits)
+        branch until merged; say so rather than claiming they are in the user's checkout, and bring \
+        them in with worktree_merge when the user wants them.\(messaging)\(localCost)\(limits)
         """
     }
 
@@ -2217,10 +2273,21 @@ var mcpPromptSummary = ""
         }
     }
 
+    /// Sub-agents started together at most. Each holds a model stream and its own worktree.
+    public nonisolated static let maxParallelSubAgents = 4
+
+    /// Whether a step's `agent_spawn` calls start together rather than one after another: there
+    /// must be more than one, and the run must not be on the local engine, which serialises
+    /// generation anyway.
+    public nonisolated static func spawnsRunTogether(_ toolNames: [String], provider: ModelProvider) -> Bool {
+        guard provider.type != .local else { return false }
+        return toolNames.filter { canonicalToolName($0) == "agent_spawn" }.count > 1
+    }
+
     public nonisolated static func changesFiles(_ toolName: String) -> Bool {
         switch canonicalToolName(toolName) {
         case "file_write", "edit_file", "multi_edit", "file_delete", "file_move", "file_copy",
-             "rename_symbol", "revert_changes", "git_commit":
+             "rename_symbol", "revert_changes", "git_commit", "worktree_merge":
             return true
         default:
             return false
@@ -2523,6 +2590,8 @@ var mcpPromptSummary = ""
             return "Commits changes in an agent worktree."
         case "worktree_remove":
             return "Removes an agent worktree and its branch."
+        case "worktree_merge":
+            return "Brings an agent branch's changes into your checkout."
         case "send_input":
             // Typed text goes to a program that may be a shell or a REPL, so it asks wherever the
             // command itself would have, and under the read-only level too.

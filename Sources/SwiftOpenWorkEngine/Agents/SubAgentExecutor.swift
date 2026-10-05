@@ -35,6 +35,8 @@ public enum SubAgentExecutor {
         /// The commit the worktree started from. When the parent had uncommitted changes this is
         /// a snapshot of them, so the sub-agent's own work is the diff against it, not against main.
         public var baseCommit: String? = nil
+        /// `git diff --stat` of its own work, so the lead can judge it without spending a step.
+        public var diffStat: String? = nil
         public var iterations: Int
         public var stoppedBecause: String
         public var durationMs: Double
@@ -52,8 +54,13 @@ public enum SubAgentExecutor {
                 // A lead that received this list once said nothing about it and moved on to the
                 // next task; the five edited files sat on a branch the user never heard of.
                 if let branch {
+                    let name = worktreePath.map { ($0 as NSString).lastPathComponent } ?? branch
                     lines.append("These changes are only on branch `\(branch)`, not in the user's checkout. "
-                        + "Tell the user they exist and where; do not describe them as applied, and merge only if asked.")
+                        + "Tell the user they exist and where; do not describe them as applied. "
+                        + "When the user wants them, `worktree_merge` with name `\(name)` brings them into the checkout.")
+                    if let diffStat, !diffStat.isEmpty {
+                        lines.append("Diff:\n" + diffStat)
+                    }
                     if let baseCommit, let worktreePath {
                         lines.append("Its own edits alone: `git -C \(worktreePath) diff \(baseCommit)`.")
                     }
@@ -104,8 +111,34 @@ public enum SubAgentExecutor {
     /// Tools a sub-agent may never have, whatever its configuration says.
     ///
     /// `ask_user` would block forever — there is nobody watching a sub-agent. `exit_plan_mode`
-    /// belongs to the turn the user is in. `agent_spawn` is gated separately, by depth.
-    public static let neverAvailable: Set<String> = ["ask_user", "exit_plan_mode"]
+    /// belongs to the turn the user is in. `worktree_merge` writes into the user's checkout, which
+    /// is the lead's call to make with the user, never a sub-agent's. `agent_spawn` is gated
+    /// separately, by depth.
+    public static let neverAvailable: Set<String> = ["ask_user", "exit_plan_mode", "worktree_merge"]
+
+    /// The most steps a lead can ask for in one `agent_spawn`.
+    public static let maxRequestableSteps = 50
+
+    /// Steps and working time for one sub-agent. Without a request it gets the settings. A lead
+    /// may ask for more, up to three times the setting (and never past `maxRequestableSteps`),
+    /// and the time limit grows with the steps, up to an hour: eight steps was too few for
+    /// anything bigger than a one-file change, and there was no way to ask for more.
+    public static func budget(requestedSteps: Int?, settings: AppSettings) -> (steps: Int, seconds: Double) {
+        let base = max(1, settings.subAgentStepBudget)
+        let minutes = Double(max(1, settings.subAgentTimeoutMinutes))
+        guard let requested = requestedSteps, requested > 0 else { return (base, minutes * 60) }
+        let steps = min(requested, min(maxRequestableSteps, base * 3))
+        let scaled = steps > base ? min(60, minutes * Double(steps) / Double(base)) : minutes
+        return (steps, max(minutes, scaled) * 60)
+    }
+
+    /// The reasoning effort a sub-agent runs with: what the lead asked for, else what the lead
+    /// itself is running with, else the sub-agent's own setting.
+    public static func effort(requested: String?, subAgent: Agent, parent: ReasoningEffort?) -> ReasoningEffort {
+        let raw = (requested ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        if let chosen = ReasoningEffort(rawValue: raw == "none" ? "off" : raw) { return chosen }
+        return parent ?? subAgent.reasoningEffort
+    }
 
     @MainActor
     public static func toolSet(
@@ -165,11 +198,21 @@ public enum SubAgentExecutor {
         depth: Int,
         maxIterations: Int = 8,
         deadlineSeconds: Double = 300,
+        reasoningEffort: ReasoningEffort = .off,
         isolate: Bool = true,
         onProgress: @MainActor @escaping (String) -> Void = { _ in }
     ) async -> Outcome {
         let started = CFAbsoluteTimeGetCurrent()
         let settings = PersistenceManager.shared.loadSettings()
+
+        // Its inbox for `agent_message`, open while it runs. Messages held for it in this chat —
+        // a lead briefing it before the spawn — are delivered on registering. Registered before
+        // the worktree is made, so siblings started in the same step can see each other.
+        let parentSession = AgentRunContext.current?.sessionId ?? ""
+        let mailboxId = parentSession.isEmpty ? nil : AgentMailbox.shared.register(
+            sessionId: parentSession, agentId: subAgent.id, agentName: subAgent.name, task: objective
+        )
+        defer { if let mailboxId { AgentMailbox.shared.unregister(mailboxId) } }
 
         // Isolation first: everything below runs against `effectiveWorkspace`, so a failure to
         // isolate must not silently fall back to editing the parent's tree without saying so.
@@ -240,12 +283,34 @@ public enum SubAgentExecutor {
         bigger than the budget, do the first complete piece and say what is left.
         """
 
+        let canMessage = offeredTools.contains("agent_message")
+        var teamNote = ""
+        if canMessage, let mailboxId {
+            // Siblings started in the same step have registered by now in practice: each does so
+            // before making its worktree, and git runs one command at a time. Best effort; a late
+            // one can still be reached by id.
+            let others = AgentMailbox.shared.running(in: parentSession, excluding: mailboxId)
+                .filter { $0.agentId != parentAgent.id }
+            let lines = others.map { "- `\($0.agentId)` (\($0.agentName)): \($0.task.prefix(120))" }
+            var alongside = ""
+            if !lines.isEmpty {
+                alongside = " Running alongside you now:\n" + lines.joined(separator: "\n")
+                    + "\nAgree on anything you share with them, such as an interface or a file, rather than guessing."
+            }
+            teamNote = """
+
+
+            Reach \(parentAgent.name) (`\(parentAgent.id)`) or another agent with agent_message; messages \
+            sent to you arrive at the start of your next step.\(alongside)
+            """
+        }
+
         var messages: [ChatMessage] = [
             ChatMessage(role: .user, content: """
             Objective: \(objective)
 
             Context from \(parentAgent.name):
-            \(context)
+            \(context)\(teamNote)
             """)
         ]
 
@@ -282,6 +347,24 @@ public enum SubAgentExecutor {
                 }
                 iterations += 1
 
+                // Messages from other agents, before it decides its next step.
+                if let mailboxId {
+                    let letters = AgentMailbox.shared.drain(mailboxId)
+                    if !letters.isEmpty {
+                        messages.append(ChatMessage(role: .user, content: AgentMailbox.note(for: letters)))
+                        onProgress("\(subAgent.name): \(letters.count) message\(letters.count == 1 ? "" : "s") received")
+                    }
+                }
+                // A few large reads used to fill a sub-agent's window with nothing to relieve it.
+                // Same rule as the lead: only under real pressure.
+                messages = ContextCompactor.foldOldToolResults(
+                    messages,
+                    pressure: (
+                        estimatedTokens: ContextCompactor.estimatedTokens(messages, extraCharacters: systemPrompt.count),
+                        windowTokens: model.contextWindow
+                    )
+                )
+
                 let box = ConcurrentTextBox()
                 let calls = ToolCallBox()
                 let thinking = AgentThinkingBlockCollector()
@@ -300,7 +383,7 @@ public enum SubAgentExecutor {
                                 messages: requestMessages,
                                 temperature: subAgent.temperature,
                                 maxTokens: subAgent.maxTokens,
-                                reasoningEffort: .off,
+                                reasoningEffort: reasoningEffort,
                                 tools: tools
                             ) { chunk in
                                 if !chunk.deltaText.isEmpty { box.append(chunk.deltaText) }
@@ -362,6 +445,40 @@ public enum SubAgentExecutor {
 
                 // With the model's own thinking for this step, verbatim — see `ThinkingBlock`.
                 messages.append(ChatMessage(role: .assistant, content: text, toolCalls: pending, thinkingBlocks: thinking.snapshot()))
+                let frame = AgentRunContext.Frame(
+                    provider: provider, model: model, depth: depth, sessionId: parentSession,
+                    reasoningEffort: reasoningEffort
+                )
+                // The leading run of offered read-only calls starts together, as the lead's do.
+                // Each still passes every check below in order; only its execution comes from here.
+                var prefetched: [String: Task<ToolExecutionResult, Never>] = [:]
+                let leadingReads = pending.prefix { call in
+                    AgentRunner.isParallelSafe(call.toolName)
+                        && offeredTools.contains(AgentRunner.canonicalToolName(call.toolName))
+                        && SubAgentToolPolicy.approvalReason(
+                            toolName: call.toolName,
+                            argumentsJson: call.argumentsJson,
+                            worktreePath: worktree?.path,
+                            settings: settings,
+                            sessionId: parentSession,
+                            workspaceRoot: effectiveWorkspace.folderPath
+                        ) == nil
+                }
+                if leadingReads.count > 1 {
+                    let readWorkspace = effectiveWorkspace
+                    for call in leadingReads {
+                        let name = call.toolName, args = call.argumentsJson, id = call.id
+                        prefetched[id] = Task {
+                            await AgentRunContext.$current.withValue(frame) {
+                                await ToolExecutionEngine.shared.execute(
+                                    toolName: name, argumentsJson: args, workspace: readWorkspace,
+                                    currentAgent: subAgent, callId: id
+                                )
+                            }
+                        }
+                    }
+                }
+                defer { prefetched.values.forEach { $0.cancel() } }
                 var repeatedOut = false
                 for call in pending {
                     toolCallsMade.append(call.toolName)
@@ -379,8 +496,6 @@ public enum SubAgentExecutor {
                         ))
                         continue
                     }
-                    let parentSession = AgentRunContext.current?.sessionId ?? ""
-                    let frame = AgentRunContext.Frame(provider: provider, model: model, depth: depth, sessionId: parentSession)
                     // Unattended: whatever would ask a person is refused and recorded, except edits
                     // inside this sub-agent's own worktree (see `SubAgentToolPolicy`).
                     if let reason = SubAgentToolPolicy.approvalReason(
@@ -414,14 +529,23 @@ public enum SubAgentExecutor {
                         repeatedOut = true
                         break
                     }
-                    let result = await AgentRunContext.$current.withValue(frame) {
-                        await ToolExecutionEngine.shared.execute(
-                            toolName: call.toolName,
-                            argumentsJson: call.argumentsJson,
-                            workspace: effectiveWorkspace,
-                            currentAgent: subAgent,
-                            callId: call.id
-                        )
+                    let result: ToolExecutionResult
+                    if let early = prefetched.removeValue(forKey: call.id) {
+                        result = await withTaskCancellationHandler {
+                            await early.value
+                        } onCancel: {
+                            early.cancel()
+                        }
+                    } else {
+                        result = await AgentRunContext.$current.withValue(frame) {
+                            await ToolExecutionEngine.shared.execute(
+                                toolName: call.toolName,
+                                argumentsJson: call.argumentsJson,
+                                workspace: effectiveWorkspace,
+                                currentAgent: subAgent,
+                                callId: call.id
+                            )
+                        }
                     }
                     messages.append(ChatMessage(
                         id: call.id,
@@ -453,7 +577,22 @@ public enum SubAgentExecutor {
         let refused = unattendedRun.refused.map {
             "\($0.toolName) — \($0.reason)"
         }
-        let changed = await changedFiles(in: effectiveWorkspace.folderPath)
+        var changed = await changedFiles(in: effectiveWorkspace.folderPath)
+        var diffStat: String?
+        if let info = worktree {
+            // Its work is committed on its branch, so the branch carries all of it: uncommitted
+            // edits in a worktree are invisible to `git log`, lost by `worktree_remove`, and
+            // missing from a merge. Its own commits count as its work too, which `git status`
+            // alone did not see.
+            if !changed.isEmpty {
+                await AgentWorktree.commitAll(in: info.path, message: "\(subAgent.name): \(objective.prefix(72))")
+            }
+            if let own = await filesChanged(since: info.head, in: info.path) { changed = own }
+            if !changed.isEmpty {
+                diffStat = try? await AgentWorktree.git(["diff", "--stat=100", info.head, "HEAD"], in: URL(fileURLWithPath: info.path))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
 
         // A worktree with nothing in it is clutter: every delegation used to leave a directory
         // and an `…/sub-<role>-xxxx` branch behind, including read-only research. Remove it when
@@ -476,6 +615,7 @@ public enum SubAgentExecutor {
             worktreePath: worktree?.path,
             branch: worktree?.branch,
             baseCommit: worktree?.head,
+            diffStat: diffStat,
             iterations: iterations,
             stoppedBecause: stoppedBecause,
             durationMs: (CFAbsoluteTimeGetCurrent() - started) * 1000
@@ -525,6 +665,15 @@ public enum SubAgentExecutor {
             _ = try? await AgentWorktree.git(["branch", "-D", info.branch], in: root)
         }
         return true
+    }
+
+    /// Files that differ between `base` and the worktree's HEAD. Nil when git cannot say.
+    static func filesChanged(since base: String, in path: String) async -> [String]? {
+        guard !base.isEmpty,
+              let out = try? await AgentWorktree.git(["diff", "--name-only", base, "HEAD"], in: URL(fileURLWithPath: path)) else {
+            return nil
+        }
+        return out.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
     }
 
     /// What the sub-agent actually touched, from git rather than from its own account of itself.

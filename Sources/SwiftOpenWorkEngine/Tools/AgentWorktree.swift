@@ -220,7 +220,7 @@ public enum AgentWorktree {
             try await git(["add", "-A"], in: target)
             try await git([
                 "-c", "user.name=\(AppIdentity.displayName)", "-c", "user.email=agent@localhost",
-                "commit", "-q", "--no-verify", "-m", "Snapshot of uncommitted changes in the parent checkout",
+                "commit", "-q", "--no-verify", "-m", snapshotSubject,
             ], in: target)
             let head = try await git(["rev-parse", "--short", "HEAD"], in: target)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -305,6 +305,159 @@ public enum AgentWorktree {
         let head = try await git(["rev-parse", "--short", "HEAD"], in: dir).trimmingCharacters(in: .whitespacesAndNewlines)
         let stat = try await git(["show", "--stat", "--format=%s", "HEAD"], in: dir)
         return "Committed \(head) on \(try await branchName(in: dir)):\n\(stat)"
+    }
+
+    /// Commit everything in a worktree, under the app's name when the user has no git identity
+    /// configured. Returns whether a commit was made.
+    @discardableResult
+    public static func commitAll(in path: String, message: String) async -> Bool {
+        let dir = URL(fileURLWithPath: path)
+        guard let dirty = try? await git(["status", "--porcelain"], in: dir),
+              !dirty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              (try? await git(["add", "-A"], in: dir)) != nil else { return false }
+        let commit = ["commit", "-q", "--no-verify", "-m", message]
+        if (try? await git(commit, in: dir)) != nil { return true }
+        let named = ["-c", "user.name=\(AppIdentity.displayName)", "-c", "user.email=agent@localhost"] + commit
+        return (try? await git(named, in: dir)) != nil
+    }
+
+    // MARK: - Bringing a branch back
+
+    /// The subject of the commit `seedWithUncommittedChanges` makes. A merge must leave it out:
+    /// it is the user's own pending work, which their checkout already has.
+    public static let snapshotSubject = "Snapshot of uncommitted changes in the parent checkout"
+
+    public enum MergeStrategy: String, Sendable {
+        /// The branch's own changes, applied to the checkout's files and left uncommitted.
+        case apply
+        /// A real `git merge --no-ff` commit. Only on a clean checkout.
+        case merge
+    }
+
+    /// What a merge would bring in, worked out before anything in the checkout is touched.
+    public struct MergePlan: Sendable {
+        public var worktree: Info
+        public var repoRoot: URL
+        /// The commit the agent's own work starts after: the fork point, or the snapshot of the
+        /// user's pending edits when the worktree was seeded with them.
+        public var base: String
+        public var forkPoint: String
+        /// Repository-relative paths the branch changes.
+        public var files: [String]
+        public var stat: String
+    }
+
+    /// Find an agent worktree by its folder name, its branch, or its path, commit anything left
+    /// loose in it, and work out what it would bring in.
+    public static func planMerge(workspacePath: String, name: String) async throws -> MergePlan {
+        let root = try await repositoryRoot(containing: workspacePath)
+        let trees = try await list(workspacePath: workspacePath)
+        let wanted = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let slug = sanitize(wanted)
+        guard let tree = trees.first(where: {
+            $0.path == wanted
+                || $0.branch == wanted
+                || URL(fileURLWithPath: $0.path).lastPathComponent == slug
+                || $0.branch == AppIdentity.worktreeBranchPrefix + slug
+        }) else {
+            let known = trees.map { URL(fileURLWithPath: $0.path).lastPathComponent }
+            throw WorktreeError.gitFailed(
+                "No agent worktree named '\(wanted)'."
+                    + (known.isEmpty ? " There are none." : " Worktrees: \(known.joined(separator: ", ")).")
+            )
+        }
+        // Work left uncommitted would otherwise be silently left behind.
+        await commitAll(in: tree.path, message: "Work left uncommitted in \(URL(fileURLWithPath: tree.path).lastPathComponent)")
+        let tip = try await git(["rev-parse", tree.branch], in: root).trimmingCharacters(in: .whitespacesAndNewlines)
+        let forkPoint = try await git(["merge-base", "HEAD", tree.branch], in: root)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var base = forkPoint
+        let first = try await git(["log", "--reverse", "--format=%H%x09%s", "\(forkPoint)..\(tree.branch)"], in: root)
+            .split(separator: "\n").first.map(String.init) ?? ""
+        let parts = first.split(separator: "\t", maxSplits: 1).map(String.init)
+        if parts.count == 2, parts[1] == snapshotSubject { base = parts[0] }
+        guard base != tip else {
+            throw WorktreeError.gitFailed("\(tree.branch) has no changes of its own to bring in.")
+        }
+        let files = try await git(["diff", "--name-only", base, tree.branch], in: root)
+            .split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        let stat = try await git(["diff", "--stat=100", base, tree.branch], in: root)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var info = tree
+        info.head = tip
+        return MergePlan(worktree: info, repoRoot: root, base: base, forkPoint: forkPoint, files: files, stat: stat)
+    }
+
+    /// Bring a planned branch into the user's checkout.
+    ///
+    /// `apply` is the default because it keeps committing the user's: the branch's own changes
+    /// land as ordinary edits to review, and the snapshot of their pending work is left out, so a
+    /// sub-agent seeded with it does not bring it back twice. `merge` makes a merge commit and is
+    /// refused on a dirty checkout, or when the branch carries that snapshot.
+    public static func merge(_ plan: MergePlan, strategy: MergeStrategy) async throws -> String {
+        let root = plan.repoRoot
+        let branch = plan.worktree.branch
+        switch strategy {
+        case .apply:
+            let patch = try await git(["diff", "--binary", plan.base, branch], in: root)
+            // `git` reads output as UTF-8 and returns "" for anything else.
+            guard !patch.isEmpty else {
+                throw WorktreeError.gitFailed("\(branch)'s changes could not be read as a patch. Use strategy merge, or bring them in with git.")
+            }
+            let file = FileManager.default.temporaryDirectory
+                .appendingPathComponent("agent-merge-\(UUID().uuidString).patch")
+            try patch.write(to: file, atomically: true, encoding: .utf8)
+            defer { try? FileManager.default.removeItem(at: file) }
+            if (try? await git(["apply", "--check", "--whitespace=nowarn", file.path], in: root)) != nil {
+                try await git(["apply", "--whitespace=nowarn", file.path], in: root)
+                return """
+                Applied \(branch) to your checkout as uncommitted changes:
+                \(plan.stat)
+                Nothing was committed. Review with git_diff; the user commits when satisfied.
+                """
+            }
+            // The checkout moved on under the branch. A three-way apply merges what it can and
+            // marks the rest, which is better than refusing outright — but it is reported plainly.
+            do {
+                try await git(["apply", "--3way", "--whitespace=nowarn", file.path], in: root)
+            } catch {
+                let conflicted = ((try? await git(["diff", "--name-only", "--diff-filter=U"], in: root)) ?? "")
+                    .split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+                guard !conflicted.isEmpty else { throw error }
+                return """
+                Applied \(branch) with conflicts. These files now hold conflict markers and must be \
+                resolved before anything else: \(conflicted.joined(separator: ", ")).
+                \(plan.stat)
+                Nothing was committed. Tell the user about the conflicts.
+                """
+            }
+            return """
+            Applied \(branch) to your checkout with a three-way merge (your files had changed since it \
+            branched), as uncommitted changes:
+            \(plan.stat)
+            Nothing was committed. Review with git_diff; the user commits when satisfied.
+            """
+        case .merge:
+            guard plan.base == plan.forkPoint else {
+                throw WorktreeError.gitFailed(
+                    "\(branch) starts from a snapshot of uncommitted changes in your checkout, so a merge would bring "
+                        + "them in twice. Use strategy apply."
+                )
+            }
+            let dirty = try await git(["status", "--porcelain", "--untracked-files=no"], in: root)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard dirty.isEmpty else {
+                throw WorktreeError.gitFailed("Your checkout has uncommitted changes, so a merge was refused. Use strategy apply, or commit first.")
+            }
+            do {
+                try await git(["merge", "--no-ff", "--no-edit", "-m", "Merge \(branch)", branch], in: root)
+            } catch {
+                _ = try? await git(["merge", "--abort"], in: root)
+                throw WorktreeError.gitFailed("Merging \(branch) conflicted, so it was undone and nothing changed. Use strategy apply.\n\(error.localizedDescription)")
+            }
+            let head = try await git(["rev-parse", "--short", "HEAD"], in: root).trimmingCharacters(in: .whitespacesAndNewlines)
+            return "Merged \(branch) into your checkout as \(head):\n\(plan.stat)"
+        }
     }
 
     public static func branchName(in directory: URL) async throws -> String {

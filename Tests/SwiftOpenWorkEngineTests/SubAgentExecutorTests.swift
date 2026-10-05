@@ -31,6 +31,44 @@ final class SubAgentExecutorTests: XCTestCase {
         XCTAssertTrue(names.contains("file_read"))
     }
 
+    /// Writing into the user's checkout is the lead's call, made with the user.
+    func testASubAgentCannotMergeIntoTheUsersCheckout() {
+        let agent = Agent(name: "Coder", canSpawnSubAgents: true)
+        let names = SubAgentExecutor.toolSet(for: agent, depth: 1, settings: .default, all: [tool("worktree_merge"), tool("file_read")]).map(\.name)
+        XCTAssertEqual(names, ["file_read"])
+    }
+
+    /// Eight steps was too few for anything past a one-file change, and nothing could ask for more.
+    func testALeadCanAskForMoreStepsWithinACapAndGetsTimeToMatch() {
+        var settings = AppSettings.default
+        settings.subAgentStepBudget = 10
+        settings.subAgentTimeoutMinutes = 10
+        let standard = SubAgentExecutor.budget(requestedSteps: nil, settings: settings)
+        XCTAssertEqual(standard.steps, 10)
+        XCTAssertEqual(standard.seconds, 600)
+
+        let bigger = SubAgentExecutor.budget(requestedSteps: 20, settings: settings)
+        XCTAssertEqual(bigger.steps, 20)
+        XCTAssertEqual(bigger.seconds, 1200, "twice the steps, twice the time")
+
+        let greedy = SubAgentExecutor.budget(requestedSteps: 500, settings: settings)
+        XCTAssertEqual(greedy.steps, 30, "capped at three times the setting")
+        XCTAssertEqual(greedy.seconds, 1800)
+
+        settings.subAgentStepBudget = 40
+        XCTAssertEqual(SubAgentExecutor.budget(requestedSteps: 500, settings: settings).steps, SubAgentExecutor.maxRequestableSteps)
+        XCTAssertEqual(SubAgentExecutor.budget(requestedSteps: 0, settings: settings).steps, 40)
+    }
+
+    /// Reasoning was forced off for every sub-agent.
+    func testEffortIsWhatWasAskedElseTheLeadsElseItsOwn() {
+        let agent = Agent(name: "Coder", reasoningEffort: .low)
+        XCTAssertEqual(SubAgentExecutor.effort(requested: "high", subAgent: agent, parent: .medium), .high)
+        XCTAssertEqual(SubAgentExecutor.effort(requested: "none", subAgent: agent, parent: .medium), .off)
+        XCTAssertEqual(SubAgentExecutor.effort(requested: "lots", subAgent: agent, parent: .medium), .medium)
+        XCTAssertEqual(SubAgentExecutor.effort(requested: nil, subAgent: agent, parent: nil), .low)
+    }
+
     /// Recursion has to stop, or one prompt spawns an unbounded tree.
     func testRecursionStopsAtTheDepthBudget() {
         var settings = AppSettings.default
@@ -106,6 +144,7 @@ final class SubAgentExecutorTests: XCTestCase {
         XCTAssertTrue(report.contains("Files changed (2)"))
         XCTAssertTrue(report.contains("terminal_command"), "a refusal must be surfaced, not swallowed")
         XCTAssertTrue(report.contains("Renamed the symbol."))
+        XCTAssertTrue(report.contains("worktree_merge` with name `sub-coder`"), "the lead must know how to bring it back")
     }
 
     /// Failure must read as failure, so the parent cannot claim the work was done.

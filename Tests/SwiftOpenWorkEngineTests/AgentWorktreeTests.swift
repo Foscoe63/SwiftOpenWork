@@ -164,4 +164,58 @@ final class AgentWorktreeTests: XCTestCase {
         XCTAssertEqual(AgentWorktree.sanitize(""), "task")
         XCTAssertEqual(AgentWorktree.sanitize("   "), "task")
     }
+
+    // MARK: - Bringing a branch back
+
+    /// Sub-agent work stranded on branches: the only way back was a shell `git merge`, refused
+    /// under the default safety level. `apply` brings in the agent's own changes and nothing else.
+    func testApplyBringsInOnlyTheAgentsOwnWorkAndCommitsNothing() async throws {
+        try "seed\nwork in progress\n".write(to: repo.appendingPathComponent("seed.txt"), atomically: true, encoding: .utf8)
+        let info = try await AgentWorktree.create(workspacePath: repo.path, name: "feature")
+        _ = await AgentWorktree.seedWithUncommittedChanges(worktree: info, workspacePath: repo.path)
+        // Left uncommitted, as a sub-agent that stopped mid-task would leave it.
+        try "agent wrote this\n".write(to: URL(fileURLWithPath: info.path).appendingPathComponent("added.txt"), atomically: true, encoding: .utf8)
+
+        let plan = try await AgentWorktree.planMerge(workspacePath: repo.path, name: "feature")
+        XCTAssertEqual(plan.files, ["added.txt"], "the snapshot of the user's own edits is not the agent's work")
+        let output = try await AgentWorktree.merge(plan, strategy: .apply)
+        XCTAssertTrue(output.contains("Nothing was committed"), output)
+
+        XCTAssertEqual(try String(contentsOf: repo.appendingPathComponent("added.txt"), encoding: .utf8), "agent wrote this\n")
+        XCTAssertEqual(try String(contentsOf: repo.appendingPathComponent("seed.txt"), encoding: .utf8), "seed\nwork in progress\n")
+        let log = try await AgentWorktree.git(["log", "--oneline", "main"], in: repo)
+        XCTAssertEqual(log.split(separator: "\n").count, 1, "committing stays the user's")
+    }
+
+    func testAMergeCommitIsRefusedWhenItWouldBringTheUsersPendingEditsBackTwice() async throws {
+        try "seed\nwork in progress\n".write(to: repo.appendingPathComponent("seed.txt"), atomically: true, encoding: .utf8)
+        let info = try await AgentWorktree.create(workspacePath: repo.path, name: "seeded")
+        _ = await AgentWorktree.seedWithUncommittedChanges(worktree: info, workspacePath: repo.path)
+        try "x\n".write(to: URL(fileURLWithPath: info.path).appendingPathComponent("x.txt"), atomically: true, encoding: .utf8)
+        let plan = try await AgentWorktree.planMerge(workspacePath: repo.path, name: "seeded")
+        await expectFailure(try await AgentWorktree.merge(plan, strategy: .merge)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("apply"), error.localizedDescription)
+        }
+    }
+
+    func testAMergeOnACleanCheckoutMakesAMergeCommitByBranch() async throws {
+        let info = try await AgentWorktree.create(workspacePath: repo.path, name: "clean-merge")
+        try "merged\n".write(to: URL(fileURLWithPath: info.path).appendingPathComponent("m.txt"), atomically: true, encoding: .utf8)
+        let committed = await AgentWorktree.commitAll(in: info.path, message: "Add m")
+        XCTAssertTrue(committed)
+
+        let plan = try await AgentWorktree.planMerge(workspacePath: repo.path, name: info.branch)
+        _ = try await AgentWorktree.merge(plan, strategy: .merge)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: repo.appendingPathComponent("m.txt").path))
+        let log = try await AgentWorktree.git(["log", "--oneline", "main"], in: repo)
+        XCTAssertEqual(log.split(separator: "\n").count, 3, "seed, the agent's commit, and the merge")
+    }
+
+    func testABranchWithNothingOfItsOwnOrAnUnknownNameIsRefused() async throws {
+        _ = try await AgentWorktree.create(workspacePath: repo.path, name: "idle")
+        await expectFailure(try await AgentWorktree.planMerge(workspacePath: repo.path, name: "idle"))
+        await expectFailure(try await AgentWorktree.planMerge(workspacePath: repo.path, name: "nope")) { error in
+            XCTAssertTrue(error.localizedDescription.contains("idle"), "it lists what does exist")
+        }
+    }
 }

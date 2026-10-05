@@ -1552,6 +1552,29 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 return Self.failure(error.localizedDescription, startTime)
             }
 
+        case "worktree_merge":
+            let name = (dict["name"] as? String ?? dict["branch"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else {
+                return Self.failure("worktree_merge needs a 'name': the worktree or branch a sub-agent reported.", startTime)
+            }
+            let rawStrategy = (dict["strategy"] as? String ?? "apply").trimmingCharacters(in: .whitespaces).lowercased()
+            guard let strategy = AgentWorktree.MergeStrategy(rawValue: rawStrategy) else {
+                return Self.failure("worktree_merge strategy must be 'apply' or 'merge'.", startTime)
+            }
+            do {
+                let plan = try await AgentWorktree.planMerge(workspacePath: workspace.folderPath, name: name)
+                // Applied edits join this turn's undo window, as any other edit does.
+                if strategy == .apply {
+                    for file in plan.files {
+                        await FileCheckpointStore.shared.record(path: plan.repoRoot.appendingPathComponent(file).path)
+                    }
+                }
+                let message = try await AgentWorktree.merge(plan, strategy: strategy)
+                return ToolExecutionResult(success: true, output: message, durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            } catch {
+                return Self.failure(error.localizedDescription, startTime)
+            }
+
         case "git_commit":
             let rawPath = (dict["worktree_path"] as? String ?? "").trimmingCharacters(in: .whitespaces)
             let message = dict["message"] as? String ?? ""
@@ -1776,6 +1799,18 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             if let note = choice.note, let callId {
                 await LiveToolOutput.shared.append(callId: callId, chunk: note + "\n")
             }
+            let budget = SubAgentExecutor.budget(
+                requestedSteps: Self.intArgument(dict["max_steps"]),
+                settings: spawnSettings
+            )
+            // Reasoning was forced off for every sub-agent, so the agents doing the hardest,
+            // least supervised work did it with the least thought. The lead may ask for a level;
+            // otherwise it thinks as hard as the lead, or by its own setting outside a run.
+            let effort = SubAgentExecutor.effort(
+                requested: dict["effort"] as? String,
+                subAgent: targetAgent,
+                parent: parentFrame?.reasoningEffort
+            )
             let runSubAgent = { (provider: ModelProvider, model: ModelInfo) async -> SubAgentExecutor.Outcome in
                 await SubAgentExecutor.run(
                     subAgent: targetAgent,
@@ -1786,8 +1821,9 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                     provider: provider,
                     model: model,
                     depth: depth,
-                    maxIterations: max(1, spawnSettings.subAgentStepBudget),
-                    deadlineSeconds: Double(max(1, spawnSettings.subAgentTimeoutMinutes)) * 60,
+                    maxIterations: budget.steps,
+                    deadlineSeconds: budget.seconds,
+                    reasoningEffort: effort,
                     onProgress: { line in
                         if let callId { LiveToolOutput.shared.append(callId: callId, chunk: line + "\n") }
                     }
@@ -1831,22 +1867,60 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             guard currentAgent.canCommunicateWithOthers else {
                 return Self.failure("\(currentAgent.name) is not allowed to message other agents (agent settings).", startTime)
             }
-            let toAgentId = dict["to_agent_id"] as? String ?? "lead-assistant"
-            let content = dict["content"] as? String ?? ""
-            let targetAgent = PersistenceManager.shared.loadAgents().first(where: { $0.id == toAgentId })
+            let content = (dict["content"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let agents = PersistenceManager.shared.loadAgents()
+            let teamList = agents.filter { $0.id != currentAgent.id }
+                .map { "\($0.id) (\($0.name))" }
+                .joined(separator: ", ")
+            // No default recipient. A missing id used to go to `lead-assistant` without a word,
+            // so a message meant for a sibling reached nobody who could act on it.
+            let requested = ((dict["to_agent_id"] as? String) ?? (dict["to_agent_name"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !requested.isEmpty else {
+                return Self.failure("agent_message needs to_agent_id. Agents: \(teamList)", startTime)
+            }
+            guard !content.isEmpty else {
+                return Self.failure("agent_message needs content: the message itself.", startTime)
+            }
+            guard let targetAgent = agents.first(where: {
+                $0.id == requested || $0.name.caseInsensitiveCompare(requested) == .orderedSame
+            }) else {
+                return Self.failure("No agent '\(requested)'. Agents: \(teamList)", startTime)
+            }
+            guard targetAgent.id != currentAgent.id else {
+                return Self.failure("That is you. Message another agent: \(teamList)", startTime)
+            }
             let msg = AgentMessage(
                 fromAgentId: currentAgent.id,
                 fromAgentName: currentAgent.name,
-                toAgentId: toAgentId,
-                toAgentName: targetAgent?.name ?? "Target Agent",
+                toAgentId: targetAgent.id,
+                toAgentName: targetAgent.name,
                 messageType: .consultation,
                 content: content
             )
-            // Returned rather than posted: `AgentRunner` forwards `createdAgentMessage` to the
-            // Agent Messages inspector, which is the only store anything displays.
+            let output: String
+            if let sessionId = AgentRunContext.current?.sessionId, !sessionId.isEmpty {
+                let delivery = AgentMailbox.shared.send(
+                    sessionId: sessionId,
+                    toAgentId: targetAgent.id,
+                    letter: AgentMailbox.Letter(fromAgentId: currentAgent.id, fromAgentName: currentAgent.name, content: content)
+                )
+                switch delivery {
+                case .delivered:
+                    output = "Delivered to \(targetAgent.name), which is running and will see it at its next step. "
+                        + "Replies, if any, arrive the same way; do not wait for one."
+                case .held:
+                    output = "\(targetAgent.name) is not running now. The message is held and will be handed to it "
+                        + "if it is spawned later in this chat."
+                }
+            } else {
+                output = "Not delivered: this call is not part of an agent run, so there is no one to receive it."
+            }
+            // Also returned: `AgentRunner` forwards `createdAgentMessage` to the Agent Messages
+            // inspector.
             return ToolExecutionResult(
                 success: true,
-                output: "Message sent from \(currentAgent.name) to \(msg.toAgentName): \(content)",
+                output: output,
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000,
                 createdAgentMessage: msg
             )
