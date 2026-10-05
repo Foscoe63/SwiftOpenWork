@@ -23,7 +23,7 @@ public final class ProviderRouter: Sendable {
     public func stream(
         provider: ModelProvider,
         model: ModelInfo,
-        systemPrompt: String,
+        systemPrompt rawSystemPrompt: String,
         messages: [ChatMessage],
         temperature: Double,
         maxTokens: Int,
@@ -32,6 +32,8 @@ public final class ProviderRouter: Sendable {
         onChunk: @Sendable @escaping (LLMStreamChunk) -> Void
     ) async throws {
         var activeProvider = provider
+        // Only Anthropic can cache a prefix, so only it sees the boundary.
+        let systemPrompt = provider.kind == .anthropic ? rawSystemPrompt : PromptCache.flattened(rawSystemPrompt)
 
         // Built-in Apple Silicon / MLX: in-process engine, then optional local OpenAI-compatible
         // servers. Never silently replace failures with MockLLMService — that made every prompt

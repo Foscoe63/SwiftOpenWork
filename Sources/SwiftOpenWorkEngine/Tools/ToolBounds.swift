@@ -4,7 +4,6 @@ import SwiftOpenWorkCore
 /// Radiant-style central tool result bound + time budget (tool-bounds.js parity).
 public enum ToolBounds {
     public static let maxResultChars = 40_000
-    public static let maxToolMs: UInt64 = 180_000_000_000 // 180s in nanoseconds
 
     public struct Bounded: Sendable {
         public let text: String
@@ -26,20 +25,5 @@ public enum ToolBounds {
             truncatedChars: truncated,
             notice: "Tool result truncated (\(truncated) chars omitted). Head and tail retained."
         )
-    }
-
-    public static func withBudget<T: Sendable>(
-        _ body: @Sendable @escaping () async -> T
-    ) async -> T? {
-        await withTaskGroup(of: T?.self) { group in
-            group.addTask { await body() }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: maxToolMs)
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first ?? nil
-        }
     }
 }

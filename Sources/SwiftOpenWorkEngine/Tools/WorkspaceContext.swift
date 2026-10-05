@@ -123,16 +123,27 @@ public enum WorkspaceContext {
         return result
     }
 
+    /// The git line alone, which changes after every edit and so is kept out of the cached part of
+    /// the prompt. Empty when there is no repository.
+    public static func gitLine(_ snapshot: Snapshot) -> String {
+        guard let branch = snapshot.gitBranch else { return "" }
+        if snapshot.gitChangeCount == 0 { return "Git: on `\(branch)`, working tree clean" }
+        let shown = snapshot.gitChanges.joined(separator: ", ")
+        let more = snapshot.gitChangeCount > snapshot.gitChanges.count
+            ? " (+\(snapshot.gitChangeCount - snapshot.gitChanges.count) more)" : ""
+        return "Git: on `\(branch)`, \(snapshot.gitChangeCount) uncommitted: \(shown)\(more)"
+    }
+
     /// Render the prompt block. Returns an empty string when there is no usable workspace, so the
     /// caller can interpolate it unconditionally.
-    public static func promptBlock(_ snapshot: Snapshot) -> String {
+    public static func promptBlock(_ snapshot: Snapshot, includeGit: Bool = true) -> String {
         guard !snapshot.path.isEmpty else { return "" }
         var lines = ["", "### Workspace", "Path: `\(snapshot.path)`"]
 
         if !snapshot.projectKinds.isEmpty {
             lines.append("Project: \(snapshot.projectKinds.joined(separator: ", "))")
         }
-        if let branch = snapshot.gitBranch {
+        if includeGit, let branch = snapshot.gitBranch {
             if snapshot.gitChangeCount == 0 {
                 lines.append("Git: on `\(branch)`, working tree clean")
             } else {

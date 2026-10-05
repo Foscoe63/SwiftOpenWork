@@ -95,6 +95,21 @@ public final class AnthropicService: LLMProviderClient, Sendable {
         }
     }
 
+    /// Marks the last content block of the last message, turning a plain-string message into a
+    /// one-block array first (only blocks can carry `cache_control`).
+    static func markRollingBreakpoint(in messages: inout [[String: Any]], mark: [String: Any]) {
+        guard let last = messages.indices.last else { return }
+        if let text = messages[last]["content"] as? String {
+            guard !text.isEmpty else { return }
+            messages[last]["content"] = [["type": "text", "text": text, "cache_control": mark] as [String: Any]]
+        } else if var blocks = messages[last]["content"] as? [[String: Any]], !blocks.isEmpty {
+            // Thinking blocks cannot be marked.
+            guard let i = blocks.lastIndex(where: { $0["type"] as? String != "thinking" && $0["type"] as? String != "redacted_thinking" }) else { return }
+            blocks[i]["cache_control"] = mark
+            messages[last]["content"] = blocks
+        }
+    }
+
     public func streamChat(
         provider: ModelProvider,
         model: ModelInfo,
@@ -146,11 +161,13 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                 if canSee {
                     resultContent = ImageTransport.anthropicContent(text: msg.content, images: images)
                 }
-                let block: [String: Any] = [
+                var block: [String: Any] = [
                     "type": "tool_result",
                     "tool_use_id": msg.id,
                     "content": resultContent
                 ]
+                // Lets the model see that the call failed rather than infer it from prose.
+                if msg.isError || msg.content.hasPrefix("Error:") { block["is_error"] = true }
                 // Every result for one assistant turn belongs in the single user turn after it.
                 if let last = formattedMessages.indices.last,
                    formattedMessages[last]["role"] as? String == "user",
@@ -210,8 +227,17 @@ public final class AnthropicService: LLMProviderClient, Sendable {
             "messages": formattedMessages,
             "stream": true,
             "max_tokens": maxTokens,
-            "system": systemPrompt
         ]
+        // Cache breakpoints, in the order the API reads a request (tools, system, messages): the
+        // last tool, the stable part of the system prompt, and the end of the conversation so far.
+        // Each step of a turn then re-reads the previous step's prefix at a fraction of the cost.
+        let cacheMark: [String: Any] = ["type": "ephemeral"]
+        let promptParts = PromptCache.split(systemPrompt)
+        var systemBlocks: [[String: Any]] = [["type": "text", "text": promptParts.stable, "cache_control": cacheMark]]
+        if !promptParts.volatile.isEmpty { systemBlocks.append(["type": "text", "text": promptParts.volatile]) }
+        body["system"] = systemBlocks
+        Self.markRollingBreakpoint(in: &formattedMessages, mark: cacheMark)
+        body["messages"] = formattedMessages
 
         if let thinking = shape.thinking { body["thinking"] = thinking }
         if let outputConfig = shape.outputConfig { body["output_config"] = outputConfig }
@@ -351,6 +377,7 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                 ])
             }
             if !anthropicTools.isEmpty {
+                anthropicTools[anthropicTools.count - 1]["cache_control"] = cacheMark
                 body["tools"] = anthropicTools
             }
         }

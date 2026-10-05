@@ -6,6 +6,8 @@ public final class PersistenceManager: Sendable {
 
     private let storage = StorageService.shared
     private let sessionWriter = SessionWriter()
+    private let settingsCache = SettingsCache()
+    private let sessionStore = SessionStore()
 
     private init() {
         // Core's logger cannot see settings; point its verbose switch at them.
@@ -139,6 +141,27 @@ public final class PersistenceManager: Sendable {
     /// The repairs and the migration are still applied in memory on every load, so callers always
     /// see corrected values; they just do not hit the disk once they have converged.
     public func loadSettings() -> AppSettings {
+        // Read and decoded on every tool call, provider request and shell launch. Served from
+        // memory while neither file has changed; the fingerprint is the files' own modification
+        // time and size, so a write from anywhere (a test, another process) is still seen.
+        let fingerprint = settingsFingerprint()
+        if let cached = settingsCache.value(for: fingerprint) { return cached }
+        let settings = loadSettingsFromDisk()
+        settingsCache.store(settings, for: settingsFingerprint())
+        return settings
+    }
+
+    private func settingsFingerprint() -> String {
+        ["settings.json", "mcp_servers.json"].map { name -> String in
+            let url = storage.fileURL(for: name)
+            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+            let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            let size = (attributes?[.size] as? Int) ?? -1
+            return "\(url.path)|\(modified)|\(size)"
+        }.joined(separator: ";")
+    }
+
+    private func loadSettingsFromDisk() -> AppSettings {
         var settings: AppSettings
         var needsSave = false
         if let loaded = storage.load(AppSettings.self, from: "settings.json") {
@@ -807,8 +830,15 @@ public final class PersistenceManager: Sendable {
     public func loadSessions() -> [Session] {
         flushSessionWrites()
         var items: [Session] = []
-        if let loaded = storage.load([Session].self, from: "sessions.json"), !loaded.isEmpty {
+        if let loaded = sessionStore.read(storage: storage), !loaded.isEmpty {
             items = loaded
+        } else if let legacy = loadLegacySessions(), !legacy.isEmpty {
+            // First launch since sessions became one file each.
+            items = legacy
+            sessionStore.write(legacy, storage: storage)
+            let old = storage.fileURL(for: "sessions.json")
+            try? FileManager.default.removeItem(at: old.deletingLastPathComponent().appendingPathComponent("sessions.json.migrated"))
+            try? FileManager.default.moveItem(at: old, to: old.deletingLastPathComponent().appendingPathComponent("sessions.json.migrated"))
         } else {
             let initial = defaultSessions
             saveSessions(initial)
@@ -843,6 +873,16 @@ public final class PersistenceManager: Sendable {
             saveSessions(items)
         }
         return items
+    }
+
+    /// The single-file history of earlier versions. A file that is there but will not decode is
+    /// set aside rather than left to be replaced by defaults, which used to erase the history.
+    private func loadLegacySessions() -> [Session]? {
+        let url = storage.fileURL(for: "sessions.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        if let loaded = storage.load([Session].self, from: "sessions.json") { return loaded }
+        SessionStore.setAside(url)
+        return nil
     }
 
     public var defaultSessions: [Session] {
@@ -888,7 +928,7 @@ public final class PersistenceManager: Sendable {
     /// of it, pretty-printed, on the main thread for every streamed chunk. Writes now happen on
     /// one background queue, in order, and only the newest snapshot waiting is written.
     public func saveSessions(_ sessions: [Session]) {
-        sessionWriter.save(sessions, with: storage)
+        sessionWriter.save(sessions, with: storage, store: sessionStore)
     }
 
     /// Wait until every requested `saveSessions` is on disk: before reading the file back, and
@@ -1390,14 +1430,14 @@ public final class PersistenceManager: Sendable {
     }
 }
 
-/// Writes `sessions.json` off the calling thread. A burst of saves costs one write per snapshot
+/// Writes the sessions off the calling thread. A burst of saves costs one write per snapshot
 /// the queue actually reaches: a newer snapshot replaces an older one still waiting.
 final class SessionWriter: @unchecked Sendable {
     private let queue = DispatchQueue(label: "SwiftOpenWork.sessions-write", qos: .utility)
     private let lock = NSLock()
     private var pending: [Session]?
 
-    func save(_ sessions: [Session], with storage: StorageService) {
+    func save(_ sessions: [Session], with storage: StorageService, store: SessionStore) {
         lock.lock()
         let alreadyScheduled = pending != nil
         pending = sessions
@@ -1408,11 +1448,29 @@ final class SessionWriter: @unchecked Sendable {
             let snapshot = pending
             pending = nil
             lock.unlock()
-            if let snapshot { storage.save(snapshot, to: "sessions.json") }
+            if let snapshot { store.write(snapshot, storage: storage) }
         }
     }
 
     func flush() {
         queue.sync {}
+    }
+}
+
+/// The last settings read from disk and the fingerprint of the files they came from.
+private final class SettingsCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fingerprint: String?
+    private var settings: AppSettings?
+
+    func value(for fingerprint: String) -> AppSettings? {
+        lock.lock(); defer { lock.unlock() }
+        return self.fingerprint == fingerprint ? settings : nil
+    }
+
+    func store(_ settings: AppSettings, for fingerprint: String) {
+        lock.lock(); defer { lock.unlock() }
+        self.fingerprint = fingerprint
+        self.settings = settings
     }
 }

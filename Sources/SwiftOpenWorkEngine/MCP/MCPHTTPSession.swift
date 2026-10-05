@@ -268,6 +268,8 @@ public actor MCPHTTPSession {
             switch item["type"] as? String {
             case "text":
                 if let text = item["text"] as? String { parts.append(text) }
+            case "image" where item["data"] is String:
+                parts.append(MCPMedia.describeImage(base64: item["data"] as? String ?? "", mimeType: item["mimeType"] as? String ?? "image/png"))
             case "image", "audio":
                 let kind = item["type"] as? String ?? "media"
                 let mime = item["mimeType"] as? String

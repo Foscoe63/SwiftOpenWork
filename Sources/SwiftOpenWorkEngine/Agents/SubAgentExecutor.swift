@@ -228,6 +228,7 @@ public enum SubAgentExecutor {
                 let seed = await AgentWorktree.seedWithUncommittedChanges(
                     worktree: info, workspacePath: workspace.folderPath
                 )
+                await AgentWorktree.seedDependencyCaches(worktree: info, workspacePath: workspace.folderPath)
                 var seeded = info
                 seeded.head = seed.head
                 worktree = seeded
@@ -248,6 +249,10 @@ public enum SubAgentExecutor {
                 """
             }
         }
+
+        // Without a worktree the sub-agent works in the user's own checkout, where `git status`
+        // already lists their pending edits. Remember them so the report names only what changed.
+        let statusBefore: Set<String> = worktree == nil ? Set(await Self.statusEntries(in: effectiveWorkspace.folderPath)) : []
 
         var allTools = PersistenceManager.shared.loadTools()
         _ = ToolSchemaCatalog.ensureParityTools(in: &allTools)
@@ -577,7 +582,7 @@ public enum SubAgentExecutor {
         let refused = unattendedRun.refused.map {
             "\($0.toolName) — \($0.reason)"
         }
-        var changed = await changedFiles(in: effectiveWorkspace.folderPath)
+        var changed = await changedFiles(in: effectiveWorkspace.folderPath, excluding: statusBefore)
         var diffStat: String?
         if let info = worktree {
             // Its work is committed on its branch, so the branch carries all of it: uncommitted
@@ -677,14 +682,31 @@ public enum SubAgentExecutor {
     }
 
     /// What the sub-agent actually touched, from git rather than from its own account of itself.
-    public static func changedFiles(in path: String) async -> [String] {
-        guard let status = try? await AgentWorktree.git(["status", "--porcelain"], in: URL(fileURLWithPath: path)) else {
+    public static func changedFiles(in path: String, excluding before: Set<String> = []) async -> [String] {
+        var seen = Set<String>()
+        return await statusEntries(in: path)
+            .filter { !before.contains($0) }
+            .compactMap { entry -> String? in
+                let file = String(entry.dropFirst(3))
+                return seen.insert(file).inserted ? file : nil
+            }
+    }
+
+    /// `git status` entries as "XY path", one per changed file. Uses the NUL-separated form so
+    /// quoted paths come back as written, and a rename reports its new name rather than "a -> b".
+    static func statusEntries(in path: String) async -> [String] {
+        guard let status = try? await AgentWorktree.git(["status", "--porcelain", "-z"], in: URL(fileURLWithPath: path)) else {
             return []
         }
-        return status
-            .split(separator: "\n")
-            .map { String($0.dropFirst(3)) }
-            .filter { !$0.isEmpty }
+        var entries: [String] = []
+        var fields = status.split(separator: "\0", omittingEmptySubsequences: true).makeIterator()
+        while let field = fields.next() {
+            guard field.count > 3 else { continue }
+            entries.append(String(field))
+            // A rename or copy is followed by a field holding the original name.
+            if field.first == "R" || field.first == "C" { _ = fields.next() }
+        }
+        return entries
     }
 }
 

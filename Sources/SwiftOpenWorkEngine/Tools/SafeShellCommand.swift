@@ -99,6 +99,26 @@ public enum SafeShellCommand {
         }
     }
 
+    /// Git runs programs named in a repository's own `.git/config`: `diff.external` and textconv
+    /// drivers for `diff`/`log`/`show`, and `core.fsmonitor` for nearly everything, `status`
+    /// included. A repository someone else wrote can therefore make "read-only" git run code.
+    /// Under the safe-only level these are switched off for the command that is about to run.
+    public static func hardenedForSafeLevel(_ command: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"\bgit\s+(diff|log|show)\b"#) else { return command }
+        let range = NSRange(command.startIndex..<command.endIndex, in: command)
+        return regex.stringByReplacingMatches(
+            in: command, range: range, withTemplate: "git $1 --no-ext-diff --no-textconv"
+        )
+    }
+
+    /// Environment settings that override the repository's config for git, which reads these after
+    /// `.git/config`.
+    public static let gitHardeningEnvironment: [String: String] = [
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "core.fsmonitor", "GIT_CONFIG_VALUE_0": "false",
+        "GIT_CONFIG_KEY_1": "diff.external", "GIT_CONFIG_VALUE_1": "",
+    ]
+
     static func isSafeGit(_ args: [String]) -> Bool {
         // `git -C dir …`, `git -c key=value …` and other global options come before the
         // subcommand; none are allowed, so the subcommand must come first.

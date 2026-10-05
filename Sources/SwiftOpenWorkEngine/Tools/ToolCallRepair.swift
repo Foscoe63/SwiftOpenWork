@@ -27,7 +27,7 @@ public enum ToolCallRepair {
         "document_extract", "workspace_semantic_search", "generate_image", "mlx_vision_describe",
         "quit_app", "worktree_create", "worktree_list", "worktree_remove", "worktree_merge", "screenshot_window",
         "accessibility_tree", "run_app", "preview_start", "preview_check", "preview_logs",
-        "preview_stop", "agent_spawn", "agent_message", "memory_store", "memory_recall", "mcp_call",
+        "preview_stop", "agent_spawn", "agent_message", "memory_store", "memory_recall", "mcp_call", "mcp_describe", "mcp_resources",
         "gmail_list", "google_calendar_list",
     ]
 
@@ -116,7 +116,7 @@ public enum ToolCallRepair {
         "file_write", "file_delete", "file_move", "file_copy", "edit_file", "multi_edit",
         "rename_symbol", "preview_start", "run_app", "git_commit", "worktree_create",
         "worktree_remove", "worktree_merge", "setup_xcode_language_server", "terminal_command", "mcp_call",
-        "revert_changes",
+        "revert_changes", "agent_spawn", "send_input",
     ]
 
     public static func isBlockedInPlanMode(_ raw: String) -> Bool {

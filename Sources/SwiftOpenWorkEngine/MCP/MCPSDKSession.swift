@@ -13,8 +13,64 @@ public actor MCPSDKSession {
     private var inPipe: Pipe?
     private var outPipe: Pipe?
 
+    /// Called when the server says its tool list changed (`notifications/tools/list_changed`).
+    private var onToolsChanged: (@Sendable () -> Void)?
+
     public init(config: MCPServerConfig) {
         self.config = config
+    }
+
+    public func setToolsChanged(_ handler: @escaping @Sendable () -> Void) {
+        onToolsChanged = handler
+    }
+
+    /// A fresh `tools/list`, for after a change notification.
+    public func refreshTools() async throws -> [MCPToolDefinition] {
+        guard let client else { throw MCPSDKError.notConnected }
+        return try await Self.listAll(client)
+    }
+
+    /// Resources and prompts: many servers expose docs and context this way rather than as tools.
+    public func resourceAction(_ action: String, target: String, arguments: [String: String]) async throws -> String {
+        guard let client else { throw MCPSDKError.notConnected }
+        switch action {
+        case "list_resources":
+            var lines: [String] = []
+            var cursor: String?
+            var pages = 0
+            repeat {
+                let page = try await client.listResources(cursor: cursor)
+                lines += page.resources.map { "- \($0.uri) — \($0.name)" + ($0.description.map { ": \($0)" } ?? "") }
+                cursor = page.nextCursor.flatMap { $0.isEmpty ? nil : $0 }
+                pages += 1
+            } while cursor != nil && pages < 10
+            return lines.isEmpty ? "(no resources)" : lines.joined(separator: "\n")
+        case "read_resource":
+            let contents = try await client.readResource(uri: target)
+            let text = contents.map { $0.text ?? "[\($0.mimeType ?? "binary") content, \($0.blob?.count ?? 0) base64 characters]" }
+                .joined(separator: "\n")
+            return text.isEmpty ? "(empty)" : text
+        case "list_prompts":
+            let page = try await client.listPrompts(cursor: nil)
+            let lines = page.prompts.map { prompt -> String in
+                let args = (prompt.arguments ?? []).map { ($0.required == true ? "" : "?") + $0.name }.joined(separator: ", ")
+                return "- \(prompt.name)" + (args.isEmpty ? "" : "(\(args))") + (prompt.description.map { ": \($0)" } ?? "")
+            }
+            return lines.isEmpty ? "(no prompts)" : lines.joined(separator: "\n")
+        case "get_prompt":
+            let result = try await client.getPrompt(name: target, arguments: arguments.isEmpty ? nil : arguments)
+            return result.messages.map { message in
+                let body: String
+                switch message.content {
+                case .text(let text): body = text
+                case .resource(let resource, _, _): body = resource.text ?? "[resource \(resource.uri)]"
+                default: body = "[non-text content]"
+                }
+                return "\(message.role): \(body)"
+            }.joined(separator: "\n")
+        default:
+            return "Unknown action '\(action)'. Use list_resources, read_resource, list_prompts or get_prompt."
+        }
     }
 
     public var isRunning: Bool {
@@ -111,6 +167,8 @@ public actor MCPSDKSession {
         }
 
         self.client = client
+        let changed = onToolsChanged
+        await client.onNotification(ToolListChangedNotification.self) { _ in changed?() }
 
         return try await Self.listAll(client)
     }
@@ -161,11 +219,14 @@ public actor MCPSDKSession {
             switch part {
             case .text(let t, _, _):
                 return t
-            case .image(_, let mime, _, _):
-                return "[image \(mime)]"
+            case .image(let data, let mime, _, _):
+                return MCPMedia.describeImage(base64: data, mimeType: mime)
             case .audio(_, let mime, _, _):
                 return "[audio \(mime)]"
             case .resource(let resource, _, _):
+                // The embedded text is the point of an embedded resource; the URI alone told the
+                // model nothing.
+                if let text = resource.text, !text.isEmpty { return text }
                 return "[resource \(resource.uri)]"
             case .resourceLink(let uri, let name, _, _, _, _):
                 return "[resourceLink \(name) \(uri)]"

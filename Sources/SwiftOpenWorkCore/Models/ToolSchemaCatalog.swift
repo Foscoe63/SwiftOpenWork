@@ -53,6 +53,22 @@ public enum ToolSchemaCatalog {
                 parametersJsonSchema: schemas["quit_app"]!
             ),
             Tool(
+                id: "mcp_describe",
+                name: "mcp_describe",
+                displayName: "Describe MCP Tools",
+                description: "Look up MCP tools by name, server or keyword and load their full parameter schemas. When the MCP tool list shows names only, call this first; the tools it returns can then be called directly.",
+                category: .system,
+                parametersJsonSchema: schemas["mcp_describe"]!
+            ),
+            Tool(
+                id: "mcp_resources",
+                name: "mcp_resources",
+                displayName: "MCP Resources & Prompts",
+                description: "Read a connected MCP server's resources (docs, files, context) and prompts. list_resources and list_prompts show what it offers; read_resource and get_prompt fetch one.",
+                category: .system,
+                parametersJsonSchema: schemas["mcp_resources"]!
+            ),
+            Tool(
                 id: "worktree_create",
                 name: "worktree_create",
                 displayName: "Create Worktree",
@@ -405,9 +421,9 @@ public enum ToolSchemaCatalog {
         "file_copy": #"{"type":"object","properties":{"source":{"type":"string"},"destination":{"type":"string"}},"required":["source","destination"]}"#,
         "file_move": #"{"type":"object","properties":{"source":{"type":"string"},"destination":{"type":"string"}},"required":["source","destination"]}"#,
         "file_delete": #"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
-        "terminal_command": #"{"type":"object","properties":{"command":{"type":"string"},"cwd":{"type":"string"},"run_in_background":{"type":"boolean"},"interactive":{"type":"boolean","description":"Run in a terminal the user can see and type into. Use for a command that stops to ask something (a login, a y/n confirmation, a wizard). The call returns when the command exits or has been quiet for a few seconds; if it is still running, answer it with send_input."},"idle_seconds":{"type":"integer","description":"Interactive only: seconds of quiet before returning (1-60, default 3). Raise it for a command that is slow but not waiting."}},"required":["command"]}"#,
+        "terminal_command": #"{"type":"object","properties":{"command":{"type":"string"},"cwd":{"type":"string"},"run_in_background":{"type":"boolean","description":"Start the command and return while it keeps running (a dev server, a watcher). Read its output or stop it with send_input."},"timeout_seconds":{"type":"integer","description":"Give up and terminate after this many seconds (default 120, max 1800). Raise it for a long build."},"interactive":{"type":"boolean","description":"Run in a terminal the user can see and type into. Use for a command that stops to ask something (a login, a y/n confirmation, a wizard). The call returns when the command exits or has been quiet for a few seconds; if it is still running, answer it with send_input."},"idle_seconds":{"type":"integer","description":"Interactive only: seconds of quiet before returning (1-60, default 3). Raise it for a command that is slow but not waiting."}},"required":["command"]}"#,
         "send_input": #"{"type":"object","properties":{"text":{"type":"string","description":"Text to type into the waiting command"},"press_enter":{"type":"boolean","description":"Press Enter after the text (default true). Use false to type without submitting."},"key":{"type":"string","description":"Press a special key instead of typing text: enter, tab, escape, up, down, left, right, backspace, space, ctrl_c, ctrl_d, ctrl_z. For menus, send up/down then enter."},"idle_seconds":{"type":"integer","description":"Seconds of quiet before returning (1-60, default 3)"},"terminate":{"type":"boolean","description":"End the running command instead of typing"}},"required":[]}"#,
-        "run_command": #"{"type":"object","properties":{"command":{"type":"string"},"run_in_background":{"type":"boolean"},"interactive":{"type":"boolean","description":"Run in a terminal the user can see and type into. Use for a command that stops to ask something (a login, a y/n confirmation, a wizard). The call returns when the command exits or has been quiet for a few seconds; if it is still running, answer it with send_input."},"idle_seconds":{"type":"integer","description":"Interactive only: seconds of quiet before returning (1-60, default 3). Raise it for a command that is slow but not waiting."}},"required":["command"]}"#,
+        "run_command": #"{"type":"object","properties":{"command":{"type":"string"},"run_in_background":{"type":"boolean","description":"Start the command and return while it keeps running (a dev server, a watcher). Read its output or stop it with send_input."},"timeout_seconds":{"type":"integer","description":"Give up and terminate after this many seconds (default 120, max 1800). Raise it for a long build."},"interactive":{"type":"boolean","description":"Run in a terminal the user can see and type into. Use for a command that stops to ask something (a login, a y/n confirmation, a wizard). The call returns when the command exits or has been quiet for a few seconds; if it is still running, answer it with send_input."},"idle_seconds":{"type":"integer","description":"Interactive only: seconds of quiet before returning (1-60, default 3). Raise it for a command that is slow but not waiting."}},"required":["command"]}"#,
         "web_search": #"{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}"#,
         "fetch_url": #"{"type":"object","properties":{"url":{"type":"string","description":"http(s) URL to fetch"}},"required":["url"]}"#,
         "calculator": #"{"type":"object","properties":{"expression":{"type":"string"}},"required":["expression"]}"#,
@@ -424,6 +440,8 @@ public enum ToolSchemaCatalog {
         "gmail_search": #"{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer"}},"required":["query"]}"#,
         "google_calendar_list": #"{"type":"object","properties":{"days":{"type":"integer"},"max_results":{"type":"integer"}},"required":[]}"#,
         "google_calendar_upcoming": #"{"type":"object","properties":{"days":{"type":"integer"}},"required":[]}"#,
+        "mcp_describe": #"{"type":"object","properties":{"query":{"type":"string","description":"Words from the tool's name or purpose, a server id, or an exact mcp__server__tool name. Space-separated words must all match."},"limit":{"type":"integer","description":"How many tools to load (default 6, max 12)."}},"required":["query"]}"#,
+        "mcp_resources": #"{"type":"object","properties":{"server":{"type":"string","description":"Server id or name."},"action":{"type":"string","enum":["list_resources","read_resource","list_prompts","get_prompt"]},"uri":{"type":"string","description":"Resource URI for read_resource."},"name":{"type":"string","description":"Prompt name for get_prompt."},"arguments":{"type":"object","description":"Prompt arguments for get_prompt."}},"required":["server","action"]}"#,
         "mcp_call": #"{"type":"object","properties":{"server":{"type":"string"},"tool":{"type":"string"},"arguments":{"type":"object"}},"required":["server","tool"]}"#,
         "ask_user": #"{"type":"object","properties":{"question":{"type":"string","description":"Question for the user"},"options":{"type":"array","items":{"type":"string"},"description":"Optional multiple-choice options"}},"required":["question"]}"#,
         "exit_plan_mode": #"{"type":"object","properties":{"summary":{"type":"string","description":"Short summary of the approved plan"}},"required":[]}"#,

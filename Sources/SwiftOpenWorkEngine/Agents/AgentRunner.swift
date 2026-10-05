@@ -1016,6 +1016,7 @@ public final class AgentRunner {
         }
 
 var mcpPromptSummary = ""
+        var deferMCPSchemas = false
         if inventoryPrompt {
             // Inventory: compact status only — no tool dump, no tool calling.
             let reports = await MCPClientManager.shared.mcpStatusReports(probe: false)
@@ -1039,29 +1040,49 @@ var mcpPromptSummary = ""
             """
             availableTools = []
         } else if !mcpTools.isEmpty {
-            for t in mcpTools {
-                if !availableTools.contains(where: { $0.id == t.id || $0.name == t.name }) {
-                    availableTools.append(t)
+            if let resources = ToolSchemaCatalog.parityDefaults.first(where: { $0.name == "mcp_resources" }),
+               !availableTools.contains(where: { $0.name == resources.name }) {
+                availableTools.append(resources)
+            }
+            deferMCPSchemas = MCPToolSearch.shouldDefer(toolCount: mcpTools.count)
+            if !deferMCPSchemas {
+                for t in mcpTools {
+                    if !availableTools.contains(where: { $0.id == t.id || $0.name == t.name }) {
+                        availableTools.append(t)
+                    }
                 }
             }
-            // Compact listing — avoid dumping every tool schema twice into the prompt.
-            let byServer = Dictionary(grouping: mcpTools) { tool -> String in
-                MCPNamespacedTool.parse(tool.name)?.serverId ?? "mcp"
-            }
-            let lines = byServer.map { serverId, tools -> String in
-                let serverName = loadedSettings.mcpServers.first(where: { $0.id == serverId })?.name ?? serverId
-                let leafNames = tools.compactMap { MCPNamespacedTool.parse($0.name)?.toolName ?? $0.name }
-                    .sorted()
-                let shown = leafNames.prefix(10).joined(separator: ", ")
-                let more = leafNames.count > 10 ? " (+\(leafNames.count - 10) more)" : ""
-                return "- **\(serverName)** (`\(serverId)`): \(shown)\(more)"
-            }.sorted()
-            mcpPromptSummary = """
+            if deferMCPSchemas {
+                let listing = MCPToolSearch.listing(tools: mcpTools) { serverId in
+                    loadedSettings.mcpServers.first(where: { $0.id == serverId })?.name ?? serverId
+                }
+                mcpPromptSummary = """
 
-            ### MCP tools (\(mcpTools.count) live) — call as `mcp__SERVER_ID__TOOL_NAME`
-            \(lines.joined(separator: "\n"))
-            Prefer native tool calls. Do not narrate before calling. Servers that expose only `get_tool_definitions` and `call_tool_by_name` need the catalog listed first; their catalog tools then become directly callable.
-            """
+                ### MCP tools (\(mcpTools.count) live) — schemas not loaded
+                \(listing)
+                Call `mcp_describe` with a tool name or a few keywords to load the schemas you need; the tools it returns are then callable directly as `mcp__SERVER_ID__TOOL_NAME`. Do not guess parameters for a tool you have not described.
+                """
+            }
+            // Compact listing — avoid dumping every tool schema twice into the prompt.
+            if !deferMCPSchemas {
+                let byServer = Dictionary(grouping: mcpTools) { tool -> String in
+                    MCPNamespacedTool.parse(tool.name)?.serverId ?? "mcp"
+                }
+                let lines = byServer.map { serverId, tools -> String in
+                    let serverName = loadedSettings.mcpServers.first(where: { $0.id == serverId })?.name ?? serverId
+                    let leafNames = tools.compactMap { MCPNamespacedTool.parse($0.name)?.toolName ?? $0.name }
+                        .sorted()
+                    let shown = leafNames.prefix(10).joined(separator: ", ")
+                    let more = leafNames.count > 10 ? " (+\(leafNames.count - 10) more)" : ""
+                    return "- **\(serverName)** (`\(serverId)`): \(shown)\(more)"
+                }.sorted()
+                mcpPromptSummary = """
+
+                ### MCP tools (\(mcpTools.count) live) — call as `mcp__SERVER_ID__TOOL_NAME`
+                \(lines.joined(separator: "\n"))
+                Prefer native tool calls. Do not narrate before calling. Servers that expose only `get_tool_definitions` and `call_tool_by_name` need the catalog listed first; their catalog tools then become directly callable.
+                """
+            }
         } else if !casualChat && !loadedSettings.mcpServers.filter(\.isEnabled).isEmpty {
             mcpPromptSummary = """
 
@@ -1103,9 +1124,8 @@ var mcpPromptSummary = ""
             : ProjectInstructions.promptBlock(ProjectInstructions.load(folderPath: workspace.folderPath))
 
         // Where the agent actually is. Without this it guesses paths and build commands every turn.
-        let workspaceSection = inventoryPrompt
-            ? ""
-            : WorkspaceContext.promptBlock(WorkspaceContext.snapshot(folderPath: workspace.folderPath))
+        let workspaceSnapshot = inventoryPrompt ? nil : WorkspaceContext.snapshot(folderPath: workspace.folderPath)
+        let workspaceSection = workspaceSnapshot.map { WorkspaceContext.promptBlock($0, includeGit: false) } ?? ""
 
         let enabledSkills = PersistenceManager.shared.loadSkills().filter { $0.isEnabled && $0.isAllowed(by: agent.allowedSkillIds) }
         var skillsSection = ""
@@ -1179,9 +1199,16 @@ var mcpPromptSummary = ""
             .map { "\n\($0)\n" } ?? ""
 
         // System prompt with modern tool-calling instructions (supports both native API tools & markdown ReAct schemas)
-        let systemPromptWithTools: String
+        // What this agent actually has: a fixed list named Gmail, Calendar and write tools even when
+        // they were switched off or plan mode had removed them, and the model called them anyway.
+        let builtInToolList = availableTools
+            .map(\.name)
+            .filter { !MCPNamespacedTool.isNamespaced($0) }
+            .sorted()
+            .joined(separator: ", ")
+        let stablePrompt: String
         if inventoryPrompt {
-            systemPromptWithTools = """
+            stablePrompt = """
             \(agent.systemPrompt)
             \(mcpPromptSummary)
 
@@ -1191,7 +1218,7 @@ var mcpPromptSummary = ""
             // No tool list here: a model told it has tools it does not have writes the calls out
             // as text, and then the room reads a wall of pseudo-JSON from an agent that was only
             // asked its opinion.
-            systemPromptWithTools = """
+            stablePrompt = """
             \(agent.systemPrompt)
             \(workspaceSection)
             \(instructionsSection)
@@ -1199,23 +1226,14 @@ var mcpPromptSummary = ""
             Reply in prose only, without tool calls. Do not comment on tools or say that you cannot run them.
             """
         } else {
-            systemPromptWithTools = """
+            stablePrompt = """
             \(agent.systemPrompt)
             \(workspaceSection)
-            \(instructionsSection)\(handoffSection)
+            \(instructionsSection)
 
             You are an advanced, fully autonomous coding, systems, and research agent.
-            Built-in tools (prefer native function/tool calling):
-            file_read (supports offset/limit), file_write, edit_file, multi_edit, file_list, grep, glob,
-            find_symbol, rename_symbol, build_project, run_tests,
-            go_to_definition, find_references, symbol_info, code_diagnostics, document_symbols, call_hierarchy,
-            setup_xcode_language_server,
-            git_status, git_diff, git_log, changed_files, revert_changes,
-            file_copy, file_move, file_delete,
-            terminal_command/run_command (interactive:true for commands that prompt; answer them with send_input), fetch_url, web_search, ask_user, exit_plan_mode,
-            todo_write, calculator, get_current_date, document_extract,
-            preview_start, preview_check, preview_logs, preview_stop,
-            gmail_list, gmail_search, google_calendar_list, google_calendar_upcoming.
+            Built-in tools (prefer native function/tool calling): \(builtInToolList)
+            terminal_command/run_command: interactive:true for commands that prompt (answer them with send_input).
             \(mcpPromptSummary)
             \(skillsSection)
             \(teamSection)
@@ -1254,6 +1272,11 @@ var mcpPromptSummary = ""
             \(planModeActive ? "\n5. PLAN MODE: do not mutate files or run shell. Propose a plan, then `exit_plan_mode` after approval." : "")
             """
         }
+        // What changes between turns goes after the cache boundary.
+        let volatilePrompt = [workspaceSnapshot.map { WorkspaceContext.gitLine($0) } ?? "", handoffSection]
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .joined(separator: "\n")
+        let systemPromptWithTools = PromptCache.join(stable: stablePrompt, volatile: volatilePrompt)
 
         while iteration < maxIterations {
             if Task.isCancelled {
@@ -1336,6 +1359,14 @@ var mcpPromptSummary = ""
             // compiler cannot see and a later edit could quietly break.
             let messagesForRequest = workingMessages
 
+            // One consumer applies the chunks in the order they arrived. A task per chunk made no
+            // such promise, so the UI could apply token 12 before token 11 (the reconcile below
+            // repaired a wrong length, not a wrong order).
+            let (chunkStream, chunkContinuation) = AsyncStream.makeStream(of: LLMStreamChunk.self)
+            let chunkConsumer = Task { @MainActor in
+                for await chunk in chunkStream { accumulator.applyChunk(chunk) }
+            }
+
             do {
                 let streamTask = Task<Void, Error> {
                     try await ProviderRouter.shared.stream(
@@ -1363,9 +1394,7 @@ var mcpPromptSummary = ""
                                 stopper.stop(reason: "repetition")
                             }
                         }
-                        Task { @MainActor in
-                            accumulator.applyChunk(chunk)
-                        }
+                        chunkContinuation.yield(chunk)
                     }
                 }
                 stopper.attach(streamTask)
@@ -1384,7 +1413,11 @@ var mcpPromptSummary = ""
                     // decision. Anything else is a real error and rethrows.
                     guard stopper.stoppedReason != nil || Task.isCancelled else { throw error }
                 }
+                chunkContinuation.finish()
+                await chunkConsumer.value
             } catch {
+                chunkContinuation.finish()
+                await chunkConsumer.value
                 let snap = textBridge.snapshot()
                 accumulator.reconcileFromBridge(
                     text: snap.text,
@@ -1433,8 +1466,11 @@ var mcpPromptSummary = ""
                 break
             }
 
-            turnPromptTokens += accumulator.message.promptTokens
-            turnCompletionTokens += accumulator.message.completionTokens
+            // This step's own usage. The message keeps the last value it was given, so when a
+            // provider reported nothing for a step, adding the message's figure counted the
+            // previous step again.
+            turnPromptTokens += snap.promptTokens
+            turnCompletionTokens += snap.completionTokens
             if turnPromptTokens + turnCompletionTokens > maxTurnTokens {
                 accumulator.setHalt(
                     reason: "token_budget",
@@ -1792,6 +1828,16 @@ var mcpPromptSummary = ""
                         resultError = "blocked in plan mode"
                         resultOutput = "Error: plan mode is on, so `\(toolName)` (it changes files or runs commands) was not run. Propose your plan, then call `exit_plan_mode` once the user approves."
                         accumulator.appendNotice("Blocked `\(toolName)` in plan mode.")
+                    } else if planModeActive, await Self.planModeRefusesMCP(
+                        toolName: toolName, argumentsJson: argsJson, settings: loadedSettings
+                    ) {
+                        // The tool list hides MCP writes in plan mode, but a model can still name
+                        // one, and the approval prompt that would catch it is gone under
+                        // "Allow Everything". Anything not positively a read is refused here.
+                        resultSuccess = false
+                        resultError = "blocked in plan mode"
+                        resultOutput = "Error: plan mode is on, so `\(toolName)` (an MCP tool that may change data) was not run. Propose your plan, then call `exit_plan_mode` once the user approves."
+                        accumulator.appendNotice("Blocked `\(toolName)` in plan mode.")
                     } else if MCPNamespacedTool.isNamespaced(toolName),
                               !SubAgentExecutor.agentAllowsMCP(toolId: toolName, toolName: toolName, agent: agent, settings: loadedSettings) {
                         resultSuccess = false
@@ -2013,6 +2059,20 @@ var mcpPromptSummary = ""
                     }
                 }
 
+                // Schemas the model asked for: from the next step they are real tools, so it calls
+                // them with typed arguments instead of describing them again.
+                if resultSuccess, Self.canonicalToolName(toolName) == "mcp_describe",
+                   let data = argsJson.data(using: .utf8),
+                   let args = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                    let query = args["query"] as? String ?? args["name"] as? String ?? args["tool"] as? String ?? ""
+                    let limit = (args["limit"] as? Int) ?? Int(args["limit"] as? String ?? "") ?? MCPToolSearch.defaultLimit
+                    for tool in MCPToolSearch.match(query: query, in: mcpTools, limit: limit)
+                    where !availableTools.contains(where: { $0.id == tool.id || $0.name == tool.name })
+                        && !(planModeActive && tool.requiresApproval) {
+                        availableTools.append(tool)
+                    }
+                }
+
                 // A meta-tool catalog came back: promote its entries to directly callable tools so
                 // the next step is one hop instead of a hand-nested dispatcher call.
                 if resultSuccess,
@@ -2143,7 +2203,8 @@ var mcpPromptSummary = ""
             )
         }
 
-        var modelContext = workingMessages
+        // The nudges steered this turn only; saved, they were replayed on every later turn.
+        var modelContext = Self.droppingHarnessNudges(workingMessages)
         if let finalStepText {
             modelContext.append(ChatMessage(
                 id: assistantMsgId, sessionId: session.id, role: .assistant, content: finalStepText
@@ -2156,6 +2217,15 @@ var mcpPromptSummary = ""
         )) }
 
         accumulator.finalize()
+    }
+
+    /// `workingMessages` without the "[System Command]" and "[System]:" notes the loop adds to
+    /// steer a turn (stop narrating, stop retrying a dead MCP server).
+    static func droppingHarnessNudges(_ messages: [ChatMessage]) -> [ChatMessage] {
+        messages.filter { message in
+            !(message.role == .user
+                && (message.content.hasPrefix("[System Command]") || message.content.hasPrefix("[System]:")))
+        }
     }
 
     /// The meta-tool on `server` that executes catalog entries by name.
@@ -2644,6 +2714,21 @@ var mcpPromptSummary = ""
     }
 
     /// Whether an MCP call needs a person, judged on the tool it will actually run.
+    /// Whether plan mode must refuse this MCP call: it is not positively identified as a read.
+    /// Classification is fail-closed, the same as for approvals, but does not depend on them.
+    static func planModeRefusesMCP(toolName: String, argumentsJson: String, settings: AppSettings) async -> Bool {
+        if let promoted = await MCPPromotedToolRegistry.shared.lookup(toolName) {
+            let server = settings.mcpServers.first { $0.id == promoted.serverId }
+            return MCPEffectCatalog.classifyNested(server: server, nestedToolName: promoted.injectName) != .read
+        }
+        guard let parsed = MCPNamespacedTool.parse(toolName) else { return false }
+        let server = settings.mcpServers.first { $0.id == parsed.serverId }
+        return mcpApprovalReason(
+            server: server, serverLabel: server?.name ?? parsed.serverId,
+            leaf: parsed.toolName, argumentsJson: argumentsJson
+        ) != nil
+    }
+
     private static func mcpApprovalReason(
         server: MCPServerConfig?, serverLabel: String, leaf: String, argumentsJson: String
     ) -> String? {

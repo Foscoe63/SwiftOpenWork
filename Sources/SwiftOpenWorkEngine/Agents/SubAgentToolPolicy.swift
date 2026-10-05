@@ -34,6 +34,15 @@ public enum SubAgentToolPolicy {
         sessionId: String,
         workspaceRoot: String? = nil
     ) -> String? {
+        // A shell command runs as the user and could write anywhere, whatever the approval level:
+        // under "Allow All" nothing asks, and the sandbox setting also admits every authorized
+        // folder, the user's own checkout among them. A sub-agent's only writable root is its
+        // worktree.
+        if let worktreePath, let escape = shellEscape(
+            toolName: toolName, argumentsJson: argumentsJson, worktreePath: worktreePath
+        ) {
+            return "This command would change '\(escape)', outside the sub-agent's own worktree."
+        }
         guard let reason = AgentRunner.approvalReason(
             toolName: toolName, argumentsJson: argumentsJson, settings: settings, sessionId: sessionId,
             workspaceRoot: workspaceRoot ?? worktreePath ?? ""
@@ -60,6 +69,34 @@ public enum SubAgentToolPolicy {
             return sameFolder(target, worktreePath) ? nil : reason
         }
         return reason
+    }
+
+    static let shellTools: Set<String> = ["terminal_command", "run_command"]
+
+    /// A path a shell call would write or run in outside the worktree, if one is evident.
+    static func shellEscape(toolName: String, argumentsJson: String, worktreePath: String) -> String? {
+        let name = ToolCallRepair.builtInCanonical(toolName) ?? toolName
+        guard shellTools.contains(name) else { return nil }
+        let args = arguments(argumentsJson)
+        if let cwd = (args["cwd"] as? String)?.trimmingCharacters(in: .whitespaces), !cwd.isEmpty,
+           !isInside(cwd, worktree: worktreePath), !sameFolder(cwd, worktreePath) {
+            return cwd
+        }
+        let command = args["command"] as? String ?? ""
+        if let escape = ToolExecutionEngine.shellWriteTargetOutside(command: command, roots: [worktreePath]) {
+            return escape
+        }
+        // Moving to the user's checkout first, or pointing git at it, gets around relative paths.
+        if let regex = try? NSRegularExpression(pattern: #"(?:\bcd\s+|\bgit\s+-C\s+|\bpushd\s+)(~?/[^\s;|&'"]+)"#) {
+            let range = NSRange(command.startIndex..<command.endIndex, in: command)
+            for m in regex.matches(in: command, range: range) {
+                if let r = Range(m.range(at: 1), in: command) {
+                    let target = String(command[r])
+                    if !isInside(target, worktree: worktreePath), !sameFolder(target, worktreePath) { return target }
+                }
+            }
+        }
+        return nil
     }
 
     /// Every path a file tool's arguments name, under any of the keys the engine accepts.

@@ -1132,6 +1132,26 @@ public actor MCPClientManager {
         return MCPArgSchema(json: def.inputSchemaJson)
     }
 
+    /// Re-read a server's tool list after it announced a change.
+    func refreshDiscoveredTools(serverId: String) async {
+        guard let session = sdkSessions[serverId], let tools = try? await session.refreshTools() else { return }
+        discoveredTools[serverId] = tools
+    }
+
+    /// `resources/*` and `prompts/*` on a server run through the SDK. nil when the server is not.
+    public func resourceAction(
+        serverId: String, action: String, target: String, arguments: [String: String]
+    ) async -> String {
+        guard let session = sdkSessions[serverId] else {
+            return "That server is not connected through the SDK, so resources and prompts are unavailable."
+        }
+        do {
+            return try await session.resourceAction(action, target: target, arguments: arguments)
+        } catch {
+            return "MCP Error: \(error.localizedDescription)"
+        }
+    }
+
     public func getServerStatus(serverId: String) -> MCPServerStatus {
         serverStatus[serverId] ?? .notStarted
     }
@@ -1152,6 +1172,11 @@ public actor MCPClientManager {
             let session = MCPSDKSession(config: config)
             // Register BEFORE connect so a timeout can kill a hung handshake.
             sdkSessions[config.id] = session
+            // Tool catalogs used to refresh only on restart; servers announce changes.
+            let serverId = config.id
+            await session.setToolsChanged { [weak self] in
+                Task { await self?.refreshDiscoveredTools(serverId: serverId) }
+            }
             let tools = try await session.start()
             guard startGenerations[config.id] == generation else {
                 await session.stop()
@@ -1246,6 +1271,12 @@ public actor MCPClientManager {
             guard process.isRunning else {
                 throw MCPLaunchError.processExited("MCP '\(config.name)' died during initialize.")
             }
+            // The protocol has the client wait for the initialize result before anything else.
+            // Sending `tools/list` first worked only with servers lenient enough to allow it.
+            let initResp = await readResponse(for: 1, buffer: stdoutBuffer, timeoutSeconds: 8.0, raw: true)
+            if initResp.isEmpty {
+                throw MCPLaunchError.noToolList("MCP '\(config.name)' did not answer initialize.")
+            }
 
             // 2. Send initialized notification
             let initializedNotification: [String: Any] = [
@@ -1266,7 +1297,7 @@ public actor MCPClientManager {
 
             var tools: [MCPToolDefinition] = []
             // Cap tools/list wait; outer ensureServerReady also kills the process on deadline.
-            let listResp = await readResponse(for: 2, buffer: stdoutBuffer, timeoutSeconds: 8.0)
+            let listResp = await readResponse(for: 2, buffer: stdoutBuffer, timeoutSeconds: 8.0, raw: true)
             // Silence is not "no tools". Treating it as an empty catalog marked a server that never
             // answered as running, and it then stayed that way.
             if listResp.isEmpty {
@@ -1651,107 +1682,20 @@ public actor MCPClientManager {
         """
     }
 
-    // MARK: - Timeout Helper
-    private func withTimeout<T: Sendable>(_ seconds: Double, _ work: @escaping @Sendable () async -> T) async -> T {
-        await withTaskGroup(of: (T, Bool)?.self) { group in
-            group.addTask {
-                let value = await work()
-                return (value, true)
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                return nil
-            }
-
-            while let nextResult = await group.next() {
-                if let (value, _) = nextResult {
-                    group.cancelAll()
-                    return value
-                }
-            }
-            return await work()
-        }
-    }
-
-    private func readResponse(for reqId: Int, buffer: MCPStdioBuffer, timeoutSeconds: Double) async -> String {
+    private func readResponse(for reqId: Int, buffer: MCPStdioBuffer, timeoutSeconds: Double, raw: Bool = false) async -> String {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
 
         while Date() < deadline {
-            if let matched = buffer.extractJSONRPCResponse(id: reqId) {
+            if let matched = buffer.extractJSONRPCResponse(id: reqId, raw: raw) {
                 return matched
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         // Final attempt after timeout window
-        return buffer.extractJSONRPCResponse(id: reqId) ?? ""
+        return buffer.extractJSONRPCResponse(id: reqId, raw: raw) ?? ""
     }
 
     // MARK: - Native macOS Automations (Calendar, Reminders, AppleScript)
-    public func executeMacCalendarQuery(arguments: [String: Any]) async -> String {
-        let script = """
-        tell application "Calendar"
-            set today to current date
-            set startDate to today - (1 * days)
-            set endDate to today + (14 * days)
-            set outputList to {}
-            try
-                repeat with c in calendars
-                    set calName to name of c
-                    set evs to (every event of c whose start date is greater than or equal to startDate and start date is less than or equal to endDate)
-                    repeat with e in evs
-                        set evSummary to summary of e
-                        set evStart to (start date of e as string)
-                        set evEnd to (end date of e as string)
-                        set end of outputList to "• " & evSummary & " (" & evStart & " → " & evEnd & ") [Calendar: " & calName & "]"
-                    end repeat
-                end repeat
-            on error errMsg
-                return "Calendar Access Note: " & errMsg
-            end try
-            if (count of outputList) is 0 then
-                return "No calendar events scheduled for the next 14 days."
-            else
-                set AppleScript's text item delimiters to "\n"
-                return outputList as text
-            end if
-        end tell
-        """
-
-        let res = await executeAppleScript(script)
-        if res.isEmpty || res.contains("Calendar Access Note") {
-            return "### macOS Calendar Events:\n- Checked macOS Calendar. No upcoming conflicts or events found for the requested period (or Calendar permissions needed in macOS System Settings > Privacy > Calendars)."
-        }
-        return "### macOS Calendar Events (via MacUse):\n\(res)"
-    }
-
-    public func executeMacRemindersQuery(arguments: [String: Any]) async -> String {
-        let script = """
-        tell application "Reminders"
-            set outputList to {}
-            try
-                repeat with l in lists
-                    set listName to name of l
-                    set rems to (every reminder of l whose completed is false)
-                    repeat with r in rems
-                        set rName to name of r
-                        set end of outputList to "• [ ] " & rName & " (" & listName & ")"
-                    end repeat
-                end repeat
-            on error errMsg
-                return "Reminders Access Note: " & errMsg
-            end try
-            if (count of outputList) is 0 then
-                return "No uncompleted reminders found."
-            else
-                set AppleScript's text item delimiters to "\n"
-                return outputList as text
-            end if
-        end tell
-        """
-        let res = await executeAppleScript(script)
-        return "### macOS Reminders (via MacUse):\n\(res)"
-    }
-
     public func executeAppleScript(_ script: String) async -> String {
         let process = Process()
         let outPipe = Pipe()
@@ -1868,7 +1812,7 @@ public final class MCPStdioBuffer: @unchecked Sendable {
     }
 
     /// Pull the first complete JSON-RPC response matching `id`, removing it from the buffer.
-    public func extractJSONRPCResponse(id: Int) -> String? {
+    public func extractJSONRPCResponse(id: Int, raw: Bool = false) -> String? {
         lock.lock()
         defer { lock.unlock() }
 
@@ -1877,6 +1821,7 @@ public final class MCPStdioBuffer: @unchecked Sendable {
         while let lineEnd = remaining[consumedUpTo...].firstIndex(of: "\n") {
             let line = remaining[consumedUpTo..<lineEnd]
             let next = remaining.index(after: lineEnd)
+            let lineStart = consumedUpTo
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             consumedUpTo = next
             guard !trimmed.isEmpty,
@@ -1893,9 +1838,16 @@ public final class MCPStdioBuffer: @unchecked Sendable {
             // A request or notification *from* the server has a `method`, and may reuse our id.
             guard respId == id, json["method"] == nil else { continue }
 
-            // Drop everything through this line from the buffer
-            text = String(remaining[next...])
+            // Remove this line only. Dropping everything before it discarded the replies to other
+            // calls in flight (up to three run at once), which then timed out.
+            text = String(remaining[..<lineStart]) + String(remaining[next...])
 
+            if raw, let result = json["result"] as? [String: Any],
+               let data = try? JSONSerialization.data(withJSONObject: result),
+               let text = String(data: data, encoding: .utf8) {
+                // The handshake wants the result as JSON, not the prose a tool call is shown as.
+                return text
+            }
             if let result = json["result"] as? [String: Any] {
                 if let content = result["content"] as? [[String: Any]] {
                     let texts = content.compactMap { $0["text"] as? String }

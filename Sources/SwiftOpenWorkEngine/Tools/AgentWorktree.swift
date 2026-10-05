@@ -231,6 +231,35 @@ public enum AgentWorktree {
         }
     }
 
+    /// Ignored folders that are slow to rebuild and safe to share: fetched dependencies. A fresh
+    /// worktree has none of them (they are ignored, so `git worktree add` leaves them behind), and
+    /// the first `build_project` otherwise spends its time budget downloading them again.
+    /// Copied with APFS clones (`cp -c`), which cost almost no space or time; where the volume
+    /// cannot clone the copy simply fails and the worktree starts cold, as before.
+    static let cacheFolders = [".build/checkouts", ".build/repositories", ".build/artifacts", "node_modules"]
+
+    public static func seedDependencyCaches(worktree: Info, workspacePath: String) async {
+        guard let root = try? await repositoryRoot(containing: workspacePath) else { return }
+        for relative in cacheFolders {
+            let source = root.appendingPathComponent(relative)
+            let destination = URL(fileURLWithPath: worktree.path).appendingPathComponent(relative)
+            guard FileManager.default.fileExists(atPath: source.path),
+                  !FileManager.default.fileExists(atPath: destination.path) else { continue }
+            try? FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/bin/cp")
+                process.arguments = ["-c", "-R", source.path, destination.path]
+                process.standardOutput = FileHandle.nullDevice
+                process.standardError = FileHandle.nullDevice
+                process.terminationHandler = { _ in continuation.resume() }
+                do { try process.run() } catch { continuation.resume() }
+            }
+        }
+    }
+
     public static func list(workspacePath: String) async throws -> [Info] {
         let root = try await repositoryRoot(containing: workspacePath)
         let output = try await git(["worktree", "list", "--porcelain"], in: root)
