@@ -2523,6 +2523,12 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         }
     }
 
+    /// Wait briefly for the output pipe to close. Synchronous on purpose: a semaphore wait is
+    /// not allowed directly in async code, and this one is bounded at 1.5s.
+    private static func awaitEndOfOutput(_ endOfOutput: DispatchSemaphore) {
+        _ = endOfOutput.wait(timeout: .now() + 1.5)
+    }
+
     public struct ProcessRun {
         public var output: String
         public var exitCode: Int32
@@ -2591,7 +2597,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         timer.cancel()
         // Wait for the pipe to close, but not forever: a background process the command started
         // (`npm run dev &`) holds it open, and reading to end-of-file would hang the tool call.
-        _ = endOfOutput.wait(timeout: .now() + 1.5)
+        Self.awaitEndOfOutput(endOfOutput)
         pipe.fileHandleForReading.readabilityHandler = nil
         LiveToolOutput.conclude(callId: callId, exitCode: process.terminationStatus)
 
@@ -2756,7 +2762,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             timeoutTimer.cancel()
             // Let the handler drain what was written just before exit, but never wait on a pipe a
             // surviving background process still holds open — that used to hang the call forever.
-            _ = endOfOutput.wait(timeout: .now() + 1.5)
+            Self.awaitEndOfOutput(endOfOutput)
             pipe.fileHandleForReading.readabilityHandler = nil
             LiveToolOutput.conclude(callId: callId, exitCode: process.terminationStatus)
 
