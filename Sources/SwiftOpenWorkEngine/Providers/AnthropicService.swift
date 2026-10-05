@@ -46,39 +46,123 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                     struct Item: Codable {
                         let id: String
                         let display_name: String?
+                        let max_input_tokens: Int?
                     }
                     let data: [Item]?
                 }
                 if let parsed = try? JSONDecoder().decode(AnthropicModelsResponse.self, from: data),
                    let data = parsed.data, !data.isEmpty {
+                    let curated = AnthropicModels.curated(providerId: provider.id)
                     return data.map { m in
-                        let isReasoning = m.id.contains("3-7") || m.id.contains("r1") || m.id.contains("thinking")
+                        // Known ids keep the catalog's tier and prices; the API reports neither.
+                        if var known = curated.first(where: { $0.id == m.id }) {
+                            if let window = m.max_input_tokens { known.contextWindow = window }
+                            return known
+                        }
+                        let isHaiku = m.id.contains("haiku")
                         return ModelInfo(
                             id: m.id,
                             name: m.display_name ?? m.id,
                             providerId: provider.id,
-                            contextWindow: 200000,
+                            contextWindow: m.max_input_tokens ?? 200000,
                             supportsVision: true,
-                            supportsReasoning: isReasoning,
+                            // Every model `/v1/models` still serves can think; how it is asked
+                            // to is decided per request by `thinkingStyle(for:)`.
+                            supportsReasoning: true,
                             supportsStreaming: true,
                             supportsTools: true,
                             description: "Anthropic Claude Model",
-                            isDefault: m.id.contains("3-7") || m.id.contains("3-5-sonnet"),
-                            speedTier: m.id.contains("haiku") ? "Fast" : "Powerful",
-                            costPer1kPrompt: m.id.contains("haiku") ? 0.0008 : 0.003,
-                            costPer1kCompletion: m.id.contains("haiku") ? 0.004 : 0.015
+                            isDefault: m.id == AnthropicModels.defaultModelId,
+                            speedTier: isHaiku ? "Fast" : "Powerful",
+                            costPer1kPrompt: isHaiku ? 0.001 : 0.005,
+                            costPer1kCompletion: isHaiku ? 0.005 : 0.025
                         )
                     }
                 }
             }
         }
 
-        return [
-            ModelInfo(id: "claude-3-7-sonnet-20250219", name: "Claude 3.7 Sonnet (Hybrid)", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: true, isDefault: true, speedTier: "Powerful", costPer1kPrompt: 0.003, costPer1kCompletion: 0.015),
-            ModelInfo(id: "claude-3-5-sonnet-20241022", name: "Claude 3.5 Sonnet", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Powerful", costPer1kPrompt: 0.003, costPer1kCompletion: 0.015),
-            ModelInfo(id: "claude-3-5-haiku-20241022", name: "Claude 3.5 Haiku", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Fast", costPer1kPrompt: 0.0008, costPer1kCompletion: 0.004),
-            ModelInfo(id: "claude-3-opus-20240229", name: "Claude 3 Opus", providerId: provider.id, contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Powerful", costPer1kPrompt: 0.015, costPer1kCompletion: 0.075)
-        ]
+        return AnthropicModels.curated(providerId: provider.id)
+    }
+
+    /// How a model is asked to think, which also decides whether it takes sampling parameters.
+    public enum ThinkingStyle: Equatable, Sendable {
+        /// `thinking: {type: "enabled", budget_tokens}`, with `temperature`/`top_p` allowed when
+        /// thinking is off. Claude 3.x, the 4.0–4.5 generation, and Haiku 4.5.
+        case budgeted
+        /// `thinking: {type: "adaptive"}` plus `output_config.effort`. Opus/Sonnet 4.6 still
+        /// accept sampling parameters.
+        case adaptiveWithSampling
+        /// Adaptive thinking only. `budget_tokens`, `temperature`, `top_p` and `top_k` are each
+        /// a 400: Opus 5, Sonnet 5, Opus 4.7/4.8, Fable and Mythos.
+        case adaptive
+    }
+
+    /// Model generations that predate adaptive thinking. Anything not listed is treated as
+    /// current, so a model released after this list was written gets the request shape that
+    /// newer models accept rather than one they reject.
+    private static let budgetedPrefixes = [
+        "claude-3", "claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5",
+        "claude-opus-4-1", "claude-opus-4-0", "claude-sonnet-4-0",
+        "claude-opus-4-2025", "claude-sonnet-4-2025"
+    ]
+
+    public static func thinkingStyle(for modelId: String) -> ThinkingStyle {
+        if budgetedPrefixes.contains(where: { modelId.hasPrefix($0) }) { return .budgeted }
+        if modelId.hasPrefix("claude-opus-4-6") || modelId.hasPrefix("claude-sonnet-4-6") {
+            return .adaptiveWithSampling
+        }
+        return .adaptive
+    }
+
+    /// The thinking and sampling fields of a Messages request.
+    ///
+    /// Split out of `streamChat` so the shape can be tested without a network call: sending
+    /// Claude 3.7's `budget_tokens` to Opus 5 is a 400 on every turn.
+    static func thinkingFields(
+        modelId: String,
+        supportsReasoning: Bool,
+        reasoningEffort: ReasoningEffort,
+        temperature: Double,
+        topP: Double
+    ) -> [String: Any] {
+        var fields: [String: Any] = [:]
+        let style = thinkingStyle(for: modelId)
+
+        func addSampling() {
+            fields["temperature"] = temperature
+            // The Anthropic API rejects top_p alongside thinking, so it is only ever sent here.
+            if topP > 0, topP < 1.0 {
+                fields["top_p"] = topP
+            }
+        }
+
+        switch style {
+        case .budgeted:
+            if supportsReasoning && reasoningEffort != .off {
+                let budgetTokens = reasoningEffort == .high ? 4096 : (reasoningEffort == .medium ? 2048 : 1024)
+                fields["thinking"] = ["type": "enabled", "budget_tokens": budgetTokens]
+            } else {
+                addSampling()
+            }
+        case .adaptive, .adaptiveWithSampling:
+            if reasoningEffort == .off && style == .adaptiveWithSampling {
+                addSampling()
+            } else {
+                // "Disabled" becomes low effort rather than `thinking: {type: "disabled"}`:
+                // Fable rejects that outright, Opus 5 accepts it but then sometimes writes a tool
+                // call as visible text instead of a `tool_use` block — in an agent loop, a call
+                // that silently never runs. Low effort keeps the turn short and cheap instead.
+                let effort = reasoningEffort == .off ? ReasoningEffort.low : reasoningEffort
+                // Opus 4.7 and later default to `display: "omitted"` — thinking blocks arrive
+                // empty and the reasoning pane stays blank. 4.6 already summarizes by default.
+                fields["thinking"] = style == .adaptive
+                    ? ["type": "adaptive", "display": "summarized"]
+                    : ["type": "adaptive"]
+                fields["output_config"] = ["effort": effort.rawValue]
+            }
+        }
+        return fields
     }
 
     public func streamChat(
@@ -152,21 +236,14 @@ public final class AnthropicService: LLMProviderClient, Sendable {
             "system": systemPrompt
         ]
 
-        if model.supportsReasoning && reasoningEffort != .off {
-            let budgetTokens = reasoningEffort == .high ? 4096 : (reasoningEffort == .medium ? 2048 : 1024)
-            body["thinking"] = [
-                "type": "enabled",
-                "budget_tokens": budgetTokens
-            ]
-        } else {
-            body["temperature"] = temperature
-            // Only outside the thinking branch: the Anthropic API rejects top_p alongside
-            // extended thinking, and requires temperature 1 there.
-            let topP = PersistenceManager.shared.loadSettings().defaultTopP
-            if topP > 0, topP < 1.0 {
-                body["top_p"] = topP
-            }
-        }
+        let thinking = Self.thinkingFields(
+            modelId: model.id,
+            supportsReasoning: model.supportsReasoning,
+            reasoningEffort: reasoningEffort,
+            temperature: temperature,
+            topP: PersistenceManager.shared.loadSettings().defaultTopP
+        )
+        body.merge(thinking) { _, new in new }
 
         // Add native tools in Anthropic schema { name: "...", description: "...", input_schema: {...} }
         if !tools.isEmpty {

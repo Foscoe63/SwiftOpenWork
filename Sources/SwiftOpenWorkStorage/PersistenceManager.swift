@@ -152,6 +152,10 @@ public final class PersistenceManager: Sendable {
             needsSave = true
         }
 
+        if Self.replaceRetiredModels(in: &settings) {
+            needsSave = true
+        }
+
         // Synchronize MCP servers (repair known-bad launch args before either side wins).
         let backupMcp = loadMCPServers()
         if settings.mcpServers.isEmpty {
@@ -196,6 +200,25 @@ public final class PersistenceManager: Sendable {
 
         settings.settingsSchemaVersion = AppSettings.currentSchemaVersion
         return true
+    }
+
+    /// Point settings that name a retired Claude model at its successor.
+    ///
+    /// Keyed on the value rather than the schema version, unlike `applyMigrations`: a retired id
+    /// can never be a working choice, so there is no preference to protect, and a settings file
+    /// restored from a backup is fixed as well. A turn resolves an unlisted id by sending it
+    /// verbatim, so leaving one in place means a 404 on every turn rather than a fallback.
+    public static func replaceRetiredModels(in settings: inout AppSettings) -> Bool {
+        var changed = false
+        if let successor = AnthropicModels.replacement(for: settings.defaultModelId) {
+            settings.defaultModelId = successor
+            changed = true
+        }
+        if let successor = AnthropicModels.replacement(for: settings.inlineSuggestionModelId) {
+            settings.inlineSuggestionModelId = successor
+            changed = true
+        }
+        return changed
     }
 
     public func saveSettings(_ settings: AppSettings) {
@@ -328,11 +351,8 @@ public final class PersistenceManager: Sendable {
                 baseUrl: "https://api.anthropic.com/v1",
                 apiKey: "",
                 isEnabled: true,
-                models: [
-                    ModelInfo(id: "claude-3-7-sonnet-20250219", name: "Claude 3.7 Sonnet (Hybrid Reasoning)", providerId: "anthropic-cloud", contextWindow: 200000, supportsVision: true, supportsReasoning: true, isDefault: true, speedTier: "Powerful", costPer1kPrompt: 0.003, costPer1kCompletion: 0.015),
-                    ModelInfo(id: "claude-3-5-sonnet-20241022", name: "Claude 3.5 Sonnet", providerId: "anthropic-cloud", contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Powerful", costPer1kPrompt: 0.003, costPer1kCompletion: 0.015),
-                    ModelInfo(id: "claude-3-5-haiku-20241022", name: "Claude 3.5 Haiku", providerId: "anthropic-cloud", contextWindow: 200000, supportsVision: true, supportsReasoning: false, speedTier: "Fast", costPer1kPrompt: 0.0008, costPer1kCompletion: 0.004)
-                ]
+                // One list with `AnthropicService`'s offline fallback; see `AnthropicModels`.
+                models: AnthropicModels.curated(providerId: "anthropic-cloud")
             ),
             ModelProvider(
                 id: "groq-cloud",
@@ -356,7 +376,7 @@ public final class PersistenceManager: Sendable {
                 apiKey: "",
                 isEnabled: true,
                 models: [
-                    ModelInfo(id: "anthropic/claude-3.7-sonnet", name: "Claude 3.7 Sonnet (via OpenRouter)", providerId: "openrouter-cloud", contextWindow: 200000, supportsReasoning: true, speedTier: "Powerful"),
+                    ModelInfo(id: AnthropicModels.openRouterDefaultModelId, name: "Claude Opus 5 (via OpenRouter)", providerId: "openrouter-cloud", contextWindow: 1_000_000, supportsVision: true, supportsReasoning: true, speedTier: "Powerful"),
                     ModelInfo(id: "meta-llama/llama-3.3-70b-instruct", name: "Llama 3.3 70B Instruct", providerId: "openrouter-cloud", contextWindow: 131072, speedTier: "Fast"),
                     ModelInfo(id: "deepseek/deepseek-r1", name: "DeepSeek R1", providerId: "openrouter-cloud", contextWindow: 65536, supportsReasoning: true, speedTier: "Powerful")
                 ]
@@ -403,6 +423,12 @@ public final class PersistenceManager: Sendable {
         for i in 0..<loaded.count {
             if loaded[i].kind == .omlx && (loaded[i].name.contains("oMLX") || loaded[i].name.contains("omlx")) {
                 loaded[i].name = "Apple Silicon (Built-in)"
+                modified = true
+            }
+            // Installs seeded before 2026-09 list Claude 3.x, with the retired 3.7 Sonnet as the
+            // Anthropic default. The API answers those ids with a 404, and nothing else would
+            // ever take them out of `providers.json`.
+            if AnthropicModels.removeRetired(from: &loaded[i]) {
                 modified = true
             }
         }
@@ -495,6 +521,15 @@ public final class PersistenceManager: Sendable {
         // Same reasoning as the voice toggles: a value stored by a control that did nothing is
         // not a preference. Empty means "every tool enabled in the workspace", so clearing the
         // untouched seed restores the intent while leaving a real, deliberate allowlist alone.
+        // An agent pinned to a retired Claude model would 404 on every turn; see
+        // `replaceRetiredModels(in:)`.
+        for i in items.indices {
+            if let successor = AnthropicModels.replacement(for: items[i].modelId) {
+                items[i].modelId = successor
+                modified = true
+            }
+        }
+
         for i in items.indices where Self.isLegacySeededAllowlist(items[i].allowedToolIds) {
             items[i].allowedToolIds = []
             modified = true
@@ -765,6 +800,12 @@ public final class PersistenceManager: Sendable {
         // Sanitize any invalid or obsolete SF symbols loaded in chat message avatars
         var modified = false
         for sIdx in 0..<items.count {
+            // The session's model, not each message's: `Message.modelId` records what answered,
+            // and history should keep saying so.
+            if let successor = AnthropicModels.replacement(for: items[sIdx].modelId) {
+                items[sIdx].modelId = successor
+                modified = true
+            }
             for mIdx in 0..<items[sIdx].messages.count {
                 if items[sIdx].messages[mIdx].agentAvatar == "person.crop.circle.badge.sparkables" || items[sIdx].messages[mIdx].agentAvatar == "person.crop.circle.badge.sparkles" {
                     items[sIdx].messages[mIdx].agentAvatar = "person.crop.circle.badge.checkmark"
@@ -812,7 +853,7 @@ public final class PersistenceManager: Sendable {
                         SwiftOpenWork is your native macOS autonomous AI workspace powered by SwiftUI.
                         
                         ### Key Features:
-                        - **Local & Cloud Model Providers**: Run locally with **Ollama**, **LM Studio**, or connect to **OpenAI**, **Anthropic Claude 3.7**, **Groq**, **DeepSeek**, and **OpenRouter**.
+                        - **Local & Cloud Model Providers**: Run locally with **Ollama**, **LM Studio**, or connect to **OpenAI**, **Anthropic Claude**, **Groq**, **DeepSeek**, and **OpenRouter**.
                         - **Autonomous Multi-Agent Hierarchy**: Lead agents can spawn sub-agents (Coders, Researchers, Reviewers) and communicate in real time.
                         - **Built-in Tool Execution**: Safe file reading/writing, shell commands, web search, and calculation.
                         - **Side Inspector**: Track live sub-agent trees, inter-agent messages, artifacts, and tools.

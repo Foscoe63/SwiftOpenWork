@@ -1052,7 +1052,7 @@ public struct SettingsView: View {
                     Stepper("", value: $appState.settings.defaultMaxTokens, in: 1024...32768, step: 1024)
                 }
 
-                SettingsRow(title: "Reasoning Effort", subtitle: "Budget for thinking models (Claude 3.7, DeepSeek R1, o1/o3)", icon: "brain") {
+                SettingsRow(title: "Reasoning Effort", subtitle: "How hard thinking models work (Claude, DeepSeek R1, o1/o3)", icon: "brain") {
                     Picker("", selection: $appState.settings.defaultReasoningEffort) {
                         ForEach(ReasoningEffort.allCases, id: \.self) { effort in
                             Text(effort.displayName).tag(effort)
