@@ -103,7 +103,8 @@ final class CompletionNoticeAndContextMeterTests: XCTestCase {
 
     /// Always-on furniture stops being read. It appears when it starts to matter.
     func testTheMeterStaysHiddenUntilTheWindowIsHalfFull() {
-        XCTAssertFalse(ContextMeter(used: 10_000, limit: 128_000).isWorthShowing)
+        XCTAssertTrue(ContextMeter(used: 10_000, limit: 128_000).isWorthShowing)
+        XCTAssertFalse(ContextMeter(used: 0, limit: 128_000).isWorthShowing)
         XCTAssertTrue(ContextMeter(used: 70_000, limit: 128_000).isWorthShowing)
     }
 

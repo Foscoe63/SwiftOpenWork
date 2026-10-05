@@ -1047,6 +1047,15 @@ public final class PersistenceManager: Sendable {
         storage.save(loops, to: "loops.json")
     }
 
+    // MARK: - Slash commands
+    public func loadSlashCommands() -> [CustomSlashCommand] {
+        storage.load([CustomSlashCommand].self, from: "slash_commands.json") ?? []
+    }
+
+    public func saveSlashCommands(_ commands: [CustomSlashCommand]) {
+        storage.save(commands, to: "slash_commands.json")
+    }
+
     // MARK: - Skills
     public func loadSkills() -> [Skill] {
         if var items = storage.load([Skill].self, from: "skills.json"), !items.isEmpty {

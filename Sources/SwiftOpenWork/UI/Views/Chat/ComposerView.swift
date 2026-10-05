@@ -207,6 +207,17 @@ public struct ComposerView: View {
         }
     }
 
+    /// Built-in commands, then the user's own (Settings → Slash Commands), narrowed by what is
+    /// typed. The popup used to list prompt templates only, so none of these could be discovered.
+    private var matchingBuiltInCommands: [(command: String, description: String, isCustom: Bool)] {
+        let trimmed = appState.composerText.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("/"), !trimmed.contains(" ") else { return [] }
+        let query = trimmed.dropFirst().lowercased()
+        let all = SlashCommands.builtIn.map { (command: $0.command, description: $0.description, isCustom: false) }
+            + appState.customSlashCommands.map { (command: $0.command, description: $0.description.isEmpty ? "Custom command" : $0.description, isCustom: true) }
+        return all.filter { query.isEmpty || $0.command.dropFirst().hasPrefix(query) }
+    }
+
     private var mentionQuery: String? {
         ComposerContextMentions.activeQuery(in: appState.composerText)
     }
@@ -443,7 +454,7 @@ public struct ComposerView: View {
             }
 
             // Slash Command Autocomplete Popover / Overlay
-            if !matchingPromptTemplates.isEmpty && appState.composerText.hasPrefix("/") {
+            if (!matchingPromptTemplates.isEmpty || !matchingBuiltInCommands.isEmpty) && appState.composerText.hasPrefix("/") {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
                         Image(systemName: "bolt.horizontal.fill")
@@ -462,6 +473,34 @@ public struct ComposerView: View {
 
                     ScrollView {
                         LazyVStack(spacing: 2) {
+                            ForEach(matchingBuiltInCommands, id: \.command) { item in
+                                Button {
+                                    // A custom command may take arguments, so leave room to type them.
+                                    appState.composerText = item.isCustom ? item.command + " " : item.command
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "terminal")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                                            .frame(width: 18)
+                                        Text(item.command)
+                                            .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                                            .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                                        Text(item.description)
+                                            .font(.system(size: 11.5, weight: .medium))
+                                            .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                                        Spacer()
+                                        Text(item.isCustom ? "custom" : "command")
+                                            .font(.system(size: 9.5))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Color.secondary.opacity(0.06))
+                                    .cornerRadius(6)
+                                }
+                                .buttonStyle(.hitTestable)
+                            }
                             ForEach(matchingPromptTemplates) { template in
                                 Button {
                                     appState.composerText = template.prompt

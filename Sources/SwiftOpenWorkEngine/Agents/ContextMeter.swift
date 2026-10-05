@@ -43,10 +43,11 @@ public struct ContextMeter: Equatable, Sendable {
         }
     }
 
-    /// Hidden until it is worth acting on. A meter that is always on screen is furniture, and a
-    /// chat that has used 3% of a 128k window has nothing to tell anyone.
+    /// Shown whenever there is a figure. It used to hide below 50%, which made it vanish for
+    /// anyone whose real usage is a fraction of a large window — and a gauge that appears only
+    /// when it is already late is not much of a gauge.
     public var isWorthShowing: Bool {
-        limit > 0 && used > 0 && fraction >= 0.5
+        limit > 0 && used > 0
     }
 
     public var label: String {

@@ -160,3 +160,29 @@ final class SubAgentPromptWorkspaceTests: XCTestCase {
         XCTAssertTrue(source.contains("WorkspaceContext.promptBlock(WorkspaceContext.snapshot(folderPath: effectiveWorkspace.folderPath))"))
     }
 }
+
+final class SlashCommandTests: XCTestCase {
+    private let standup = CustomSlashCommand(command: "/standup", prompt: "Summarise my work.")
+
+    func testNamesAreNormalisedAndBuiltInsAreProtected() {
+        XCTAssertEqual(SlashCommands.normalized(" Standup "), "/standup")
+        XCTAssertNotNil(SlashCommands.problem(command: "compact", prompt: "x", existing: []))
+        XCTAssertNotNil(SlashCommands.problem(command: "/two words", prompt: "x", existing: []))
+        XCTAssertNotNil(SlashCommands.problem(command: "/ok", prompt: "  ", existing: []))
+        XCTAssertNil(SlashCommands.problem(command: "/ok_1", prompt: "x", existing: []))
+    }
+
+    func testDuplicatesAreRefusedExceptWhenEditingItself() {
+        XCTAssertNotNil(SlashCommands.problem(command: "standup", prompt: "x", existing: [standup]))
+        XCTAssertNil(SlashCommands.problem(command: "standup", prompt: "x", existing: [standup], editing: standup.id))
+    }
+
+    func testExpansionAppendsOrSubstitutesArguments() {
+        XCTAssertEqual(SlashCommands.expand("/standup", custom: [standup]), "Summarise my work.")
+        XCTAssertEqual(SlashCommands.expand("/Standup for Monday", custom: [standup]), "Summarise my work.\n\nfor Monday")
+        let templated = CustomSlashCommand(command: "/fix", prompt: "Fix this: $ARGUMENTS. Add a test.")
+        XCTAssertEqual(SlashCommands.expand("/fix the login bug", custom: [templated]), "Fix this: the login bug. Add a test.")
+        XCTAssertNil(SlashCommands.expand("/compact", custom: [standup]))
+        XCTAssertNil(SlashCommands.expand("plain text", custom: [standup]))
+    }
+}

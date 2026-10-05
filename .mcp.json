@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "XcodeBuildMCP": {
+      "command": "npx",
+      "args": ["-y", "xcodebuildmcp@latest", "mcp"],
+      "env": {
+        "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer",
+        "XCODEBUILDMCP_SENTRY_DISABLED": "true"
+      }
+    },
+    "swift-lsp": {
+      "command": "/opt/homebrew/bin/mcp-language-server",
+      "args": [
+        "--workspace", "/Volumes/Storage/Projects/OpenWork-Swift",
+        "--lsp", "/usr/bin/xcrun",
+        "--",
+        "sourcekit-lsp"
+      ],
+      "env": {
+        "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer"
+      }
+    }
+  }
+}

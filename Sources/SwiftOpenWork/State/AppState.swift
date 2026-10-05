@@ -170,6 +170,7 @@ public final class AppState: ObservableObject {
     @Published public var providers: [ModelProvider] = []
     @Published public var tools: [Tool] = []
     @Published public var skills: [Skill] = []
+    @Published public var customSlashCommands: [CustomSlashCommand] = []
     @Published public var plugins: [AppExtensionPlugin] = []
     @Published public var memories: [MemoryItem] = []
     @Published public var automations: [Automation] = []
@@ -276,6 +277,7 @@ public final class AppState: ObservableObject {
         self.sessions = persistence.loadSessions()
         self.tools = persistence.loadTools()
         self.skills = persistence.loadSkills()
+        self.customSlashCommands = persistence.loadSlashCommands()
         self.plugins = persistence.loadPlugins()
         self.memories = persistence.loadMemories()
         self.automations = persistence.loadAutomations()
@@ -986,7 +988,9 @@ public final class AppState: ObservableObject {
         attachments: [MessageAttachment] = [],
         onFinished: ((Bool) -> Void)? = nil
     ) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A command the user defined sends its saved prompt in place of what was typed.
+        let trimmed = SlashCommands.expand(typed, custom: customSlashCommands) ?? typed
         guard !trimmed.isEmpty else { onFinished?(false); return }
 
         // Queue a follow-up instead of dropping the message when a turn is already running.
@@ -1404,6 +1408,10 @@ public final class AppState: ObservableObject {
         }
     }
 
+    public func saveCustomSlashCommands() {
+        persistence.saveSlashCommands(customSlashCommands)
+    }
+
     private func handleSlashCommand(_ command: String) -> Bool {
         let parts = command.split(separator: " ")
         guard let first = parts.first?.lowercased() else { return false }
@@ -1491,6 +1499,7 @@ public final class AppState: ObservableObject {
                     - `/plan` - Toggle plan mode (read-only until exit_plan_mode)
                     - `/clear` - Clear messages in this session
                     - `/compact` - Shrink what the model is sent; your chat stays as is
+                    - Your own commands: Settings → Slash Commands
                     - `/settings` - Jump to App Settings
                     - `/tools` - Inspect MCP & built-in tools
                     - `/memory` - Search or view long-term memory
