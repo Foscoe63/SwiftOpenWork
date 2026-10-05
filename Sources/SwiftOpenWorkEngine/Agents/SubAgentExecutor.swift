@@ -540,17 +540,26 @@ public enum SubAgentExecutor {
 }
 
 /// Tool calls arriving from a stream that is not main-actor isolated.
+///
+/// Streaming providers send one call as a run of growing snapshots under the same id, and the
+/// first one often has empty arguments. Like `AgentToolCallCollector`, a call already held is
+/// *replaced* by its later snapshot, keeping its position. Keeping the first one made sub-agents
+/// on OpenAI-compatible providers run every tool with `{}`.
 public final class ToolCallBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var calls: [ToolCallInfo] = []
+    private var collected = AgentToolCallCollector()
+
+    public init() {}
+
     public func add(_ new: [ToolCallInfo]) {
         lock.lock(); defer { lock.unlock() }
-        for call in new where !calls.contains(where: { $0.id == call.id }) {
-            calls.append(call)
-        }
+        for call in new { collected.add(call) }
     }
+
     public func drain() -> [ToolCallInfo] {
         lock.lock(); defer { lock.unlock() }
-        let out = calls; calls = []; return out
+        let out = collected.snapshot()
+        collected = AgentToolCallCollector()
+        return out
     }
 }
