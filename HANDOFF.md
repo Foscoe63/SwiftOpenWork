@@ -1536,9 +1536,11 @@ macOS is the only authority on whether a login item is registered.
 - **Re-grant Accessibility and Screen Recording** once, if not done since 1.3.1 was installed
   (System Settings → Privacy & Security), and remove the old OpenWork entries. Grants follow the
   Developer ID signature, so they carry over to 1.3.2 and later notarised builds.
-- **Revoke the Firecrawl API key in `config.json`.** The file has been in this public repository
-  since the first commit and holds a live-looking `FIRECRAWL_API_KEY`. Removing the file does not
-  un-publish the key; only revoking it at Firecrawl does.
+- **Revoke the Firecrawl and Context7 API keys that were in `config.json`.** The file sat in this
+  public repository from the first commit with a live-looking `FIRECRAWL_API_KEY` and a Context7
+  `--api-key`. It is now deleted and git-ignored (the app never read it; MCP servers and their
+  keys live in Settings → MCP Servers, per-server `env`). Deleting it does not un-publish the
+  keys: they stay in git history, so only revoking them at Firecrawl and Context7 helps.
 
 ### Worth building next
 

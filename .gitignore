@@ -18,6 +18,8 @@ DerivedData/
 .env
 .env.local
 *.key
+# Personal MCP server configs (hold API keys). Add servers in Settings → MCP Servers instead.
+/config.json
 
 # AutoClaw KDream data
 .autoclaw/
