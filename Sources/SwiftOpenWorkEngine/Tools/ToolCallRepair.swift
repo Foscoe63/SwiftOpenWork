@@ -25,7 +25,7 @@ public enum ToolCallRepair {
         "code_diagnostics", "document_symbols", "setup_xcode_language_server", "fetch_url",
         "web_search", "ask_user", "exit_plan_mode", "todo_write", "calculator", "get_current_date",
         "document_extract", "workspace_semantic_search", "generate_image", "mlx_vision_describe",
-        "quit_app", "worktree_create", "worktree_list", "worktree_remove", "screenshot_window",
+        "quit_app", "worktree_create", "worktree_list", "worktree_remove", "worktree_merge", "screenshot_window",
         "accessibility_tree", "run_app", "preview_start", "preview_check", "preview_logs",
         "preview_stop", "agent_spawn", "agent_message", "memory_store", "memory_recall", "mcp_call",
         "gmail_list", "google_calendar_list",
@@ -115,7 +115,7 @@ public enum ToolCallRepair {
     public static let planModeBlocked: Set<String> = [
         "file_write", "file_delete", "file_move", "file_copy", "edit_file", "multi_edit",
         "rename_symbol", "preview_start", "run_app", "git_commit", "worktree_create",
-        "worktree_remove", "setup_xcode_language_server", "terminal_command", "mcp_call",
+        "worktree_remove", "worktree_merge", "setup_xcode_language_server", "terminal_command", "mcp_call",
         "revert_changes",
     ]
 

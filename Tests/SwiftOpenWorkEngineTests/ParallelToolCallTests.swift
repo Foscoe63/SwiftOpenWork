@@ -23,4 +23,15 @@ final class ParallelToolCallTests: XCTestCase {
             XCTAssertFalse(AgentRunner.changesFiles(name), name)
         }
     }
+
+    /// Several delegations in one step start together, except on the local engine, which runs one
+    /// generation at a time anyway.
+    func testSpawnsRunTogetherOnlyWhenThereAreSeveralAndTheModelIsNotLocal() {
+        let cloud = ModelProvider(id: "c", name: "Cloud", type: .cloud, kind: .openai, isEnabled: true)
+        let local = ModelProvider(id: "l", name: "Local", type: .local, kind: .omlx, isEnabled: true)
+        XCTAssertTrue(AgentRunner.spawnsRunTogether(["agent_spawn", "file_read", "agent_spawn"], provider: cloud))
+        XCTAssertFalse(AgentRunner.spawnsRunTogether(["agent_spawn", "file_read"], provider: cloud), "one spawn has nothing to overlap with")
+        XCTAssertFalse(AgentRunner.spawnsRunTogether(["agent_spawn", "agent_spawn"], provider: local))
+        XCTAssertFalse(AgentRunner.isParallelSafe("agent_spawn"), "a spawn is not a read: it only joins a step that delegates more than once")
+    }
 }

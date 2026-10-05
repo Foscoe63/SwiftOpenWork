@@ -78,6 +78,15 @@ public enum ToolSchemaCatalog {
                 requiresApproval: true
             ),
             Tool(
+                id: "worktree_merge",
+                name: "worktree_merge",
+                displayName: "Merge Worktree",
+                description: "Bring a sub-agent's branch into the user's checkout. Default strategy 'apply' adds only that agent's own changes as uncommitted edits for the user to review and commit; 'merge' makes a merge commit and needs a clean checkout. Use when the user wants the work.",
+                category: .system,
+                parametersJsonSchema: schemas["worktree_merge"]!,
+                requiresApproval: true
+            ),
+            Tool(
                 id: "git_commit",
                 name: "git_commit",
                 displayName: "Commit (Worktree Only)",
@@ -345,13 +354,14 @@ public enum ToolSchemaCatalog {
     }
 
     private static let schemas: [String: String] = [
-        "agent_spawn": #"{"type":"object","properties":{"target_agent_id":{"type":"string","description":"Which agent to delegate to - its id or name, from the configured agents."},"task_title":{"type":"string","description":"The objective, stated so it can be worked on without further questions. The sub-agent runs unattended and cannot ask you anything."},"task_description":{"type":"string","description":"Context the sub-agent needs: files, constraints, what done looks like."}},"required":["target_agent_id","task_title"]}"#,
+        "agent_spawn": #"{"type":"object","properties":{"target_agent_id":{"type":"string","description":"Which agent to delegate to - its id or name, from the configured agents."},"task_title":{"type":"string","description":"The objective, stated so it can be worked on without further questions. The sub-agent runs unattended and cannot ask you anything."},"task_description":{"type":"string","description":"Context the sub-agent needs: files, constraints, what done looks like."},"max_steps":{"type":"integer","description":"Optional. Steps it gets, for a task bigger than the default budget; capped at three times the setting. Its time limit grows to match."},"effort":{"type":"string","enum":["off","low","medium","high"],"description":"Optional reasoning effort. Defaults to yours."}},"required":["target_agent_id","task_title"]}"#,
 
         // Isolation. A worktree is where an agent may commit, because history added on a branch
         // of its own cannot rewrite anything you wrote.
         "worktree_create": #"{"type":"object","properties":{"name":{"type":"string","description":"Short name for the task being isolated, e.g. 'dark-mode-fix'. Becomes branch swiftopenwork/<name>."}},"required":["name"]}"#,
         "worktree_list": #"{"type":"object","properties":{}}"#,
         "worktree_remove": #"{"type":"object","properties":{"name":{"type":"string"},"force":{"type":"boolean","description":"Discard uncommitted changes. Refused without this if the worktree is dirty."}},"required":["name"]}"#,
+        "worktree_merge": #"{"type":"object","properties":{"name":{"type":"string","description":"The worktree's folder name or its branch, as the sub-agent's report gave it."},"strategy":{"type":"string","enum":["apply","merge"],"description":"apply (default): the branch's own changes as uncommitted edits. merge: a merge commit; needs a clean checkout."}},"required":["name"]}"#,
         "git_commit": #"{"type":"object","properties":{"worktree_path":{"type":"string","description":"Absolute path of the agent worktree to commit in. Committing anywhere else is refused."},"message":{"type":"string","description":"Commit message."}},"required":["worktree_path","message"]}"#,
 
         // Perception. The agent could write a view and never look at it; these are the eyes.
@@ -407,7 +417,7 @@ public enum ToolSchemaCatalog {
         "search_workspace": #"{"type":"object","properties":{"query":{"type":"string","description":"Natural-language or keyword description of the code you are looking for"},"top_k":{"type":"integer"}},"required":["query"]}"#,
         "mlx_vision_describe": #"{"type":"object","properties":{"path":{"type":"string"},"prompt":{"type":"string"}},"required":["path"]}"#,
         "image_analyze": #"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
-        "agent_message": #"{"type":"object","properties":{"to_agent_id":{"type":"string"},"to_agent_name":{"type":"string"},"content":{"type":"string"},"message_type":{"type":"string"}},"required":["content"]}"#,
+        "agent_message": #"{"type":"object","properties":{"to_agent_id":{"type":"string","description":"The recipient's id or name. A running agent gets it at its next step; one not running gets it if spawned later in this chat."},"content":{"type":"string","description":"The message: a question, a decision, or something it needs to know."}},"required":["to_agent_id","content"]}"#,
         "memory_store": #"{"type":"object","properties":{"key":{"type":"string"},"content":{"type":"string"},"category":{"type":"string"}},"required":["content"]}"#,
         "memory_recall": #"{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}"#,
         "gmail_list": #"{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer"}},"required":[]}"#,

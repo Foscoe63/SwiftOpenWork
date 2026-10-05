@@ -20,7 +20,7 @@ public enum AgentRoleProfiles {
             "file_read", "file_list", "grep", "glob", "workspace_semantic_search",
             "get_current_date",
             "git_status", "git_diff", "git_log", "changed_files", "build_project", "run_tests",
-            "revert_changes", "mcp_mcp-git",
+            "revert_changes", "worktree_list", "worktree_merge", "mcp_mcp-git",
         ],
         "coder-agent": readCode + [
             "file_write", "edit_file", "multi_edit", "file_copy", "file_move", "rename_symbol",
