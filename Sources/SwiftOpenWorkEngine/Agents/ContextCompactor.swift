@@ -195,7 +195,8 @@ public enum ContextCompactor {
     public static func compactAtMilestone(
         _ messages: [ChatMessage],
         minimumMessages: Int = 12,
-        keepRecent: Int = 6
+        keepRecent: Int = 6,
+        currentRequestId: String? = nil
     ) -> (messages: [ChatMessage], didCompact: Bool) {
         guard messages.count >= minimumMessages else { return (messages, false) }
         let doomed = digest(of: Array(messages.dropLast(keepRecent)))
@@ -203,19 +204,45 @@ public enum ContextCompactor {
             return (messages, false)
         }
         // Threshold 0 forces the existing path to act; it already keeps the task and a digest.
-        return compactIfNeeded(messages, thresholdTokens: 0, keepRecent: keepRecent)
+        return compactIfNeeded(messages, thresholdTokens: 0, keepRecent: keepRecent, currentRequestId: currentRequestId)
     }
 
     // MARK: - Compaction
 
+    /// Share of the model's context window the transcript may fill before it is compacted.
+    public static let compactionWindowFraction = 0.7
+
+    /// The token count that triggers compaction: the user's setting, but never more than
+    /// `compactionWindowFraction` of the model's window, so a small local model compacts before it
+    /// overflows. An unknown window (0) leaves the setting as is.
+    public static func compactionThreshold(settingTokens: Int, contextWindow: Int) -> Int {
+        guard contextWindow > 0 else { return settingTokens }
+        return min(settingTokens, Int(Double(contextWindow) * compactionWindowFraction))
+    }
+
+    /// A user message the person actually wrote, as opposed to a nudge or note the loop injected.
+    static func isPersonRequest(_ message: ChatMessage) -> Bool {
+        guard message.role == .user else { return false }
+        let text = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !text.hasPrefix("[System") && !text.hasPrefix("[Context compacted]")
+    }
+
     /// Drop the middle of the conversation when it exceeds the budget, keeping the original task,
     /// a digest of what the dropped stretch did, and the most recent turns.
+    ///
+    /// The transcript is the whole session, so its first user message is the session's *first*
+    /// request, not necessarily the current one. The current request (`currentRequestId`, or else
+    /// the latest message the person wrote) is kept too: dropping it left the agent working toward
+    /// an old goal. `extraCharacters` is the system prompt and tool schemas, counted as in
+    /// `estimatedTokens`.
     public static func compactIfNeeded(
         _ messages: [ChatMessage],
         thresholdTokens: Int,
-        keepRecent: Int = 12
+        keepRecent: Int = 12,
+        currentRequestId: String? = nil,
+        extraCharacters: Int = 0
     ) -> (messages: [ChatMessage], didCompact: Bool) {
-        let estimate = estimateTokens(messages)
+        let estimate = estimatedTokens(messages, extraCharacters: extraCharacters)
         guard estimate > thresholdTokens, messages.count > keepRecent + 2 else {
             return (messages, false)
         }
@@ -230,8 +257,22 @@ public enum ContextCompactor {
         }
 
         let tailStart = max(head.count, messages.count - keepRecent)
-        let dropped = Array(messages[head.count..<tailStart])
+        var dropped = Array(messages[head.count..<tailStart])
         let tail = Array(messages[tailStart...])
+
+        // The request being worked on now, when it would otherwise fall in the dropped middle.
+        var current: [ChatMessage] = []
+        let currentIndex: Int?
+        if let currentRequestId {
+            currentIndex = dropped.firstIndex { $0.id == currentRequestId }
+        } else if tail.contains(where: isPersonRequest) {
+            currentIndex = nil
+        } else {
+            currentIndex = dropped.lastIndex(where: isPersonRequest)
+        }
+        if let currentIndex {
+            current = [dropped.remove(at: currentIndex)]
+        }
         guard !dropped.isEmpty else { return (messages, false) }
 
         let facts = digest(of: dropped)
@@ -246,7 +287,7 @@ public enum ContextCompactor {
             role: .user,
             content: body
         )
-        return (head + [note] + tail, true)
+        return (head + [note] + current + tail, true)
     }
 
     /// What a person asking to compact *now* gets: old tool results folded to previews, then the
@@ -264,8 +305,9 @@ public enum ContextCompactor {
         return (compacted.messages, changed, before, after)
     }
 
+    /// Same as `estimatedTokens`; kept so there is one estimator. The old version ignored tool
+    /// call arguments, so a large `file_write` body was invisible to the compaction threshold.
     public static func estimateTokens(_ messages: [ChatMessage]) -> Int {
-        let chars = messages.reduce(0) { $0 + $1.content.count + ($1.reasoning?.count ?? 0) }
-        return max(1, chars / 4)
+        max(1, estimatedTokens(messages))
     }
 }

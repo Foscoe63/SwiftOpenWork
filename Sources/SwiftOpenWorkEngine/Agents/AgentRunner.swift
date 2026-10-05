@@ -1132,6 +1132,9 @@ var mcpPromptSummary = ""
         var workingMessages = group.map {
             GroupChat.flatten(session.messages, speakerId: baseAgent.id, names: $0.names)
         } ?? session.modelHistory()
+        // What the person asked for this turn. The transcript is the whole session, so compaction
+        // must be told which request is current or it keeps only the session's first one.
+        let currentRequestId = workingMessages.last(where: ContextCompactor.isPersonRequest)?.id
         // The last step's reply, when the turn ended on an answer rather than on tool calls.
         var finalStepText: String?
 
@@ -1279,7 +1282,7 @@ var mcpPromptSummary = ""
             // been paid on the uncompacted one — and it happens at a milestone rather than
             // mid-task.
             if loadedSettings.autoCompactContext, reachedMilestoneThisIteration {
-                let compacted = ContextCompactor.compactAtMilestone(workingMessages)
+                let compacted = ContextCompactor.compactAtMilestone(workingMessages, currentRequestId: currentRequestId)
                 workingMessages = compacted.messages
                 if compacted.didCompact {
                     accumulator.appendNotice("Milestone reached — earlier steps compacted.")
@@ -1290,7 +1293,12 @@ var mcpPromptSummary = ""
             if loadedSettings.autoCompactContext {
                 let compacted = ContextCompactor.compactIfNeeded(
                     workingMessages,
-                    thresholdTokens: loadedSettings.contextCompactionThresholdTokens
+                    thresholdTokens: ContextCompactor.compactionThreshold(
+                        settingTokens: loadedSettings.contextCompactionThresholdTokens,
+                        contextWindow: model.contextWindow
+                    ),
+                    currentRequestId: currentRequestId,
+                    extraCharacters: systemPromptWithTools.count
                 )
                 workingMessages = compacted.messages
                 if compacted.didCompact {
