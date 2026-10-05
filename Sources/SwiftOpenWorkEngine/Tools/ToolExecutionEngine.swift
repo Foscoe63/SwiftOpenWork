@@ -2782,21 +2782,21 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     }
 
     private func evaluateMath(expression: String, startTime: Double) -> ToolExecutionResult {
-        let clean = expression.replacingOccurrences(of: "x", with: "*").replacingOccurrences(of: "^", with: "**")
-        let expr = NSExpression(format: clean)
-        if let result = expr.expressionValue(with: nil, context: nil) {
+        do {
+            let value = try MathEvaluator.evaluate(expression)
             return ToolExecutionResult(
                 success: true,
-                output: "\(result)",
+                output: MathEvaluator.format(value),
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+        } catch {
+            return ToolExecutionResult(
+                success: false,
+                output: "",
+                error: "Unable to evaluate expression '\(expression)': \(error)",
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
         }
-        return ToolExecutionResult(
-            success: false,
-            output: "",
-            error: "Unable to evaluate expression '\(expression)'",
-            durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-        )
     }
 
     private func executeWebSearch(query: String, startTime: Double) async -> ToolExecutionResult {
