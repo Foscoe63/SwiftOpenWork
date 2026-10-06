@@ -1170,6 +1170,8 @@ var mcpPromptSummary = ""
         /// Signatures of calls parsed from the model's text and already sent to run this turn.
         var textCallsAlreadyRun = Set<String>()
         var askUserStreak = 0
+        /// Nudges sent since the model last called a tool, for `maxConsecutiveIntentNudges`.
+        var intentNudgeStreak = 0
         var halted = false
         var finishedNaturally = false
         // Set when a tool result this iteration marked settled progress — a green test run, a
@@ -1534,8 +1536,14 @@ var mcpPromptSummary = ""
                 } else {
                     // Only text that *ends* on an announced action counts: matching anywhere
                     // nudged finished answers ("…now let me know if you'd like changes").
+                    //
+                    // Capped by nudges in a row, not by step number. "iteration < 6" meant a long
+                    // coding turn that announced "Now let me build the project" at step ten simply
+                    // ended, and the person had to type "continue" — which starts a new turn and,
+                    // on a local model, re-reads the whole conversation.
                     let hasUnfulfilledActionIntent = AutoContinuePolicy.endsWithUnfulfilledIntent(newlyGeneratedDelta)
-                        && newlyGeneratedDelta.count < 1200 && iteration < 6
+                        && newlyGeneratedDelta.count < 1200
+                        && intentNudgeStreak < Self.maxConsecutiveIntentNudges
 
                     if hasUnfulfilledActionIntent {
                         // No tool is named: this used to point at `call_tool_by_name`, the first MCP
@@ -1558,6 +1566,7 @@ var mcpPromptSummary = ""
                             content: accumulator.stepText(from: turnTextBefore.count)
                         ))
                         workingMessages.append(nudgeMsg)
+                        intentNudgeStreak += 1
                         continue
                     } else {
                         finalStepText = accumulator.stepText(from: turnTextBefore.count)
@@ -1571,6 +1580,7 @@ var mcpPromptSummary = ""
             // used to grow mid-loop, when the mail chaining appended follow-up calls the model had
             // not asked for; that was removed, so what the model emitted is all that runs.
             if !pendingCallsToExecute.isEmpty {
+                intentNudgeStreak = 0
                 // The step as the model produced it: its text, then the calls it made. Results
                 // follow, each answering its call by id. This used to be appended *after* the
                 // results and held the whole turn's text, so the model read its narration out of
@@ -2218,6 +2228,11 @@ var mcpPromptSummary = ""
 
         accumulator.finalize()
     }
+
+    /// Nudges in a row, with no tool call between them, before a step that only announces an
+    /// action is taken as the turn's end. Two is enough for a model that meant to act; a third
+    /// would only be ignored again.
+    static let maxConsecutiveIntentNudges = 2
 
     /// `workingMessages` without the "[System Command]" and "[System]:" notes the loop adds to
     /// steer a turn (stop narrating, stop retrying a dead MCP server).

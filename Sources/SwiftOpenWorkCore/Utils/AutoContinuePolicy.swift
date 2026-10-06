@@ -70,6 +70,15 @@ public enum AutoContinuePolicy {
         "let me proceed", "let me call", "let me look", "let me read", "let me run", "let me open",
         "i will start by", "i will now check", "i'll start by", "now let me", "first, let me",
         "tools are loaded", "tool definitions",
+        // The verbs a coding turn actually stalls on. Qwen3-Coder-Next ended turns on "Let me
+        // remove the duplicate loop (lines 108-139) to fix this properly." and on "Now let me
+        // build the project to verify the fix.", and the user had to type "continue" each time.
+        "let me fix", "let me build", "let me rebuild", "let me remove", "let me update",
+        "let me add", "let me edit", "let me apply", "let me verify", "let me find", "let me create",
+        "let me write", "let me try", "let me also", "let me now", "let me first", "let me see",
+        "let me examine", "let me inspect", "let me test", "let me implement", "let me make",
+        "let me replace", "let me delete", "let me clean", "let me re-read", "let me continue",
+        "i'll now", "i will now", "next, i'll", "next, i will",
     ]
 
     /// Whether a step's text *ends* by announcing an action it never took ("Now let me check the

@@ -70,6 +70,14 @@ final class UnfulfilledIntentTests: XCTestCase {
         XCTAssertTrue(AutoContinuePolicy.endsWithUnfulfilledIntent("I found the bug. Let me read Config.swift..."))
     }
 
+    /// The two lines that ended turns in a real Qwen3-Coder-Next session.
+    func testCodingVerbsAreStalls() {
+        XCTAssertTrue(AutoContinuePolicy.endsWithUnfulfilledIntent(
+            "I can see there are still duplicate scanning loops. Let me remove the duplicate loop (lines 108-139) to fix this properly."))
+        XCTAssertTrue(AutoContinuePolicy.endsWithUnfulfilledIntent("Now let me build the project to verify the fix."))
+        XCTAssertTrue(AutoContinuePolicy.endsWithUnfulfilledIntent("The import is missing. Let me fix that"))
+    }
+
     func testFinishedAnswersAreNotStalls() {
         XCTAssertFalse(AutoContinuePolicy.endsWithUnfulfilledIntent(
             "I renamed the function and updated callers. Now let me know if you'd like changes."))
@@ -82,6 +90,13 @@ final class UnfulfilledIntentTests: XCTestCase {
     func testNudgeNoLongerNamesAFallbackTool() throws {
         let source = try String(contentsOf: SourceTree.url("Engine/Agents/AgentRunner.swift"), encoding: .utf8)
         XCTAssertFalse(source.contains(#"?? "mcp_call""#), "the nudge pointed models at a tool that may not exist")
+    }
+
+    /// The nudge used to stop after step five, so a long coding turn ended on its own narration.
+    func testNudgeIsCappedByStreakNotByStepNumber() throws {
+        let source = try String(contentsOf: SourceTree.url("Engine/Agents/AgentRunner.swift"), encoding: .utf8)
+        XCTAssertFalse(source.contains("&& iteration < 6"))
+        XCTAssertTrue(source.contains("intentNudgeStreak < Self.maxConsecutiveIntentNudges"))
     }
 }
 
