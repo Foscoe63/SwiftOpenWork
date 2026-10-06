@@ -148,9 +148,14 @@ public final class OllamaService: LLMProviderClient, Sendable {
         }
 
         let loadedSettings = PersistenceManager.shared.loadSettings()
-        let repPenalty = loadedSettings.autoAdjustPenaltiesForLocalModels ? max(1.20, loadedSettings.defaultRepeatPenalty) : loadedSettings.defaultRepeatPenalty
-        let presPenalty = loadedSettings.autoAdjustPenaltiesForLocalModels ? max(0.30, loadedSettings.defaultPresencePenalty) : loadedSettings.defaultPresencePenalty
-        let freqPenalty = loadedSettings.autoAdjustPenaltiesForLocalModels ? max(0.30, loadedSettings.defaultFrequencyPenalty) : loadedSettings.defaultFrequencyPenalty
+        // No penalties when tools are offered: see `AppSettings.samplingPenalties`.
+        let penalties = loadedSettings.samplingPenalties(
+            localFloor: SamplingPenalties(repetition: 1.20, presence: 0.30, frequency: 0.30),
+            toolsOffered: tools.contains(where: \.isEnabled)
+        )
+        let repPenalty = penalties.repetition
+        let presPenalty = penalties.presence
+        let freqPenalty = penalties.frequency
 
         var options: [String: Any] = [
             "temperature": temperature,
