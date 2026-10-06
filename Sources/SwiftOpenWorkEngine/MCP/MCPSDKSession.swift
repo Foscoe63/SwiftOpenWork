@@ -145,7 +145,7 @@ public actor MCPSDKSession {
         }
 
         // Keep draining stderr so a chatty server can never block on a full pipe.
-        errPipe.fileHandleForReading.readabilityHandler = { $0.availableData }
+        errPipe.fileHandleForReading.readabilityHandler = { _ = $0.availableData }
 
         // Retain process before connect so stop() can kill a hung handshake.
         self.process = process
