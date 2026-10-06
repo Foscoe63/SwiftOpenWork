@@ -60,7 +60,7 @@ Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibil
 | ✏️ | Refactor — `rename_symbol` renames through the language server where one applies (only references to that declaration change) and falls back to whole-word replacement otherwise, saying which ran; `dry_run` shows the hit list first |
 | 🔨 | Build & test — `build_project`, `run_tests` — commands are inferred for SwiftPM **and Xcode** projects/workspaces (shared scheme discovery included); failures come back as `file:line: message`, and `run_tests(only_failing: true)` re-runs just the ones that failed |
 | 🌿 | Git — `git_status`, `git_diff`, `git_log`. Committing stays yours *on your checkout*; the agent may commit only inside a worktree of its own, where history is additive and cannot rewrite yours |
-| ↩️ | Undo — `changed_files`, `revert_changes` restore everything a turn touched |
+| ↩️ | Undo — `changed_files`, `revert_changes` restore everything a turn touched. Each session keeps its own undo window, so a Loop, automation or Shortcut run cannot erase a chat's checkpoints or revert its edits |
 | 💻 | Shell — `terminal_command` / `run_command` |
 | 🌐 | Network — `fetch_url`, `web_search` |
 | 💬 | Interaction — `ask_user`, `exit_plan_mode`, `todo_write` |
@@ -72,7 +72,8 @@ Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibil
 
 - **Tool calls are repaired, not rejected.** One layer maps the tool names and argument shapes models actually write (aliases, string-encoded JSON, text-format calls) onto the real tools. Approvals, plan mode and sub-agent path checks judge the *resolved* call, so an alias cannot get around them
 - **File tools fail closed.** `file_write` without content does not wipe the file, `file_delete` cannot remove the workspace, move/copy check the source first, and `edit_file` / `multi_edit` tolerate whitespace drift and say where a miss stopped matching
-- A shell command that times out has its whole process tree killed
+- A shell command that times out, or that you stop with **Stop**, has its whole process tree killed — a 10-minute build no longer outlives the button. `terminal_command` takes `timeout_seconds` and `run_in_background` (the command runs in the app terminal and the turn carries on)
+- **No sampling penalties on tool turns.** Repetition, presence and frequency penalties push a model away from tokens it just wrote, but an edit has to repeat them exactly (`old_string` copied from the file, indentation, closing tags). Requests that offer tools on the in-process MLX, Ollama and OpenAI-compatible paths send neutral penalties; plain chat keeps yours
 - Full JSON parameter schemas via `ToolSchemaCatalog` (critical for local-model tool use)
 - **Workspace context** in the system prompt — path, project type, layout, git branch and dirty count
 - **Per-repo instructions** — `SWIFTOPENWORK.md` / `AGENTS.md` / `CLAUDE.md` at the workspace root (`OPENWORK.md` from 1.1 is still read)
@@ -82,6 +83,7 @@ Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibil
 - **Live command output** — a build or test run streams into the tool card and the terminal panel while it runs, instead of showing nothing until it exits
 - **Menu bar monitor** (optional, off by default) — memory gauge, loaded models with unload, background runs. Inspector tabs can open in their own windows (Cmd-Opt-D), and local models show quantisation variants judged against free memory
 - **Fork a conversation** from any message — right-click it. The branch is the conversation only: files the discarded turns changed are still on disk, and the fork says which
+- **`/compact`** folds old tool results and digests the middle of the transcript on demand; the visible chat is untouched. Automatic compaction always keeps the request being worked on, and its threshold is your setting (default 100K tokens) capped at 70% of the model's window, so small local models compact before they overflow
 - Context compaction keeps a factual digest of what dropped turns did (files edited, commands run, failures), so a long session does not forget its own work. It fires at *milestones* — a green test run, a clean tree — as well as on token pressure, so it trades detail for room when history is most disposable
 - **Shortcuts & Siri** — "Ask SwiftOpenWork" and "Run Automation" App Intents run the same agent loop. Approvals are refused rather than awaited when nothing is on screen to grant them, and the result reports what it skipped
 - **Plan mode** (read-only tools + `exit_plan_mode`)
@@ -93,6 +95,8 @@ Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibil
 - **Hybrid search** — `search_workspace` fuses BM25 with semantic vectors from a small on-device MLX encoder, downloaded only when you ask for it in Settings; BM25 alone is the fallback
 - Approval gates for destructive / MCP write actions. MCP read/write classification is **fail-closed**: a tool is a read only when a known server advertises it and it is absent from that server's write list, so unknown servers ask. Expect more prompts than a name-prefix heuristic would produce — that is the point
 - **Sub-agents** — the lead delegates with `agent_spawn`; several spawns in one step run at the same time (up to 4, one at a time on a local model), each in its own worktree, and the lead can ask for more steps (`max_steps`) or a reasoning level (`effort`). Sub-agents think as hard as the lead unless told otherwise. `agent_message` reaches a running agent at its next step, or waits for its next run in the same chat. `worktree_merge` brings a sub-agent's branch into your checkout, as uncommitted edits by default (`apply`) or as a merge commit on a clean checkout (`merge`), and always asks first. Spawns and messages also show in the Side Inspector
+- **Sub-agent isolation** — a sub-agent's shell writes, and `cd` or `git -C` outside its worktree, are refused at any approval level; its report leaves out your own pending edits and follows renames, and dependency caches are cloned into the worktree. Plan mode refuses non-read MCP calls, `agent_spawn` and `send_input`
+- **Anthropic prompt caching** — cache breakpoints on the tools, the system prompt and the last message, with volatile git status and the handoff placed behind the cache boundary, so a long Claude session pays for its prefix once. Failed tool results are sent with `is_error`
 - **Least-privilege agents** — every built-in agent gets Hindsight recall and retain by tool name (reflect only for lead, research, architect and security), never the whole server. New agents start from a minimal tool and skill baseline, and the agent editor can grant single MCP tools
 
 ### Group chats
@@ -209,7 +213,7 @@ self-verifying workflow** the agent runs against a workspace until it actually p
 - **Composer input** — `@file` and `@folder` completion, `@path:line` to paste a focused, numbered excerpt around a line, `@path:first-last` for exactly those lines (what **Mention in Chat** sends for an editor selection), and drag-and-drop or paste of files and images straight into the box
 - **Start from a template** — a new workspace can start empty or as a static site, a React (Vite) app, a SwiftUI Mac app or a Python script, each with an `AGENTS.md` that tells the agent how to run and check that kind of project. A new or empty folder also gets a `.gitignore`, `git init` and a first commit, so diffs, worktrees and commits work from the start. A folder that already has files is left as it is
 - **Commit from the app** — *Changes this session* has **Commit…**: a checkbox per file and an editable message. Only the session's files are committed, and anything else you had staged stays staged. The agent still cannot commit on your checkout
-- **Context meter** — the last turn's real prompt-token count against the model's window, shown beside the composer once it passes half full, amber and then red as compaction gets close. The provider's own number, never an estimate
+- **Context meter** — the last turn's real prompt-token count against the model's window, shown beside the composer once it passes half full, amber and then red as compaction gets close. The provider's own number — and when that number is impossible (larger than the window, or far above what the transcript holds) the meter says so and shows a marked estimate instead
 - **Finished-turn notifications** — a chime plus a banner naming the session, only when the app is in the background and only for turns long enough to have walked away from. A turn that *failed* is announced however short it was
 
 ---
@@ -229,6 +233,7 @@ SwiftOpenWork speaks the [Model Context Protocol](https://modelcontextprotocol.i
 | 🎚️ | Per-tool switches under each server, so you can enable a server without enabling everything on it |
 | 📋 | “What MCP servers are available?” answers from config + live status — **no tool thrash** |
 | 🩺 | Settings → Skills & MCP shows connected / error / tool counts; **Test** probes a server |
+| 🪶 | Past 12 tools a server's tools are listed by name only, and `mcp_describe` loads the full schema of the ones the model picks, so a large server does not eat the prompt. `mcp_resources` reads a server's resources and prompts; images a tool returns are saved and attached, embedded resource text is kept, and a `tools/list_changed` notice refreshes the list |
 | 🔒 | Stock servers ship **disabled** — enable only what you trust |
 | 🌍 | Remote MCP over **Streamable HTTP** — a real `initialize` handshake, session-id tracking, `text/event-stream` replies, and `isError` results surfaced as failures, not silent successes. Clearer 401 messaging and an optional bearer token (`MCP_TOKEN` / headers); a server that still only speaks the older SSE transport gets a message saying so instead of a bare 404/405 |
 
