@@ -64,12 +64,34 @@ public enum AutoContinuePolicy {
         return last.hasSuffix("?")
     }
 
-    /// Phrases that announce a tool call the model is about to make.
+    /// Phrases that announce a tool call the model is about to make, whatever verb follows.
     static let intentPhrases = [
-        "let me start", "let me check", "let me get", "let me list", "let me emit", "let me search",
-        "let me proceed", "let me call", "let me look", "let me read", "let me run", "let me open",
-        "i will start by", "i will now check", "i'll start by", "now let me", "first, let me",
+        "i will start by", "i will now check", "i'll start by",
         "tools are loaded", "tool definitions",
+    ]
+
+    /// "Let me …" closes a stalled step whatever the verb: a list of verbs missed "let me fix",
+    /// "let me remove", "let me build", so a model that announced every edit and then stopped
+    /// ended the turn as though it had finished. These are the verbs that do not announce a tool.
+    static let nonActionLetMe = [
+        "know", "explain", "summarize", "summarise", "recap", "be clear", "clarify", "walk you",
+        "describe", "note", "mention", "point out", "show you why",
+    ]
+
+    /// Verbs that make "I'll …", "I will …", "I need to …" an announced action rather than a
+    /// sign-off ("I'll leave that to you").
+    static let actionVerbs = [
+        "check", "read", "look", "search", "find", "list", "open", "run", "re-run", "rerun",
+        "build", "rebuild", "compile", "test", "fix", "edit", "update", "modify", "change",
+        "remove", "delete", "add", "create", "write", "rewrite", "apply", "implement", "refactor",
+        "rename", "replace", "move", "verify", "examine", "inspect", "review", "start", "proceed",
+        "call", "get", "emit", "try", "make", "clean", "restore", "insert", "correct", "resolve",
+        "view", "grep", "glob", "use", "restructure", "define", "declare", "investigate",
+    ]
+
+    static let actionLeads = [
+        "i'll ", "i will ", "i need to ", "i'm going to ", "i am going to ", "i should ",
+        "next, i'll ", "next i'll ", "now i'll ", "now i will ", "now i need to ", "let's ",
     ]
 
     /// Whether a step's text *ends* by announcing an action it never took ("Now let me check the
@@ -90,7 +112,36 @@ public enum AutoContinuePolicy {
                 lastSentence = lastSentence[range.upperBound...]
             }
         }
-        if lastSentence.contains("let me know") { return false }
-        return intentPhrases.contains { lastSentence.contains($0) }
+        let sentence = lastSentence.replacingOccurrences(of: "\u{2019}", with: "'")
+        if intentPhrases.contains(where: { sentence.contains($0) }) { return true }
+
+        // "Let me <verb>" anywhere in the sentence, unless the verb is talk rather than action.
+        var cursor = sentence.startIndex
+        while let range = sentence.range(of: "let me ", range: cursor..<sentence.endIndex) {
+            let rest = sentence[range.upperBound...]
+            if !nonActionLetMe.contains(where: { rest.hasPrefix($0) }) { return true }
+            cursor = range.upperBound
+        }
+
+        // "I'll fix …", "Now I need to update …".
+        for lead in actionLeads {
+            var cursor = sentence.startIndex
+            while let range = sentence.range(of: lead, range: cursor..<sentence.endIndex) {
+                let atWordStart = range.lowerBound == sentence.startIndex
+                    || !sentence[sentence.index(before: range.lowerBound)].isLetter
+                let rest = sentence[range.upperBound...]
+                    .drop { $0 == " " }
+                let restText = rest.hasPrefix("now ") || rest.hasPrefix("first ")
+                    ? String(rest.drop { $0 != " " }.dropFirst())
+                    : String(rest)
+                if atWordStart, actionVerbs.contains(where: { verb in
+                    restText.hasPrefix(verb + " ") || restText == verb
+                }) {
+                    return true
+                }
+                cursor = range.upperBound
+            }
+        }
+        return false
     }
 }
