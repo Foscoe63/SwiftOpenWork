@@ -620,3 +620,50 @@ public struct AppSettings: Codable, Hashable, Sendable {
         AppSettings()
     }
 }
+
+/// Repetition, presence and frequency penalties for one request.
+public struct SamplingPenalties: Equatable, Sendable {
+    /// Multiplicative; 1.0 is a no-op.
+    public var repetition: Double
+    /// Additive; 0 is a no-op.
+    public var presence: Double
+    /// Additive; 0 is a no-op.
+    public var frequency: Double
+
+    public init(repetition: Double, presence: Double, frequency: Double) {
+        self.repetition = repetition
+        self.presence = presence
+        self.frequency = frequency
+    }
+
+    public static let neutral = SamplingPenalties(repetition: 1.0, presence: 0, frequency: 0)
+}
+
+extension AppSettings {
+    /// The penalties to send with a request.
+    ///
+    /// `localFloor` is what `autoAdjustPenaltiesForLocalModels` raises weak values to for a local
+    /// model; pass nil for a cloud endpoint.
+    ///
+    /// A request that offers tools gets no penalties at all. A tool call and the code inside it
+    /// have to repeat recent tokens exactly — `old_string` is copied from the file just read, every
+    /// line of Swift opens with the same indentation, and `</parameter>` closes every argument —
+    /// and these penalties exist to push the model *away* from recent tokens. With the defaults
+    /// (1.25, 0.35, 0.35, all over the last 20 tokens) Qwen3-Coder-Next could make short read
+    /// calls but never produced an edit: a session ran two turns, read the same files twice and
+    /// changed nothing. Looping in an agent turn is caught by the stream loop breaker instead.
+    public func samplingPenalties(localFloor: SamplingPenalties?, toolsOffered: Bool) -> SamplingPenalties {
+        if toolsOffered { return .neutral }
+        let chosen = SamplingPenalties(
+            repetition: defaultRepeatPenalty,
+            presence: defaultPresencePenalty,
+            frequency: defaultFrequencyPenalty
+        )
+        guard autoAdjustPenaltiesForLocalModels, let floor = localFloor else { return chosen }
+        return SamplingPenalties(
+            repetition: max(floor.repetition, chosen.repetition),
+            presence: max(floor.presence, chosen.presence),
+            frequency: max(floor.frequency, chosen.frequency)
+        )
+    }
+}

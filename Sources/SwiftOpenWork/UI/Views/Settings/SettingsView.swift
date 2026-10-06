@@ -1127,7 +1127,7 @@ public struct SettingsView: View {
                     }
                 }
 
-                SettingsRow(title: "Auto-Detect & Optimize for Local Models", subtitle: "Automatically apply higher penalties and ReAct safety for MLX, Ollama, and local endpoints", icon: "wand.and.stars") {
+                SettingsRow(title: "Auto-Detect & Optimize for Local Models", subtitle: "Automatically apply higher penalties and ReAct safety for MLX, Ollama, and local endpoints. Turns that use tools never get penalties: they break code edits", icon: "wand.and.stars") {
                     Toggle("", isOn: $appState.settings.autoAdjustPenaltiesForLocalModels)
                         .toggleStyle(.switch)
                 }

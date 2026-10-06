@@ -393,7 +393,8 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
                 history: history,
                 generateParameters: Self.generateParameters(
                     maxTokens: maxTokens,
-                    temperature: temperature
+                    temperature: temperature,
+                    toolsOffered: !toolSpecs.isEmpty
                 ),
                 // `reasoningEffort` used to arrive here and go nowhere: this is the only real
                 // in-process engine, and its ChatSession never got the `enable_thinking` context
@@ -713,14 +714,19 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     public static func generateParameters(
         maxTokens: Int,
         temperature: Double,
+        toolsOffered: Bool = false,
         settings: AppSettings? = nil
     ) -> GenerateParameters {
         let s = settings ?? PersistenceManager.shared.loadSettings()
-        let boost = s.autoAdjustPenaltiesForLocalModels
-        // Same floors the Ollama path applies for local endpoints.
-        let repetition = boost ? max(1.20, s.defaultRepeatPenalty) : s.defaultRepeatPenalty
-        let presence = boost ? max(0.30, s.defaultPresencePenalty) : s.defaultPresencePenalty
-        let frequency = boost ? max(0.30, s.defaultFrequencyPenalty) : s.defaultFrequencyPenalty
+        // Same floors the Ollama path applies for local endpoints. None when tools are offered:
+        // see `AppSettings.samplingPenalties`.
+        let penalties = s.samplingPenalties(
+            localFloor: SamplingPenalties(repetition: 1.20, presence: 0.30, frequency: 0.30),
+            toolsOffered: toolsOffered
+        )
+        let repetition = penalties.repetition
+        let presence = penalties.presence
+        let frequency = penalties.frequency
 
         return GenerateParameters(
             maxTokens: maxTokens > 0 ? maxTokens : 4096,

@@ -67,6 +67,33 @@ final class MLXParametersTests: XCTestCase {
         XCTAssertNil(p.frequencyPenalty)
     }
 
+    /// The bug: with the default penalties Qwen3-Coder-Next read files but never produced an
+    /// edit, because a tool call has to repeat recent tokens exactly. A turn that offers tools
+    /// gets none, whatever the settings say.
+    func testATurnThatOffersToolsGetsNoPenalties() {
+        let p = NativeMLXService.generateParameters(
+            maxTokens: 512, temperature: 0.7, toolsOffered: true,
+            settings: settings(boost: true, repeatP: 1.25, presence: 0.35, frequency: 0.35)
+        )
+        XCTAssertNil(p.repetitionPenalty)
+        XCTAssertNil(p.presencePenalty)
+        XCTAssertNil(p.frequencyPenalty)
+    }
+
+    func testPlainChatStillGetsTheLocalFloors() {
+        let s = settings(boost: true, repeatP: 1.0, presence: 0, frequency: 0)
+        XCTAssertEqual(
+            s.samplingPenalties(localFloor: SamplingPenalties(repetition: 1.2, presence: 0.3, frequency: 0.3), toolsOffered: false),
+            SamplingPenalties(repetition: 1.2, presence: 0.3, frequency: 0.3)
+        )
+        XCTAssertEqual(
+            s.samplingPenalties(localFloor: nil, toolsOffered: false),
+            SamplingPenalties(repetition: 1.0, presence: 0, frequency: 0),
+            "a cloud endpoint gets no floor"
+        )
+        XCTAssertEqual(s.samplingPenalties(localFloor: nil, toolsOffered: true), .neutral)
+    }
+
     func testTopPIsHonouredAndNeverZero() {
         XCTAssertEqual(
             NativeMLXService.generateParameters(maxTokens: 1, temperature: 0, settings: settings(boost: false, topP: 0.9)).topP,

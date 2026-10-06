@@ -296,8 +296,13 @@ public final class OpenAIService: LLMProviderClient, Sendable {
         }
 
         let loadedSettings = PersistenceManager.shared.loadSettings()
-        let presencePenalty = loadedSettings.autoAdjustPenaltiesForLocalModels && isLocalEndpoint ? max(0.35, loadedSettings.defaultPresencePenalty) : loadedSettings.defaultPresencePenalty
-        let frequencyPenalty = loadedSettings.autoAdjustPenaltiesForLocalModels && isLocalEndpoint ? max(0.35, loadedSettings.defaultFrequencyPenalty) : loadedSettings.defaultFrequencyPenalty
+        // No penalties when tools are offered: see `AppSettings.samplingPenalties`.
+        let penalties = loadedSettings.samplingPenalties(
+            localFloor: isLocalEndpoint ? SamplingPenalties(repetition: 1.0, presence: 0.35, frequency: 0.35) : nil,
+            toolsOffered: tools.contains(where: \.isEnabled)
+        )
+        let presencePenalty = penalties.presence
+        let frequencyPenalty = penalties.frequency
 
         var body: [String: Any] = [
             "model": model.id,
