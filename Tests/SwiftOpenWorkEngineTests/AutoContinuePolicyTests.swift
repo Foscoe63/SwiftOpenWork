@@ -79,6 +79,29 @@ final class UnfulfilledIntentTests: XCTestCase {
         XCTAssertFalse(AutoContinuePolicy.endsWithUnfulfilledIntent(""))
     }
 
+    /// Step endings from a real session that ended the turn instead of being nudged.
+    func testEditAndBuildAnnouncementsAreStalls() {
+        XCTAssertTrue(AutoContinuePolicy.endsWithUnfulfilledIntent("Now let me build the project to verify the fix."))
+        XCTAssertTrue(AutoContinuePolicy.endsWithUnfulfilledIntent(
+            "The second loop is redundant. Let me remove the duplicate loop (lines 108-139) to fix this properly."))
+        XCTAssertTrue(AutoContinuePolicy.endsWithUnfulfilledIntent("Let me fix the error in `FilePreviewView.swift`:"))
+        XCTAssertTrue(AutoContinuePolicy.endsWithUnfulfilledIntent(
+            "I see the issue. I need to fix this by removing lines 107-162."))
+        XCTAssertTrue(AutoContinuePolicy.endsWithUnfulfilledIntent("Now I'll update PrivilegedCleanup to use PathGuard."))
+    }
+
+    func testSignOffsAreNotStalls() {
+        XCTAssertFalse(AutoContinuePolicy.endsWithUnfulfilledIntent("The build passes. Let me know if you want tests too."))
+        XCTAssertFalse(AutoContinuePolicy.endsWithUnfulfilledIntent("Done. Let me explain what changed."))
+        XCTAssertFalse(AutoContinuePolicy.endsWithUnfulfilledIntent("I'll leave the migration to you."))
+        XCTAssertFalse(AutoContinuePolicy.endsWithUnfulfilledIntent("All four errors are fixed and the project builds."))
+    }
+
+    func testNudgeIsNotLimitedToTheFirstRounds() throws {
+        let source = try String(contentsOf: SourceTree.url("Engine/Agents/AgentRunner.swift"), encoding: .utf8)
+        XCTAssertFalse(source.contains("&& iteration < 6"), "stalls after round six ended the turn un-nudged")
+    }
+
     func testNudgeNoLongerNamesAFallbackTool() throws {
         let source = try String(contentsOf: SourceTree.url("Engine/Agents/AgentRunner.swift"), encoding: .utf8)
         XCTAssertFalse(source.contains(#"?? "mcp_call""#), "the nudge pointed models at a tool that may not exist")

@@ -1153,6 +1153,9 @@ var mcpPromptSummary = ""
         }
 
         var iteration = 0
+        // Nudges sent since the model last called a tool. A long coding turn announces an edit,
+        // stalls, and is nudged many times over; only a run of nudges it ignores ends the turn.
+        var consecutiveIntentNudges = 0
         // Continue from the transcript the model saw last turn, so the local engine's cache
         // extends it instead of re-reading the whole conversation (see `Session.modelHistory`).
         var workingMessages = group.map {
@@ -1535,7 +1538,8 @@ var mcpPromptSummary = ""
                     // Only text that *ends* on an announced action counts: matching anywhere
                     // nudged finished answers ("…now let me know if you'd like changes").
                     let hasUnfulfilledActionIntent = AutoContinuePolicy.endsWithUnfulfilledIntent(newlyGeneratedDelta)
-                        && newlyGeneratedDelta.count < 1200 && iteration < 6
+                        && newlyGeneratedDelta.count < 2000
+                        && consecutiveIntentNudges < Self.maxConsecutiveIntentNudges
 
                     if hasUnfulfilledActionIntent {
                         // No tool is named: this used to point at `call_tool_by_name`, the first MCP
@@ -1558,6 +1562,7 @@ var mcpPromptSummary = ""
                             content: accumulator.stepText(from: turnTextBefore.count)
                         ))
                         workingMessages.append(nudgeMsg)
+                        consecutiveIntentNudges += 1
                         continue
                     } else {
                         finalStepText = accumulator.stepText(from: turnTextBefore.count)
@@ -1571,6 +1576,7 @@ var mcpPromptSummary = ""
             // used to grow mid-loop, when the mail chaining appended follow-up calls the model had
             // not asked for; that was removed, so what the model emitted is all that runs.
             if !pendingCallsToExecute.isEmpty {
+                consecutiveIntentNudges = 0
                 // The step as the model produced it: its text, then the calls it made. Results
                 // follow, each answering its call by id. This used to be appended *after* the
                 // results and held the whole turn's text, so the model read its narration out of
@@ -2332,6 +2338,11 @@ var mcpPromptSummary = ""
 
     /// Sub-agents started together at most. Each holds a model stream and its own worktree.
     public nonisolated static let maxParallelSubAgents = 4
+
+    /// Announced-but-not-called steps nudged in a row before the turn is taken as finished. It
+    /// used to be "only in the first six rounds", so a coding turn past round six that said
+    /// "Now let me build the project" and stopped ended there, and the user had to press Continue.
+    public nonisolated static let maxConsecutiveIntentNudges = 2
 
     /// Whether a step's `agent_spawn` calls start together rather than one after another: there
     /// must be more than one, and the run must not be on the local engine, which serialises
