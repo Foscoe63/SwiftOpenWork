@@ -200,7 +200,7 @@ up to the top of Tier 2.
 
 ## Revised priority
 
-Status as of 2026-10-12: items 1–5 and 7 are built (PR #49) except the pieces marked deferred below; the task board, remote access and Side Chat are deferred by choice.
+Status as of 2026-10-12: items 1–5 are built (PR #49). In item 7 the untrusted-project prompt and document generation are built; a built-in markdown memory is not (the app already has memory tools). The task board, remote access and Side Chat are deferred by choice.
 
 1. Hooks, rule-based permissions, read-before-edit gate (unchanged).
 2. Event/audit log with interrupted-turn resume (new, builds on checkpoints).
