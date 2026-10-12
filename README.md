@@ -67,7 +67,9 @@ Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibil
 | 👁️ | **Perception** — `screenshot_window` (see any running app's window), `accessibility_tree` (read it as text — cheap, and works with text-only models), `run_app` (launch it and report what happened) |
 | 🌍 | **Live preview** — `preview_start` (detect and run the dev server, or serve a static site), `preview_check` (reload and report console errors, failed requests, visible text and a screenshot — for any preview tab), `preview_logs`, `preview_stop` |
 | 🌿 | Isolation — `worktree_create`, `worktree_list`, `worktree_remove`, `worktree_merge`, `git_commit` (confined to agent worktrees) |
+| 🔀 | Pull requests — `pr_status` (the branch's PR and CI checks; with `include_failed_logs`, the failing job's log) and `pr_create` (pushes the branch and opens the PR; always asks), through the `gh` you are signed in with |
 | 🧮 | Utilities — `calculator`, `get_current_date`, `document_extract` |
+| 📝 | Documents — `document_create` writes Word, PDF, RTF, HTML and Excel files from Markdown or CSV |
 | 📧 | Optional Google — `gmail_*`, `google_calendar_*` |
 
 - **Tool calls are repaired, not rejected.** One layer maps the tool names and argument shapes models actually write (aliases, string-encoded JSON, text-format calls) onto the real tools. Approvals, plan mode and sub-agent path checks judge the *resolved* call, so an alias cannot get around them
@@ -102,7 +104,7 @@ Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibil
 ### Control, trust and review
 
 - **Permission rules** — `.swiftopenwork/permissions.json` (and `~/.swiftopenwork/permissions.json` for every project) allow, ask or deny individual calls by tool and pattern: `"allow": ["terminal_command(git status*)"]`, `"deny": ["file_*(**/.env*)", "terminal_command(rm -rf *)"]`. Deny beats ask beats allow. An allow never covers a chained command (`a; b`, `a && b`, pipes, redirects, `$(…)`), and never lifts the guards on secret files, plan mode or new sites; an ask rule survives *Allow All*. Enforced where every tool call passes, so sub-agents and parallel calls cannot route around a rule. The approval card offers **Always allow `git status *`** and writes the narrowest rule that covers the call (a chained line is remembered exactly)
-- **Hooks** — commands the app runs at fixed points, in Claude Code's file format (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`; exit 2 blocks and its stderr goes to the model; JSON on stdout can add context). A project's hooks are code that arrives with a checkout, so they do not run until you trust that exact file (Settings → Permission Rules & Hooks); editing the file withdraws the trust
+- **Hooks** — commands the app runs at fixed points, in Claude Code's file format (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`; exit 2 blocks and its stderr goes to the model; JSON on stdout can add context). A project's hooks are code that arrives with a checkout, so they do not run until you trust that exact file (Settings → Advanced → Permission Rules & Hooks); editing the file withdraws the trust
 - **Audit log** — one JSON line per event in `audit/<chat>.jsonl` under the app's data folder: each turn, and each tool call with who allowed it (automatic, approved, rejected, refused-unattended, denied by rule, blocked by hook), its outcome and duration. Secrets are scrubbed before they are written
 - **Interrupted turns resume** — a turn the app quit during comes back with a Continue button instead of a silent spinner, and its half-run tool calls are marked interrupted
 - **Steer** — a message typed while the agent is working is queued (several are joined); **Steer** stops the agent where it is and sends them now. What it already did stays
@@ -111,8 +113,8 @@ Needs macOS 14 or later; Apple Silicon for the built-in local models. Accessibil
 - **Spend limit** — alongside the token budget, a dollar limit priced from the model's own rates (Settings → Advanced). Local models are free, so it never stops them
 - **Project trust** — a project's `AGENTS.md`, `CLAUDE.md` and skills are read only after you have seen what is there ("This project has AGENTS.md and 2 skills"). Trust covers the *sources*, not their wording, so a typo fix does not ask again but a new skill does. Projects already open when this arrived are acknowledged as they stand
 - **Documents** — `document_create` writes Word, PDF, RTF, HTML and Excel files from Markdown or CSV, with nothing to install
-- **External agents (ACP)** — run Claude Code, Codex, Gemini CLI, OpenCode, Goose or any Agent Client Protocol agent as a chat agent (Settings → External Agents). They keep their own models and sign-ins; permission requests are answered by your rules and approval level, files they read or write go through the workspace boundary and undo checkpoints, and Stop sends `session/cancel`. Their own tools run in their process, so hooks and the shell sandbox cannot see those
-- **Local model API** — Settings → Local Model API serves the model loaded here as an OpenAI (`/v1/chat/completions`) and Anthropic (`/v1/messages`) endpoint on `127.0.0.1`, so Claude Code, Codex, OpenCode or a script can use it without loading a second copy. A bearer key on every request, no browser access (`Origin` and non-loopback `Host` are refused), local models only unless you opt in
+- **External agents (ACP)** — run Claude Code, Codex, Gemini CLI, OpenCode, Goose or any Agent Client Protocol agent as a chat agent (Settings → Advanced → External Agents). They keep their own models and sign-ins; permission requests are answered by your rules and approval level, files they read or write go through the workspace boundary and undo checkpoints, and Stop sends `session/cancel`. Their own tools run in their process, so hooks and the shell sandbox cannot see those
+- **Local model API** — Settings → Advanced → Local Model API serves the model loaded here as an OpenAI (`/v1/chat/completions`) and Anthropic (`/v1/messages`) endpoint on `127.0.0.1`, so Claude Code, Codex, OpenCode or a script can use it without loading a second copy. A bearer key on every request, no browser access (`Origin` and non-loopback `Host` are refused), local models only unless you opt in
 - **Evals** — `Evals/` holds small coding tasks scored by a command; run them through the real agent loop against any OpenAI-compatible endpoint and compare two runs (see `Evals/README.md`)
 - **Recurring jobs can keep their conversation** — an automation can continue its last chat each run instead of starting fresh
 
@@ -287,6 +289,7 @@ SwiftOpenWork/
 ├── SwiftOpenWork.xcodeproj
 ├── Resources/                         # App icon & assets
 ├── Tests/
+├── Evals/                             # coding tasks for the eval harness
 └── Sources/                 # one folder per module; see "Modules" below
     ├── SwiftOpenWorkCore/   # library, Swift 6 language mode
     │   ├── Models/          # Agent, Workspace, Session, SessionTodo, Settings,
@@ -305,7 +308,9 @@ SwiftOpenWork/
     │                        # MLX / Hugging Face / Transformers
     ├── SwiftOpenWorkEngine/ # library; reaches the app only through EngineHost,
     │                        # and MLX only through LocalInferenceRegistry
-    │   ├── Agents/          # AgentRunner, SubAgentExecutor, approvals,
+    │   ├── ACP/             # Agent Client Protocol client: ACPConnection (JSON-RPC
+    │   │                    # over stdio), ACPAgentRunner, session pool
+    │   ├── Agents/          # AgentRunner, SubAgentExecutor, approvals, AuditLog,
     │   │                    # ContextCompactor, ContextMeter,
     │   │                    # TurnCompletionNotifier
     │   ├── Automations/     # AutomationSchedule, CronExpression, LoopCheckCommand
@@ -317,10 +322,15 @@ SwiftOpenWork/
     │   ├── LSP/             # LSPConnection (JSON-RPC), LanguageServerCatalog,
     │   │                    # LanguageServerSession/Pool, FileChangeWatcher,
     │   │                    # CodeIntelligence, SemanticRename, XcodeBuildServer
+    │   ├── Eval/            # EvalHarness (tasks scored by a command; see Evals/)
+    │   ├── Server/          # LocalAPIServer: OpenAI / Anthropic compatible endpoint
+    │   │                    # for the loaded model (loopback, bearer key)
     │   ├── Tools/           # Execution, CodeSearch, GitTools, BuildDiagnostics,
     │   │                    # FileCheckpointStore, SessionCheckpointStore, SymbolRename,
     │   │                    # LiveToolOutput, DiagnosticLinkParser,
-    │   │                    # WorkspaceContext, ProjectInstructions
+    │   │                    # WorkspaceContext, ProjectInstructions, ProjectTrust,
+    │   │                    # PermissionRules, ToolHooks, PullRequestTools,
+    │   │                    # DocumentWriter, SubprocessRunner
     │   ├── MCP/             # Client, routing, effect catalog, tool gate,
     │   │                    # catalog promotion, failure classifier
     │   ├── Integrations/    # Google (Gmail / Calendar)
@@ -409,6 +419,8 @@ MCP layers pass it in and out of actors. The rules that make that compile:
 | **…and its Metal toolchain** | A separate download as of Xcode 26: `xcodebuild -downloadComponent MetalToolchain`. Without it `mlx-swift` fails at `CompileMetalFile` |
 | **Optional local servers** | Ollama, LM Studio, oMLX / `mlx-lm`, or Osaurus — only if you use those backends |
 | **Optional MacUse MCP** | [MacUse.app](https://macuse.app); Accessibility / Automation for write actions |
+| **Optional GitHub CLI** | `brew install gh` then `gh auth login`, for `pr_status`, `pr_create` and the pull-request chip. This app never sees the token |
+| **Optional external agents** | Claude Code, Codex, Gemini CLI, OpenCode or Goose, installed and signed in, to use them as chat agents over ACP |
 | **Optional language servers** | Xcode provides `sourcekit-lsp`. For other languages: `clangd`, TypeScript 7+ (`npm install -D typescript`), `pyright`, `rust-analyzer`, `gopls`. For Xcode projects: `brew install xcode-build-server` |
 
 Swift / Xcode are **not** required on machines that only install and run a prebuilt app.
@@ -557,7 +569,12 @@ without submitting.
 | 📄 | **Per-repo rules** | Drop `SWIFTOPENWORK.md` or `AGENTS.md` at the workspace root (`OPENWORK.md` from 1.1 is still read) — build commands, house style, what not to touch |
 | 🤖 | **Agents & skills** | Per-agent tools; enabled skills land in the system prompt |
 | 🧠 | **Code intelligence** | Nothing to configure for Swift packages. Xcode projects: ask the agent to run `setup_xcode_language_server` (needs `brew install xcode-build-server`). Other languages: install the server listed under *Code intelligence* |
-| 🎛️ | **Advanced** | Plan Mode, Safety Level, turn token limit (or none), shell sandbox, sub-agent depth, collaboration room |
+| 🎛️ | **Advanced** | Plan Mode, Safety Level, turn token limit and spend limit (or none), shell sandbox, sub-agent depth, collaboration room |
+| 🛡️ | **Permission rules & hooks** | Settings → Advanced edits the project's `.swiftopenwork/permissions.json` and `hooks.json`; `~/.swiftopenwork/` holds your own for every project. Trust a project's hooks there before they run |
+| 🔌 | **External agents (ACP)** | Settings → Advanced → External Agents — add Claude Code, Codex, Gemini CLI, OpenCode, Goose or any ACP command; each becomes an agent in the composer |
+| 🌐 | **Local model API** | Settings → Advanced → Local Model API — off by default; copy the key and the `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` lines for the tool that should use the loaded model |
+| 🧾 | **Audit log** | `audit/<chat>.jsonl` in the app's data folder; *Reveal audit log* in Settings → Advanced opens it |
+| 🧪 | **Evals** | `Evals/README.md` — run the coding tasks against any OpenAI-compatible endpoint and compare two runs |
 | 🧠 | **Context** | Settings → Preferences — auto-compaction and the token threshold that triggers it |
 | 🎚️ | **GPU budget** | Settings → Apple Silicon MLX — the budget ratio caps MLX's buffer cache *and* decides which models are badged as fitting |
 | 🗣️ | **Voice** | Settings → Extensions — dictation and read-aloud each have a switch, plus a picker for the spoken voice |
@@ -586,6 +603,17 @@ enabled. This is not hypothetical: provider selection used to fall through to th
 provider in list order, and a cloud provider commonly sits earlier in that list than the
 built-in engine. A disabled *cloud* provider still falls back normally; the rule is about not
 leaving the machine.
+
+**The local model API is off until you turn it on.** It listens on `127.0.0.1` only, needs a key
+(stored in the Keychain) on every request, refuses anything carrying a browser `Origin` or a
+non-loopback `Host`, and offers only models that run on this Mac or a server you run unless you
+switch cloud models on, because the key would otherwise spend your API credits.
+
+**The audit log stays on this Mac.** It records each turn and each tool call with who allowed it, with
+API keys, bearer tokens, passwords and private keys scrubbed before anything is written. An external
+agent (Claude Code, Codex…) talks to its own provider under its own sign-in; this app answers its
+permission requests and mediates the files it reads and writes, but does not see its network traffic.
+A project's own instructions, skills and hooks do not take effect until you have reviewed them.
 
 The built-in Apple Silicon provider means **in-process MLX and nothing else**. It never probes
 for a local server to answer on its behalf, so a turn you sent to it either ran here or failed
