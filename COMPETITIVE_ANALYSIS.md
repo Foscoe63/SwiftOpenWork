@@ -79,7 +79,7 @@ needs a spec spike first.
 exists to do exactly this, and you already own the better engine. `swift-nio` is declared in
 `Package.swift` but I found no server code using it. Bind loopback only, with a token.
 
-**9. Task board over parallel agents (Radiant, Vibe Kanban, Emdash, Superset).**
+**9. Task board over parallel agents (Radiant, Vibe Kanban, Emdash, Superset).** *Deferred (decided 2026-10-12).*
 `agent_spawn` + worktrees already do the hard part. Add a Queued / Working / Needs-you / Review / Done
 board where each card is a worktree run, plus optional import of GitHub Issues or Linear tickets
 (Emdash). "Needs you" is the key idea: the agent parks at a decision instead of guessing.
@@ -144,14 +144,14 @@ per-task results. You change the prompt, repair layer and sampling often, and lo
 selling point. A small `Scripts/eval` that replays tasks with test-based verifiers would tell you whether a
 change helped. It is the best defense against regressions in the tool-repair layer.
 
-**C. Remote access / WebUI (AionUi, Radiant, CoWork-OS).** A loopback-first HTTP+WebSocket server with a token
+**C. Remote access / WebUI (AionUi, Radiant, CoWork-OS).** *Deferred (decided 2026-10-12); the local API server shipped without the remote/WebUI half.* A loopback-first HTTP+WebSocket server with a token
 or QR login, so the phone or another Mac can drive the agent. Pairs with the local-API item (#8 above); the
 `swift-nio` dependency is already in `Package.swift`. Messaging-channel control (Telegram, Slack, iMessage;
 CoWork-OS has 17, AionUi has 4, Agent! has iMessage) is the same plumbing with an allowlist. Treat as
 high-risk: every channel needs sender allowlists, rate limits and refused-not-awaited approvals, which you
 already do for headless runs.
 
-**D. Team mode with a shared task board and mailbox (AionUi, CoWork-OS).** Leader splits work, teammates claim
+**D. Team mode with a shared task board and mailbox (AionUi, CoWork-OS).** *Deferred, including Side Chat (decided 2026-10-12).* Leader splits work, teammates claim
 tasks, silent agents are flagged failed and removable. You have group chats and `agent_spawn`; the missing
 piece is the **shared board + mailbox** between agents (extends item #9). Add **Side Chat** (CoWork-OS):
 ask read-only questions about a running task without interrupting it.
@@ -200,10 +200,12 @@ up to the top of Tier 2.
 
 ## Revised priority
 
+Status as of 2026-10-12: items 1–5 and 7 are built (PR #49) except the pieces marked deferred below; the task board, remote access and Side Chat are deferred by choice.
+
 1. Hooks, rule-based permissions, read-before-edit gate (unchanged).
 2. Event/audit log with interrupted-turn resume (new, builds on checkpoints).
 3. Steering queue; PR/CI + inline diff comments.
-4. Local API server + token-authenticated remote access (shared plumbing); then ACP client.
+4. Local API server (done); token-authenticated remote access (deferred); ACP client (done).
 5. Eval harness (new, cheap, protects everything else).
-6. Shared task board + mailbox, Side Chat, conversation-bound schedules.
+6. Conversation-bound schedules (done). Shared task board + mailbox and Side Chat: deferred.
 7. Untrusted skills/rules prompt; built-in markdown memory; document and image generation.
