@@ -865,6 +865,22 @@ public final class PersistenceManager: Sendable {
                         items[sIdx].messages[mIdx].content =
                             "*(This turn was interrupted before the model produced anything.)*"
                     }
+                    // Offer the same Continue a halted turn gets, so the work resumes from the
+                    // transcript and its tool results instead of being retyped from memory.
+                    if items[sIdx].messages[mIdx].haltReason == nil, items[sIdx].messages[mIdx].role == .assistant {
+                        items[sIdx].messages[mIdx].haltReason = "interrupted"
+                        items[sIdx].messages[mIdx].haltText = "This turn was interrupted when the app quit."
+                    }
+                    // A call that was mid-flight has no result and never will.
+                    for tIdx in items[sIdx].messages[mIdx].toolCalls.indices {
+                        switch items[sIdx].messages[mIdx].toolCalls[tIdx].status {
+                        case .running, .waitingApproval, .pendingApproval:
+                            items[sIdx].messages[mIdx].toolCalls[tIdx].status = .error
+                            items[sIdx].messages[mIdx].toolCalls[tIdx].errorMessage = "Interrupted when the app quit."
+                        default:
+                            break
+                        }
+                    }
                     modified = true
                 }
             }

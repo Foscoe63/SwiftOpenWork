@@ -1,0 +1,8 @@
+{
+  "id": "fix-off-by-one",
+  "title": "Fix an off-by-one bug",
+  "prompt": "sum_to(n) in sum_to.py should return 1 + 2 + ... + n, but sum_to(3) returns 3 instead of 6. Find the bug and fix it. Run the tests when you are done.",
+  "verify": "python3 -m unittest -q test_sum_to 2>&1",
+  "timeout_seconds": 300,
+  "tags": ["edit", "debug"]
+}

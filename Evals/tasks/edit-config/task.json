@@ -1,0 +1,8 @@
+{
+  "id": "edit-config",
+  "title": "Change values in two places of a config",
+  "prompt": "In config.json set server.port to 8081 and set logging.level to \"debug\". Change nothing else.",
+  "verify": "python3 - <<'PY'\nimport json\nc = json.load(open('config.json'))\nassert c['server']['port'] == 8081, c\nassert c['logging']['level'] == 'debug', c\nassert c['server']['host'] == '127.0.0.1' and c['logging']['file'] == 'app.log' and c['features'] == ['a', 'b'], c\nprint('ok')\nPY",
+  "timeout_seconds": 240,
+  "tags": ["edit", "precision"]
+}

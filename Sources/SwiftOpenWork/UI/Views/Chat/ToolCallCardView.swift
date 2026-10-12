@@ -317,6 +317,26 @@ public struct ToolCallCardView: View {
         .cornerRadius(6)
     }
 
+    private var workspaceRoot: String? {
+        guard let appState else { return nil }
+        return appState.workspaces.first { $0.id == appState.activeWorkspaceId }?.folderPath
+    }
+
+    /// The rule "Always allow" would save, or nil where an always-allow makes no sense: the
+    /// guards that exist to ask every time (secret files, plan mode, new sites) are not offered.
+    private var rememberableRule: PermissionRule? {
+        guard let root = workspaceRoot, !root.isEmpty else { return nil }
+        let canonical = ToolCallRepair.builtInCanonical(toolCall.toolName) ?? toolCall.toolName
+        let askEveryTime: Set<String> = [
+            "exit_plan_mode", "fetch_url", "file_read", "read_file", "document_extract", "extract_document",
+            "read_pdf_or_image", "grep", "search_code", "code_search", "file_delete", "delete_file", "rm", "revert_changes",
+        ]
+        guard !askEveryTime.contains(canonical) else { return nil }
+        return PermissionRules.suggestedRule(
+            toolName: toolCall.toolName, argumentsJson: toolCall.argumentsJson, action: .allow, workspaceRoot: root
+        )
+    }
+
     private var approvalPrompt: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let reason = toolCall.approvalReason, !reason.isEmpty {
@@ -342,6 +362,21 @@ public struct ToolCallCardView: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(.red)
+
+                if let rule = rememberableRule {
+                    Button {
+                        if let root = workspaceRoot {
+                            PermissionRules.remember(toolName: toolCall.toolName, argumentsJson: toolCall.argumentsJson, workspaceRoot: root)
+                        }
+                        ToolApprovalManager.shared.resolve(callId: toolCall.id, approved: true)
+                    } label: {
+                        Label("Always allow \(rule.pattern.map { "`\($0)`" } ?? rule.tool)", systemImage: "checkmark.seal")
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Approve this and stop asking for matching calls in this project. Saved to \(PermissionRules.relativePath).")
+                }
             }
         }
         .padding(10)

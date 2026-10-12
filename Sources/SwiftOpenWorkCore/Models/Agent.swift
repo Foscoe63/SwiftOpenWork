@@ -16,6 +16,26 @@ public enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// A coding agent that runs as its own program and speaks the Agent Client Protocol over stdio:
+/// Claude Code, Codex, Gemini CLI, OpenCode, Goose and others. An agent with this set is run by
+/// launching that program, instead of by the app's own loop.
+public struct ExternalAgentConfig: Codable, Hashable, Sendable {
+    public var command: String
+    public var args: [String]
+    public var env: [String: String]
+
+    public init(command: String, args: [String] = [], env: [String: String] = [:]) {
+        self.command = command
+        self.args = args
+        self.env = env
+    }
+
+    /// The command line as the person would type it, for display.
+    public var displayLine: String {
+        ([command] + args).joined(separator: " ")
+    }
+}
+
 public struct Agent: Identifiable, Codable, Hashable, Sendable {
     public var id: String
     public var name: String
@@ -45,6 +65,9 @@ public struct Agent: Identifiable, Codable, Hashable, Sendable {
     public var isLeadAgent: Bool
     public var createdAt: Date
     public var updatedAt: Date
+    /// Set for an agent that is another program, reached over ACP. nil for the app's own agents,
+    /// and for every agent saved before this existed.
+    public var externalAgent: ExternalAgentConfig?
 
     public init(
         id: String = UUID().uuidString,
@@ -77,8 +100,10 @@ public struct Agent: Identifiable, Codable, Hashable, Sendable {
         isBuiltIn: Bool = false,
         isLeadAgent: Bool = false,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        externalAgent: ExternalAgentConfig? = nil
     ) {
+        self.externalAgent = externalAgent
         self.id = id
         self.name = name
         self.description = description

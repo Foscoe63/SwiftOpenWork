@@ -625,6 +625,7 @@ public struct AutomationEditorSheet: View {
     @State private var watchPath: String = ""
     @State private var targetAgentId: String = "lead-assistant"
     @State private var promptTemplate: String = "Scan workspace files and provide a status update."
+    @State private var continueConversation = false
     @State private var isEnabled: Bool = true
     @State private var editingId: String? = nil
 
@@ -748,6 +749,15 @@ public struct AutomationEditorSheet: View {
                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
                     }
 
+                    Toggle(isOn: $continueConversation) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Continue the same conversation each run")
+                                .font(.system(size: 11.5, weight: .semibold))
+                            Text("The agent sees what it said last time. Off: every run starts fresh.")
+                                .font(.system(size: 10.5)).foregroundColor(.secondary)
+                        }
+                    }
+
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Description (optional)")
                             .font(.system(size: 11.5, weight: .semibold))
@@ -818,6 +828,7 @@ public struct AutomationEditorSheet: View {
             watchPath = auto.watchPath ?? ""
             targetAgentId = auto.targetAgentId
             promptTemplate = auto.promptTemplate
+            continueConversation = auto.continueConversation ?? false
             isEnabled = auto.isEnabled
         }
     }
@@ -837,7 +848,8 @@ public struct AutomationEditorSheet: View {
                 watchPath: watchPath.isEmpty ? nil : watchPath,
                 targetAgentId: targetAgentId,
                 promptTemplate: promptTemplate,
-                isEnabled: isEnabled
+                isEnabled: isEnabled,
+                continueConversation: continueConversation ? true : nil
             )
             appState.automations.append(auto)
             PersistenceManager.shared.saveAutomations(appState.automations)
@@ -851,6 +863,7 @@ public struct AutomationEditorSheet: View {
             appState.automations[idx].watchPath = watchPath.isEmpty ? nil : watchPath
             appState.automations[idx].targetAgentId = targetAgentId
             appState.automations[idx].promptTemplate = promptTemplate
+            appState.automations[idx].continueConversation = continueConversation ? true : nil
             appState.automations[idx].isEnabled = isEnabled
             appState.automations[idx].updatedAt = Date()
             PersistenceManager.shared.saveAutomations(appState.automations)

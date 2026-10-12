@@ -514,6 +514,10 @@ public enum SubAgentExecutor {
                         _ = await ToolApprovalManager.shared.requestApproval(
                             callId: call.id, toolName: call.toolName, argumentsJson: call.argumentsJson, reason: reason
                         )
+                        AuditLog.shared.toolCall(
+                            sessionId: parentSession, tool: call.toolName, argumentsJson: call.argumentsJson,
+                            decision: .refusedUnattended, success: false, note: "sub-agent: " + reason
+                        )
                         if let path = Self.writeTarget(toolName: call.toolName, argumentsJson: call.argumentsJson) {
                             refusedWritePaths.append(path)
                         }

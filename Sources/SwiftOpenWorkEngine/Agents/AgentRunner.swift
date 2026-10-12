@@ -888,6 +888,15 @@ public final class AgentRunner {
         onModelContextUpdated: ((ModelContextSnapshot) -> Void)? = nil,
         group: GroupChat.Turn? = nil
     ) async {
+        // An agent that is another program (Claude Code, Codex, Gemini CLI…) runs over ACP; the
+        // model, provider and tool loop below are its own business.
+        if let external = baseAgent.externalAgent {
+            await ACPAgentRunner.run(
+                session: session, agent: baseAgent, config: external, workspace: workspace,
+                onMessageUpdated: onMessageUpdated, onSessionTodosUpdated: onSessionTodosUpdated
+            )
+            return
+        }
         // In a group chat this is one speaker's turn. The speaker is told who else is in the room
         // and how it was addressed; the bubble below is still stamped with the original agent.
         let agent: Agent = {
@@ -927,6 +936,12 @@ public final class AgentRunner {
 
         let lastPrompt = session.messages.last(where: { $0.role == .user })?.content ?? ""
 
+        AuditLog.shared.record(sessionId: session.id, event: "turn_start", fields: [
+            "agent": baseAgent.name, "model": model.id, "provider": provider.id,
+            "unattended": ToolApprovalManager.shared.isUnattended,
+            "approval_level": PersistenceManager.shared.loadSettings().terminalSafetyLevel.rawValue,
+            "prompt": AuditLog.scrubbed(lastPrompt),
+        ])
         // ai-memory: capture this turn's prompt (opens the session on the first turn).
         AIMemoryHooks.shared.noteUserPrompt(
             sessionId: session.id, cwd: workspace.folderPath, prompt: lastPrompt)
@@ -1119,7 +1134,12 @@ var mcpPromptSummary = ""
         if let notice = group?.notice { accumulator.appendNotice(notice) }
 
         // Standing rules that live in the repository itself.
-        let instructionsSection = inventoryPrompt
+        // Only once the person has seen what the project carries; see `ProjectTrust`.
+        let projectMayInstruct = ProjectTrust.mayLoad(workspaceRoot: workspace.folderPath)
+        if !projectMayInstruct, case .needsReview(let found) = ProjectTrust.state(workspaceRoot: workspace.folderPath) {
+            accumulator.appendNotice("Not reading \(found.summary) from this project until you review it.")
+        }
+        let instructionsSection = (inventoryPrompt || !projectMayInstruct)
             ? ""
             : ProjectInstructions.promptBlock(ProjectInstructions.load(folderPath: workspace.folderPath))
 
@@ -1145,7 +1165,7 @@ var mcpPromptSummary = ""
 
         // Skills that ship with the repository itself. Read from disk every turn, so editing one
         // takes effect on the next message without an import step.
-        if !inventoryPrompt {
+        if !inventoryPrompt && projectMayInstruct {
             skillsSection += ProjectSkills.promptBlock(
                 ProjectSkills.load(workspacePath: workspace.folderPath)
                     .filter { $0.isAllowed(by: agent.allowedSkillIds) }
@@ -1161,6 +1181,25 @@ var mcpPromptSummary = ""
         // What the person asked for this turn. The transcript is the whole session, so compaction
         // must be told which request is current or it keeps only the session's first one.
         let currentRequestId = workingMessages.last(where: ContextCompactor.isPersonRequest)?.id
+
+        // UserPromptSubmit hooks: a hook may refuse the message or hand the model context for it.
+        // The context rides as a "[System]:" note, which is dropped from the saved transcript like
+        // the loop's other steering, so it is re-derived each turn rather than replayed.
+        let promptHooks = await ToolHooks.run(
+            .userPromptSubmit, input: ["prompt": lastPrompt],
+            workspaceRoot: workspace.folderPath, sessionId: session.id
+        )
+        for notice in promptHooks.notices { accumulator.appendNotice(notice) }
+        if let reason = promptHooks.blockReason {
+            accumulator.setHalt(reason: "hook", text: "A hook blocked this message: \(reason)")
+            return
+        }
+        if !promptHooks.context.isEmpty {
+            workingMessages.append(ChatMessage(
+                sessionId: session.id, role: .user,
+                content: "[System]: Context from the user's hooks for this message:\n" + promptHooks.context.joined(separator: "\n")
+            ))
+        }
         // The last step's reply, when the turn ended on an answer rather than on tool calls.
         var finalStepText: String?
 
@@ -1480,6 +1519,16 @@ var mcpPromptSummary = ""
                 break
             }
 
+            let spent = TurnCost.usd(model: model, promptTokens: turnPromptTokens, completionTokens: turnCompletionTokens)
+            if TurnCost.exceeds(limit: loadedSettings.maxTurnCostUSD, spent: spent) {
+                accumulator.setHalt(
+                    reason: "cost_budget",
+                    text: "Turn spend limit reached (\(TurnCost.format(spent)) of \(TurnCost.format(loadedSettings.maxTurnCostUSD))). Press Continue to keep going."
+                )
+                halted = true
+                break
+            }
+
             // Inventory questions should be one-shot answers — never enter a tool loop.
             if inventoryPrompt || groupToolless {
                 finalStepText = accumulator.stepText(from: turnTextBefore.count)
@@ -1682,6 +1731,22 @@ var mcpPromptSummary = ""
                     status: .running
                 )
 
+                // A standing deny rule ends the call before anyone is asked about it.
+                if let verdict = PermissionRules.verdict(
+                    toolName: toolName, argumentsJson: argsJson, workspaceRoot: workspace.folderPath
+                ), verdict.action == .deny {
+                    callInfo.status = .error
+                    callInfo.errorMessage = "Denied by a permission rule."
+                    AuditLog.shared.toolCall(sessionId: session.id, tool: toolName, argumentsJson: argsJson,
+                                             decision: .deniedByRule, success: false, note: verdict.explanation)
+                    accumulator.addToolCall(callInfo)
+                    workingMessages.append(ChatMessage(
+                        id: callId, sessionId: session.id, role: .tool,
+                        content: "Blocked: \(verdict.explanation) Do not retry this call; choose another approach or say what you could not do."
+                    ))
+                    continue
+                }
+
                 // Sensitive actions (deleting a file, or shell commands under an "always ask"
                 // safety policy) are paused for a real user decision before they touch disk.
                 if let reason = AgentRunner.approvalReason(
@@ -1703,6 +1768,11 @@ var mcpPromptSummary = ""
                     )
 
                     if outcome != .approved {
+                        AuditLog.shared.toolCall(
+                            sessionId: session.id, tool: toolName, argumentsJson: argsJson,
+                            decision: outcome == .refusedUnattended ? .refusedUnattended : .rejected,
+                            success: false, note: reason
+                        )
                         // A person saying no and nobody being there to ask are different events.
                         // Reporting the second as the first would tell the model the user made a
                         // decision they never made.
@@ -2217,6 +2287,16 @@ var mcpPromptSummary = ""
         )) }
 
         accumulator.finalize()
+        AuditLog.shared.record(sessionId: session.id, event: "turn_end", fields: [
+            "reason": accumulator.message.haltReason ?? (finishedNaturally ? "completed" : "incomplete"),
+            "prompt_tokens": turnPromptTokens, "completion_tokens": turnCompletionTokens, "iterations": iteration,
+            "cost_usd": TurnCost.usd(model: model, promptTokens: turnPromptTokens, completionTokens: turnCompletionTokens),
+        ])
+        _ = await ToolHooks.run(
+            .stop,
+            input: ["stop_reason": accumulator.message.haltReason ?? (finishedNaturally ? "end_turn" : "incomplete")],
+            workspaceRoot: workspace.folderPath, sessionId: session.id
+        )
     }
 
     /// `workingMessages` without the "[System Command]" and "[System]:" notes the loop adds to
@@ -2567,22 +2647,37 @@ var mcpPromptSummary = ""
         sessionId: String = "",
         workspaceRoot: String = ""
     ) -> String? {
-        let reason = baseApprovalReason(
+        var reason = baseApprovalReason(
             toolName: toolName, argumentsJson: argumentsJson, settings: settings,
             sessionId: sessionId, workspaceRoot: workspaceRoot
         )
+        let canonical = ToolCallRepair.builtInCanonical(toolName) ?? toolName
+        // Standing rules (`.swiftopenwork/permissions.json`) decide individual calls on top of the
+        // approval level. A deny is enforced separately, before this is asked; here an allow
+        // silences a prompt and an ask adds one. The guards that are not about trusting the agent
+        // never yield to an allow.
+        let neverAllowed: Set<String> = [
+            "exit_plan_mode", "fetch_url",
+            "file_read", "read_file", "document_extract", "extract_document", "read_pdf_or_image",
+            "grep", "search_code", "code_search",
+        ]
+        if let verdict = PermissionRules.verdict(toolName: toolName, argumentsJson: argumentsJson, workspaceRoot: workspaceRoot) {
+            switch verdict.action {
+            case .allow where !neverAllowed.contains(canonical):
+                reason = nil
+            case .ask:
+                // An explicit rule outranks "Allow All": the person wrote it to be asked.
+                return reason ?? verdict.explanation
+            default:
+                break
+            }
+        }
         // "Allow All" in the composer means the agent is not interrupted: file edits, deletes, MCP
         // writes, app launches and commits stop asking too. What stays is a guard that is not
         // about trusting the agent: leaving plan mode, secret files, and the fetch-site policy
         // (which has its own setting).
         guard reason != nil, settings.terminalSafetyLevel == .allowEverything else { return reason }
-        let canonical = ToolCallRepair.builtInCanonical(toolName) ?? toolName
-        let stillAsks: Set<String> = [
-            "exit_plan_mode", "fetch_url",
-            "file_read", "read_file", "document_extract", "extract_document", "read_pdf_or_image",
-            "grep", "search_code", "code_search",
-        ]
-        return stillAsks.contains(canonical) ? reason : nil
+        return neverAllowed.contains(canonical) ? reason : nil
     }
 
     private static func baseApprovalReason(
@@ -2628,7 +2723,7 @@ var mcpPromptSummary = ""
         case "file_write", "write_file", "create_file", "save_file",
              "edit_file", "file_edit", "multi_edit", "edit_file_multi", "rename_symbol",
              "file_move", "move_file", "mv",
-             "file_copy", "copy_file", "cp":
+             "file_copy", "copy_file", "cp", "document_create":
             return "This modifies files on disk."
         case "file_delete", "delete_file", "rm":
             return "This permanently deletes a file from disk."
@@ -2645,6 +2740,8 @@ var mcpPromptSummary = ""
             return "Launches an app or executable on your Mac."
         case "git_commit":
             return "Commits changes in an agent worktree."
+        case "pr_create":
+            return "Pushes the current branch to origin and opens a pull request on GitHub."
         case "worktree_remove":
             return "Removes an agent worktree and its branch."
         case "worktree_merge":

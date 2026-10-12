@@ -49,6 +49,9 @@ public struct Automation: Identifiable, Codable, Hashable, Sendable {
     public var lastStatus: String?
     /// The session the latest run was recorded in, so an interrupted run can be found and labelled.
     public var lastSessionId: String?
+    /// Continue the last run's chat instead of starting a fresh one, so a recurring job (a morning
+    /// brief, a weekly review) remembers what it said last time. Optional so older automations decode.
+    public var continueConversation: Bool?
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -66,9 +69,11 @@ public struct Automation: Identifiable, Codable, Hashable, Sendable {
         lastRunAt: Date? = nil,
         lastResultSummary: String? = nil,
         lastStatus: String? = nil,
+        continueConversation: Bool? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
+        self.continueConversation = continueConversation
         self.id = id
         self.workspaceId = workspaceId
         self.name = name

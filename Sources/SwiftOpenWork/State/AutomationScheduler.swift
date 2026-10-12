@@ -208,6 +208,7 @@ public final class AutomationScheduler: ObservableObject {
             title: automation.name,
             appState: appState,
             agentId: automation.targetAgentId,
+            continueSessionId: automation.continueConversation == true ? automation.lastSessionId : nil,
             onSessionStarted: { sessionId in
                 appState.recordAutomationSession(id: automationId, sessionId: sessionId)
             }

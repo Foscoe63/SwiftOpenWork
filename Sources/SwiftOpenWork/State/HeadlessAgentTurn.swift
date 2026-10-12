@@ -55,6 +55,7 @@ public enum HeadlessAgentTurn {
         appState: AppState,
         agentId: String? = nil,
         workspace workspaceOverride: Workspace? = nil,
+        continueSessionId: String? = nil,
         onSessionStarted: ((String) -> Void)? = nil
     ) async -> Result {
         let agent = appState.agents.first { $0.id == agentId } ?? appState.currentAgent
@@ -71,17 +72,27 @@ public enum HeadlessAgentTurn {
             return Result(reply: reason, skipped: [], sessionId: "")
         }
 
-        var session = Session(
-            workspaceId: workspace.id,
-            title: title,
-            agentId: agent.id,
-            providerId: provider.id,
-            modelId: model.id
-        )
+        // A recurring job can pick its last conversation back up, so it remembers what it said.
+        var session: Session
+        if let continueSessionId, let existing = appState.sessions.first(where: { $0.id == continueSessionId }) {
+            session = existing
+        } else {
+            session = Session(
+                workspaceId: workspace.id,
+                title: title,
+                agentId: agent.id,
+                providerId: provider.id,
+                modelId: model.id
+            )
+        }
         let userMsg = ChatMessage(sessionId: session.id, role: .user, content: prompt)
         session.messages.append(userMsg)
 
-        appState.sessions.insert(session, at: 0)
+        if let index = appState.sessions.firstIndex(where: { $0.id == session.id }) {
+            appState.sessions[index] = session
+        } else {
+            appState.sessions.insert(session, at: 0)
+        }
         PersistenceManager.shared.saveSessions(appState.sessions)
 
         let sessionId = session.id

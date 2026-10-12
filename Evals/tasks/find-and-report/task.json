@@ -1,0 +1,8 @@
+{
+  "id": "find-and-report",
+  "title": "Find where something lives (read-only investigation)",
+  "prompt": "Which file in this project defines the function retry_with_backoff, and what is its default max_attempts? Write one line to answer.txt in the form `<file path>: <number>`. Do not modify any other file.",
+  "verify": "grep -qx 'src/net/retry.py: 5' answer.txt && [ -z \"$(git status --porcelain | grep -v answer.txt)\" ]",
+  "timeout_seconds": 240,
+  "tags": ["search", "read-only"]
+}
