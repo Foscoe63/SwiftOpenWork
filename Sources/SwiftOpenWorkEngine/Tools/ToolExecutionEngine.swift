@@ -131,6 +131,28 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         callId: String? = nil
     ) async -> ToolExecutionResult {
         AppLog.verbose(.tools, "call \(toolName) args=\(AppLog.truncated(argumentsJson))")
+        // Standing rules and hooks are enforced here, at the one place every tool call passes —
+        // sub-agents, calls started early in parallel and Shortcuts runs included — so none of
+        // them can be a way around a rule.
+        if let verdict = PermissionRules.verdict(toolName: toolName, argumentsJson: argumentsJson, workspaceRoot: workspace.folderPath),
+           verdict.action == .deny {
+            AuditLog.shared.toolCall(sessionId: AgentRunContext.current?.sessionId, tool: toolName, argumentsJson: argumentsJson,
+                                     decision: .deniedByRule, success: false, note: verdict.explanation)
+            return Self.failure("Blocked: \(verdict.explanation) Do not retry this call; choose another approach or say what you could not do.", CFAbsoluteTimeGetCurrent())
+        }
+        let hookInput: [String: Any] = [
+            "tool_input": (try? JSONSerialization.jsonObject(with: Data(argumentsJson.utf8))) ?? [:],
+        ]
+        let sessionId = AgentRunContext.current?.sessionId
+        let pre = await ToolHooks.run(
+            .preToolUse, toolName: toolName, input: hookInput,
+            workspaceRoot: workspace.folderPath, sessionId: sessionId
+        )
+        if let reason = pre.blockReason {
+            AuditLog.shared.toolCall(sessionId: sessionId, tool: toolName, argumentsJson: argumentsJson,
+                                     decision: .blockedByHook, success: false, note: reason)
+            return Self.failure("Blocked by a hook: \(reason)", CFAbsoluteTimeGetCurrent())
+        }
         // Read the target before the call so the card can show what the call did, not merely that
         // it succeeded. Taken here rather than inside each case so every edit tool gets it alike.
         let diffTarget = Self.diffTarget(toolName: toolName, argumentsJson: argumentsJson, workspace: workspace)
@@ -176,6 +198,25 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 + (result.error.map { "error=\($0) " } ?? "")
                 + "output=\(AppLog.truncated(result.output))"
         )
+        AuditLog.shared.toolCall(
+            sessionId: sessionId, tool: toolName, argumentsJson: argumentsJson,
+            decision: ApprovedCalls.wasApproved(callId) ? .approved : .automatic,
+            success: result.success, durationMs: result.durationMs, note: result.error
+        )
+        var postInput = hookInput
+        postInput["tool_response"] = [
+            "success": result.success,
+            "output": String(result.output.prefix(20_000)),
+            "error": result.error ?? "",
+        ] as [String: Any]
+        let post = await ToolHooks.run(
+            .postToolUse, toolName: toolName, input: postInput,
+            workspaceRoot: workspace.folderPath, sessionId: sessionId
+        )
+        let hookNotes = pre.context + post.context + pre.notices.map { "[hook] " + $0 } + post.notices.map { "[hook] " + $0 }
+        if !hookNotes.isEmpty {
+            result.output += "\n\n[Hook feedback]\n" + hookNotes.joined(separator: "\n")
+        }
         // ai-memory: forward tool activity for long-term memory capture.
         AIMemoryHooks.shared.noteToolUse(
             cwd: workspace.folderPath,
@@ -1031,6 +1072,11 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             case .alwaysAsk:
                 // The agent loop must obtain interactive user approval before a call reaches
                 // execute() under this policy; treat one that arrives here anyway as unapproved.
+                // A standing "allow" rule is a decision already taken, so it counts.
+                if ApprovedCalls.consume(callId)
+                    || PermissionRules.verdict(toolName: toolName, argumentsJson: argumentsJson, workspaceRoot: workspace.folderPath)?.action == .allow {
+                    break
+                }
                 return ToolExecutionResult(
                     success: false,
                     output: "",
@@ -1070,7 +1116,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             )
 
         case "send_input":
-            return await executeSendInput(dict: dict, workspace: workspace, settings: settings, startTime: startTime)
+            return await executeSendInput(dict: dict, workspace: workspace, settings: settings, startTime: startTime, callId: callId)
 
         case "edit_file", "file_edit":
             let path = (dict["path"] as? String) ?? (dict["filename"] as? String) ?? (dict["file"] as? String) ?? ""
@@ -1606,6 +1652,58 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             } catch {
                 return Self.failure(error.localizedDescription, startTime)
             }
+
+        case "document_create":
+            let path = (dict["path"] as? String) ?? (dict["filename"] as? String) ?? ""
+            guard !path.trimmingCharacters(in: .whitespaces).isEmpty, let content = dict["content"] as? String else {
+                return Self.failure("document_create needs `path` and `content`.", startTime)
+            }
+            guard let format = DocumentWriter.Format(path: path) else {
+                return Self.failure("document_create writes \(DocumentWriter.Format.allCases.map { ".\($0.rawValue)" }.joined(separator: ", ")) files; '\(path)' has a different extension. Use file_write for plain text.", startTime)
+            }
+            let fullPath = path.hasPrefix("/") ? path : (workspace.folderPath as NSString).appendingPathComponent(path)
+            if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
+                return denial
+            }
+            await FileCheckpointStore.shared.record(path: fullPath)
+            do {
+                try await MainActor.run { try DocumentWriter.write(content: content, to: URL(fileURLWithPath: fullPath), format: format) }
+            } catch {
+                return Self.failure(error.localizedDescription, startTime)
+            }
+            let size = (try? FileManager.default.attributesOfItem(atPath: fullPath)[.size] as? Int) ?? 0
+            return ToolExecutionResult(
+                success: true, output: "Wrote \(path) (\(format.rawValue), \(size) bytes).",
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+
+        case "pr_status":
+            let wantsLogs = Self.boolArgument(dict["include_failed_logs"]) == true
+            let lookup = await PullRequestTools.lookup(in: workspace.folderPath)
+            var logs: String?
+            if wantsLogs, case let .status(status) = lookup, !status.failing.isEmpty {
+                logs = await PullRequestTools.failedLogs(in: workspace.folderPath)
+            }
+            let described = PullRequestTools.describe(lookup, failedLogs: logs)
+            return ToolExecutionResult(
+                success: described.success, output: described.success ? described.text : "",
+                error: described.success ? nil : described.text,
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+
+        case "pr_create":
+            let title = (dict["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { return Self.failure("pr_create needs a title.", startTime) }
+            let created = await PullRequestTools.create(
+                in: workspace.folderPath, title: title, body: dict["body"] as? String ?? "",
+                base: (dict["base"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                draft: Self.boolArgument(dict["draft"]) == true
+            )
+            return ToolExecutionResult(
+                success: created.success, output: created.success ? created.text : "",
+                error: created.success ? nil : created.text,
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
 
         case "git_commit":
             let rawPath = (dict["worktree_path"] as? String ?? "").trimmingCharacters(in: .whitespaces)
@@ -2785,7 +2883,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     /// the user may have started with a shell prompt in it, so it is gated like a command: refused
     /// under the read-only safety level, and held to the same write-outside-the-workspace check.
     private func executeSendInput(
-        dict: [String: Any], workspace: Workspace, settings: AppSettings, startTime: Double
+        dict: [String: Any], workspace: Workspace, settings: AppSettings, startTime: Double, callId: String? = nil
     ) async -> ToolExecutionResult {
         func fail(_ message: String) -> ToolExecutionResult {
             ToolExecutionResult(success: false, output: "", error: message,
@@ -2799,7 +2897,9 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         case .safeOnly:
             return fail("Blocked by Terminal Safety Level (\"Allow Safe Read-Only Commands\"): send_input can type anything into a running program. Switch to \"Always Ask\" or \"Unrestricted\" under Settings → Advanced.")
         case .alwaysAsk:
-            return fail("Blocked: Terminal Safety Level is \"Always Ask Confirmation\" but no user approval was recorded for this input.")
+            if !ApprovedCalls.consume(callId) {
+                return fail("Blocked: Terminal Safety Level is \"Always Ask Confirmation\" but no user approval was recorded for this input.")
+            }
         }
         let terminate = Self.boolArgument(dict["terminate"]) == true
         let text = dict["text"] as? String ?? ""

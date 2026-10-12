@@ -28,7 +28,7 @@ public enum AgentRoleProfiles {
             "run_app", "quit_app", "screenshot_window", "accessibility_tree",
             "preview_start", "preview_check", "preview_logs", "preview_stop",
             "git_status", "git_diff", "git_log", "changed_files", "revert_changes",
-            "worktree_create", "worktree_list", "git_commit",
+            "worktree_create", "worktree_list", "git_commit", "pr_status",
             "mcp_mcp-filesystem", "mcp_mcp-git",
         ],
         "research-agent": [
@@ -39,7 +39,7 @@ public enum AgentRoleProfiles {
             "mcp_mcp-fetch",
         ],
         "reviewer-agent": readCode + [
-            "git_diff", "git_status", "git_log", "changed_files",
+            "git_diff", "git_status", "git_log", "changed_files", "pr_status",
             "build_project", "run_tests", "todo_write", "mcp_mcp-git",
         ],
         "architect-agent": [

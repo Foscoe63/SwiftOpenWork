@@ -235,6 +235,14 @@ public struct AppSettings: Codable, Hashable, Sendable {
     /// addresses ask every time while this is on. Off restores unasked fetches, for automations
     /// that must fetch unattended.
     public var askBeforeFetchingNewSites: Bool
+    /// Halt a turn whose estimated cost passes this many US dollars. 0 turns the limit off.
+    public var maxTurnCostUSD: Double
+    /// Also offer cloud providers' models through the local API. Off: only models that run on this Mac.
+    public var localAPIExposeCloudModels: Bool
+    /// Port for the local model API.
+    public var localAPIPort: Int
+    /// Serve the loaded model on a local OpenAI/Anthropic-compatible API (loopback, bearer token).
+    public var localAPIEnabled: Bool
     public var sandboxAgentFileSystem: Bool
     /// Runs shell commands under macOS Seatbelt so writes outside the workspace (and optionally
     /// network access) fail in the kernel, whatever the command does.
@@ -405,6 +413,10 @@ public struct AppSettings: Codable, Hashable, Sendable {
         terminalShell: String = "/bin/zsh",
         allowWebAccess: Bool = true,
         askBeforeFetchingNewSites: Bool = true,
+        maxTurnCostUSD: Double = 0,
+        localAPIExposeCloudModels: Bool = false,
+        localAPIPort: Int = 11500,
+        localAPIEnabled: Bool = false,
         // Secure by default. Existing installs keep whatever they have: settings.json already
         // carries this key, and decoding prefers the stored value over this default.
         sandboxAgentFileSystem: Bool = true,
@@ -491,6 +503,10 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.terminalShell = terminalShell
         self.allowWebAccess = allowWebAccess
         self.askBeforeFetchingNewSites = askBeforeFetchingNewSites
+        self.maxTurnCostUSD = maxTurnCostUSD
+        self.localAPIExposeCloudModels = localAPIExposeCloudModels
+        self.localAPIPort = localAPIPort
+        self.localAPIEnabled = localAPIEnabled
         self.sandboxAgentFileSystem = sandboxAgentFileSystem
         self.shellSandboxMode = shellSandboxMode
         self.semanticSearchEnabled = semanticSearchEnabled
@@ -566,6 +582,10 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.terminalShell = try container.decodeIfPresent(String.self, forKey: .terminalShell) ?? def.terminalShell
         self.allowWebAccess = try container.decodeIfPresent(Bool.self, forKey: .allowWebAccess) ?? def.allowWebAccess
         self.askBeforeFetchingNewSites = try container.decodeIfPresent(Bool.self, forKey: .askBeforeFetchingNewSites) ?? def.askBeforeFetchingNewSites
+        self.maxTurnCostUSD = try container.decodeIfPresent(Double.self, forKey: .maxTurnCostUSD) ?? def.maxTurnCostUSD
+        self.localAPIExposeCloudModels = try container.decodeIfPresent(Bool.self, forKey: .localAPIExposeCloudModels) ?? def.localAPIExposeCloudModels
+        self.localAPIPort = try container.decodeIfPresent(Int.self, forKey: .localAPIPort) ?? def.localAPIPort
+        self.localAPIEnabled = try container.decodeIfPresent(Bool.self, forKey: .localAPIEnabled) ?? def.localAPIEnabled
         self.sandboxAgentFileSystem = try container.decodeIfPresent(Bool.self, forKey: .sandboxAgentFileSystem) ?? def.sandboxAgentFileSystem
         self.shellSandboxMode = try container.decodeIfPresent(ShellSandboxMode.self, forKey: .shellSandboxMode) ?? def.shellSandboxMode
         self.semanticSearchEnabled = try container.decodeIfPresent(Bool.self, forKey: .semanticSearchEnabled) ?? def.semanticSearchEnabled

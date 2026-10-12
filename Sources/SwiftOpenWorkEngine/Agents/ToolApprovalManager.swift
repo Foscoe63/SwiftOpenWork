@@ -42,7 +42,18 @@ public enum ApprovedCalls {
     public static func record(_ callId: String) {
         lock.lock(); defer { lock.unlock() }
         ids.insert(callId)
+        if everApproved.count > 5_000 { everApproved.removeAll() }
+        everApproved.insert(callId)
     }
+
+    /// Whether a person approved this call, for the audit record. Unlike `consume` it can be asked
+    /// after the call ran.
+    public static func wasApproved(_ callId: String?) -> Bool {
+        guard let callId else { return false }
+        lock.lock(); defer { lock.unlock() }
+        return everApproved.contains(callId)
+    }
+    nonisolated(unsafe) private static var everApproved = Set<String>()
 
     /// True once, then forgotten: an approval covers the one call it was given for.
     public static func consume(_ callId: String?) -> Bool {

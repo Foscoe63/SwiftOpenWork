@@ -1,0 +1,8 @@
+{
+  "id": "rename-across-files",
+  "title": "Rename a function everywhere",
+  "prompt": "Rename the function calc to calculate everywhere it is defined or used in this project, including the docs in README.md. The program must still run.",
+  "verify": "! grep -rIw calc --include='*.py' --include='*.md' . && python3 main.py | grep -qx 42",
+  "timeout_seconds": 300,
+  "tags": ["refactor", "multi-file"]
+}

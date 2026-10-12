@@ -21,7 +21,7 @@ public enum SubAgentToolPolicy {
         "file_move", "move_file", "mv",
         "file_copy", "copy_file", "cp",
         "file_delete", "delete_file", "rm",
-        "rename_symbol",
+        "rename_symbol", "document_create",
     ]
 
     /// Why this call would need a person, or nil when a sub-agent may run it.

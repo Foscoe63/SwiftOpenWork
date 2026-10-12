@@ -112,6 +112,31 @@ public enum ToolSchemaCatalog {
                 requiresApproval: true
             ),
             Tool(
+                id: "document_create",
+                name: "document_create",
+                displayName: "Create Document",
+                description: "Write a Word (.docx), PDF, RTF, HTML or Excel (.xlsx) file. For text documents, `content` is Markdown (headings, lists, tables, bold/italic, code); for .xlsx it is CSV or a Markdown table, and a cell starting with = is a formula. The format comes from the file extension.",
+                category: .files,
+                parametersJsonSchema: schemas["document_create"]!
+            ),
+            Tool(
+                id: "pr_status",
+                name: "pr_status",
+                displayName: "Pull Request Status",
+                description: "Show the pull request for the current branch and the state of its CI checks, through the GitHub CLI. With include_failed_logs, also the tail of the failing job's log: use that to fix a red build.",
+                category: .system,
+                parametersJsonSchema: schemas["pr_status"]!
+            ),
+            Tool(
+                id: "pr_create",
+                name: "pr_create",
+                displayName: "Open Pull Request",
+                description: "Push the current branch to origin and open a pull request for it, through the GitHub CLI. Commit first: uncommitted changes are not included. Always asks the user.",
+                category: .system,
+                parametersJsonSchema: schemas["pr_create"]!,
+                requiresApproval: true
+            ),
+            Tool(
                 id: "screenshot_window",
                 name: "screenshot_window",
                 displayName: "Screenshot Window",
@@ -412,6 +437,9 @@ public enum ToolSchemaCatalog {
         "call_hierarchy": #"{"type":"object","properties":{"path":{"type":"string","description":"File containing the symbol, relative to the workspace or absolute."},"line":{"type":"integer","description":"1-based line where the symbol appears."},"symbol":{"type":"string","description":"The symbol name exactly as written on that line."},"column":{"type":"integer","description":"1-based column, only needed when the name appears more than once on the line."},"direction":{"type":"string","enum":["incoming","outgoing"],"description":"incoming (default): who calls it. outgoing: what it calls."},"limit":{"type":"integer","description":"Max entries listed (default 100)."}},"required":["path","line","symbol"]}"#,
         "rename_symbol": #"{"type":"object","properties":{"old_name":{"type":"string"},"new_name":{"type":"string"},"path":{"type":"string","description":"File of the declaration to rename, when find_symbol shows more than one."},"line":{"type":"integer","description":"Line of the declaration, when one file declares the name more than once."},"mode":{"type":"string","enum":["auto","semantic","text"],"description":"auto (default): compiler rename in Swift packages, otherwise whole-word text replacement, and the result says which ran. semantic: compiler only, fail rather than fall back. text: whole-word replacement everywhere."},"dry_run":{"type":"boolean","description":"Report matches without writing."}},"required":["old_name","new_name"]}"#,
         "run_tests": #"{"type":"object","properties":{"command":{"type":"string","description":"Override the inferred test command"},"only_failing":{"type":"boolean","description":"Re-run only the tests that failed in the previous run. Falls back to the whole suite, and says so, when there is nothing recorded or the runner cannot be narrowed."}},"required":[]}"#,
+        "document_create": #"{"type":"object","properties":{"path":{"type":"string","description":"Where to write it; the extension picks the format (.docx, .pdf, .rtf, .html, .xlsx)."},"content":{"type":"string","description":"Markdown for text documents; CSV or a Markdown table for .xlsx."}},"required":["path","content"]}"#,
+        "pr_status": #"{"type":"object","properties":{"include_failed_logs":{"type":"boolean","description":"Also return the tail of the failing job's log (default false)."}},"required":[]}"#,
+        "pr_create": #"{"type":"object","properties":{"title":{"type":"string","description":"Pull request title."},"body":{"type":"string","description":"Description: what changed and why, and how it was tested."},"base":{"type":"string","description":"Branch to merge into (default: the repository's default branch)."},"draft":{"type":"boolean","description":"Open as a draft (default false)."}},"required":["title","body"]}"#,
         "git_status": #"{"type":"object","properties":{}}"#,
         "git_diff": #"{"type":"object","properties":{"path":{"type":"string","description":"Limit the diff to this path"},"staged":{"type":"boolean","description":"Show staged changes instead of the working tree"}},"required":[]}"#,
         "git_log": #"{"type":"object","properties":{"count":{"type":"integer","description":"How many commits (default 10)"}},"required":[]}"#,

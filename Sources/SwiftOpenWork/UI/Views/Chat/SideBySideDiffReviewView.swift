@@ -21,6 +21,14 @@ struct SideBySideDiffReviewView: View {
     @State private var current = 0
     @State private var kept: Set<Int> = []
     @State private var failure: String?
+    /// The line a comment is being written on.
+    @State private var draft: DraftComment?
+    @State private var draftText = ""
+
+    private struct DraftComment: Equatable {
+        let line: Int
+        let excerpt: String
+    }
 
     private var theme: AppTheme { appState.settings.theme }
 
@@ -42,6 +50,7 @@ struct SideBySideDiffReviewView: View {
             }
         }
         .background(shortcuts)
+        .safeAreaInset(edge: .bottom) { commentBar }
         // Recomputed when either side changes (a revert, or a new turn), off the main thread:
         // the line alignment is quadratic in the part of the file that differs.
         .task(id: Identity(path: path, before: before, after: after)) {
@@ -62,6 +71,64 @@ struct SideBySideDiffReviewView: View {
     /// Stable across a revert, which renumbers hunks: a hunk is the same hunk if its text is.
     private func fingerprint(_ hunk: SideBySideDiff.Hunk) -> Int {
         [hunk.removedLines, hunk.addedLines].hashValue
+    }
+
+    // MARK: - Comments
+
+    @ViewBuilder
+    private var commentBar: some View {
+        let mine = appState.reviewComments.filter { $0.path == displayPath }
+        if draft != nil || !mine.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                if let draft {
+                    HStack(spacing: 6) {
+                        Text("Line \(draft.line)")
+                            .font(.system(size: 11, weight: .semibold))
+                        TextField("What should change?", text: $draftText, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .lineLimit(1...4)
+                            .onSubmit { commitDraft() }
+                        Button("Add") { commitDraft() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(draftText.trimmingCharacters(in: .whitespaces).isEmpty)
+                        Button("Cancel") { self.draft = nil }
+                    }
+                }
+                ForEach(mine) { comment in
+                    HStack(spacing: 6) {
+                        Image(systemName: "text.bubble").foregroundColor(.secondary)
+                        Text("L\(comment.line): \(comment.text)")
+                            .font(.system(size: 11))
+                            .lineLimit(2)
+                        Spacer()
+                        Button { appState.removeReviewComment(comment.id) } label: { Image(systemName: "xmark.circle") }
+                            .buttonStyle(.borderless)
+                    }
+                }
+                if !appState.reviewComments.isEmpty {
+                    HStack {
+                        Text("\(appState.reviewComments.count) comment\(appState.reviewComments.count == 1 ? "" : "s") ready")
+                            .font(.system(size: 11)).foregroundColor(.secondary)
+                        Spacer()
+                        Button("Send to agent") { appState.sendReviewComments() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(appState.isGenerating)
+                    }
+                }
+            }
+            .controlSize(.small)
+            .padding(10)
+            .background(.regularMaterial)
+        }
+    }
+
+    private func commitDraft() {
+        guard let draft else { return }
+        let text = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        appState.addReviewComment(ReviewComment(path: displayPath, line: draft.line, excerpt: draft.excerpt, text: text))
+        self.draft = nil
+        draftText = ""
     }
 
     // MARK: - Toolbar
@@ -178,7 +245,8 @@ struct SideBySideDiffReviewView: View {
             HStack(alignment: .top, spacing: 0) {
                 half(number: row.leftNumber, text: row.leftText, tint: leftTint(row.kind))
                 Divider()
-                half(number: row.rightNumber, text: row.rightText, tint: rightTint(row.kind))
+                half(number: row.rightNumber, text: row.rightText, tint: rightTint(row.kind),
+                     commentable: row.rightNumber != nil && row.rightText != nil)
             }
             .fixedSize(horizontal: false, vertical: true)
             .opacity(row.hunk.map { kept.contains(fingerprint(currentHunks[$0])) } == true ? 0.55 : 1)
@@ -187,12 +255,19 @@ struct SideBySideDiffReviewView: View {
 
     private var currentHunks: [SideBySideDiff.Hunk] { diff?.hunks ?? [] }
 
-    private func half(number: Int?, text: String?, tint: Color) -> some View {
+    private func half(number: Int?, text: String?, tint: Color, commentable: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 6) {
             Text(number.map(String.init) ?? "")
                 .font(.system(size: 10.5, design: .monospaced))
-                .foregroundColor(.secondary)
+                .foregroundColor(draft?.line == number && commentable ? ThemeColors.accent(for: appState.settings.accentColor) : .secondary)
                 .frame(width: 38, alignment: .trailing)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard commentable, let number else { return }
+                    draftText = ""
+                    draft = DraftComment(line: number, excerpt: text ?? "")
+                }
+                .help(commentable ? "Comment on this line" : "")
             Text(text ?? "")
                 .font(.system(size: 11.5, design: .monospaced))
                 .textSelection(.enabled)

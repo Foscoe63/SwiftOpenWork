@@ -251,9 +251,62 @@ public struct ComposerView: View {
         self.appState = appState
     }
 
+    private func pullRequestChip(_ pr: PullRequestTools.Status) -> some View {
+        let tint: Color = !pr.failing.isEmpty ? .red : (!pr.pending.isEmpty ? .orange : (pr.state == "MERGED" ? .purple : .green))
+        return HStack(spacing: 8) {
+            Image(systemName: pr.state == "MERGED" ? "arrow.triangle.merge" : "arrow.triangle.pull")
+                .foregroundColor(tint)
+            Button {
+                if let url = URL(string: pr.url) { NSWorkspace.shared.open(url) }
+            } label: {
+                Text(pr.summary)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .lineLimit(1)
+            }
+            .buttonStyle(.hitTestable)
+            .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+            .help("\(pr.title) — open on GitHub")
+            Spacer()
+            if !pr.failing.isEmpty, !appState.isGenerating {
+                Button("Fix CI") { appState.fixFailingChecks() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Ask the agent to read the failing job's log and fix it")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(ThemeColors.cardBg(for: appState.settings.theme))
+        .cornerRadius(8)
+        .padding(.horizontal, 16)
+    }
+
     public var body: some View {
         VStack(spacing: 8) {
             UnsavedEditorFilesBanner(appState: appState)
+
+            if case .needsReview(let found) = appState.projectTrust {
+                HStack(spacing: 8) {
+                    Image(systemName: "shield.lefthalf.filled").foregroundColor(.orange)
+                    Text("This project has \(found.summary). Instructions in a project are orders to the agent — read them before it does.")
+                        .font(.system(size: 11.5))
+                        .lineLimit(2)
+                    Spacer()
+                    Button("Use them") { appState.decideProjectTrust(true) }
+                        .buttonStyle(.borderedProminent).controlSize(.small)
+                    Button("Ignore") { appState.decideProjectTrust(false) }
+                        .buttonStyle(.bordered).controlSize(.small)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.12))
+                .cornerRadius(8)
+                .padding(.horizontal, 16)
+            }
+
+            if case .status(let pr)? = appState.pullRequest {
+                pullRequestChip(pr)
+            }
 
             if let queued = appState.queuedFollowUp {
                 HStack(spacing: 8) {
@@ -270,6 +323,13 @@ public struct ComposerView: View {
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
+                    } else {
+                        Button("Steer") {
+                            appState.steerWithQueuedFollowUp()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .help("Stop the agent where it is and send this now. What it already did stays.")
                     }
                     Button("Clear") {
                         appState.clearQueuedFollowUp()

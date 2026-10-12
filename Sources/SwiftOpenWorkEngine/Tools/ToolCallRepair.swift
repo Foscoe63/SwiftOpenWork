@@ -20,7 +20,7 @@ public enum ToolCallRepair {
     public static let builtInNames: [String] = [
         "file_read", "file_write", "edit_file", "multi_edit", "file_list", "file_copy", "file_move",
         "file_delete", "glob", "grep", "find_symbol", "terminal_command", "send_input", "build_project", "run_tests",
-        "git_status", "git_diff", "git_log", "git_commit", "changed_files", "revert_changes",
+        "git_status", "git_diff", "git_log", "git_commit", "pr_status", "pr_create", "document_create", "changed_files", "revert_changes",
         "rename_symbol", "go_to_definition", "find_references", "symbol_info", "call_hierarchy",
         "code_diagnostics", "document_symbols", "setup_xcode_language_server", "fetch_url",
         "web_search", "ask_user", "exit_plan_mode", "todo_write", "calculator", "get_current_date",
@@ -116,7 +116,7 @@ public enum ToolCallRepair {
         "file_write", "file_delete", "file_move", "file_copy", "edit_file", "multi_edit",
         "rename_symbol", "preview_start", "run_app", "git_commit", "worktree_create",
         "worktree_remove", "worktree_merge", "setup_xcode_language_server", "terminal_command", "mcp_call",
-        "revert_changes", "agent_spawn", "send_input",
+        "revert_changes", "agent_spawn", "send_input", "pr_create", "document_create",
     ]
 
     public static func isBlockedInPlanMode(_ raw: String) -> Bool {

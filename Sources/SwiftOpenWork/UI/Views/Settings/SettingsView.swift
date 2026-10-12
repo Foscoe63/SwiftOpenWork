@@ -2114,6 +2114,13 @@ public struct SettingsView: View {
             }
 
             WorkspaceRulesCard(appState: appState)
+            PermissionsAndHooksCard(appState: appState)
+            LocalAPICard(
+                appState: appState,
+                enabled: $appState.settings.localAPIEnabled,
+                port: $appState.settings.localAPIPort,
+                exposeCloud: $appState.settings.localAPIExposeCloudModels
+            )
 
             SettingsCard(title: "Autonomous ReAct Loop & Hierarchy (continued)", description: "Token budgets and multi-agent limits", icon: "gauge.with.dots.needle.67percent") {
                 SettingsRow(title: "Limit Turn Tokens", subtitle: "Halt a single turn when its token use exceeds the budget. Turn off to let turns run without a cap", icon: "gauge.with.dots.needle.67percent") {
@@ -2127,6 +2134,20 @@ public struct SettingsView: View {
                 if appState.settings.maxTurnTokens > 0 {
                     SettingsRow(title: "Max Turn Tokens (\(appState.settings.maxTurnTokens / 1000)k)", subtitle: "Budget for a single turn", icon: "gauge.with.dots.needle.67percent") {
                         Stepper("", value: $appState.settings.maxTurnTokens, in: 100_000...20_000_000, step: 100_000)
+                    }
+                }
+
+                SettingsRow(title: "Limit Turn Spend", subtitle: "Halt a turn once its estimated cost passes this many US dollars, priced from the model's own rates. Local models are free, so this never stops them", icon: "dollarsign.circle") {
+                    Toggle("", isOn: Binding(
+                        get: { appState.settings.maxTurnCostUSD > 0 },
+                        set: { appState.settings.maxTurnCostUSD = $0 ? 5 : 0 }
+                    ))
+                    .toggleStyle(.switch)
+                }
+
+                if appState.settings.maxTurnCostUSD > 0 {
+                    SettingsRow(title: "Max Turn Spend ($\(String(format: "%.2f", appState.settings.maxTurnCostUSD)))", subtitle: "Budget for a single turn", icon: "dollarsign.circle") {
+                        Stepper("", value: $appState.settings.maxTurnCostUSD, in: 0.25...200, step: 0.25)
                     }
                 }
 

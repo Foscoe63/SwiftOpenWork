@@ -160,8 +160,22 @@ public final class AppState: ObservableObject {
     // MARK: - Core Entities
     @Published public var workspaces: [Workspace] = []
     @Published public var activeWorkspaceId: String = "default-workspace" {
-        didSet { WindowLayoutStore.workspaceId = activeWorkspaceId }
+        didSet {
+            WindowLayoutStore.workspaceId = activeWorkspaceId
+            if oldValue != activeWorkspaceId { pullRequest = nil; refreshPullRequest() }
+        }
     }
+    /// The pull request for the active workspace's branch, as `gh` last reported it. nil until
+    /// the first lookup, and while `gh` has nothing to say (see `PullRequestTools.Lookup`).
+    @Published public var pullRequest: PullRequestTools.Lookup?
+    /// Notes left while reviewing a diff, waiting to be sent to the agent as one message.
+    @Published public var reviewComments: [ReviewComment] = []
+    /// What the local model API is doing, for Settings. nil while it is off.
+    @Published public var localAPIStatus: String?
+    /// Whether the active workspace carries instructions or skills the person has yet to look at.
+    @Published public var projectTrust: ProjectTrust.State = .nothingToLoad
+    private var pullRequestRefresh: Task<Void, Never>?
+    private var pullRequestTimer: Timer?
     @Published public var sessions: [Session] = []
     @Published public var currentSessionId: String? = nil {
         didSet { WindowLayoutStore.sessionId = currentSessionId }
@@ -180,6 +194,9 @@ public final class AppState: ObservableObject {
     @Published public var settings: AppSettings = AppSettings.default {
         didSet {
             persistence.saveSettings(settings)
+            if oldValue.localAPIEnabled != settings.localAPIEnabled || oldValue.localAPIPort != settings.localAPIPort {
+                applyLocalAPISettings()
+            }
             // Switching the Agent Messages log off while its tab is selected would leave the
             // inspector on a tab that is no longer in the tab bar. Corrected here rather than in
             // the view, so nothing publishes a change during a view update.
@@ -215,6 +232,8 @@ public final class AppState: ObservableObject {
     private var lastStreamingSessionSave = Date.distantPast
     /// Follow-up typed while a turn is running — sent automatically when the turn finishes.
     @Published public var queuedFollowUp: QueuedComposerMessage?
+    /// Identifies the turn that owns `isGenerating`; see `sendMessage`.
+    private var activeTurnToken: UUID?
     /// Consecutive automatic Continues sent for a session, by session id. Reset whenever the user
     /// sends anything themselves; capped in `maybeAutoContinue` so a stuck turn surfaces the
     /// ordinary Continue button instead of looping unattended forever.
@@ -247,6 +266,9 @@ public final class AppState: ObservableObject {
         // Before anything reads preferences or the Keychain: 1.1 stored them under another name.
         LegacyIdentityMigration.runIfNeeded()
         loadAll()
+        ProjectTrust.grandfather(workspaceRoots: workspaces.map(\.folderPath))
+        refreshPullRequest()
+        applyLocalAPISettings()
         EngineHosting.host = self
         recoverInterruptedAutomationRuns()
         recoverInterruptedLoops()
@@ -761,6 +783,75 @@ public final class AppState: ObservableObject {
         public var plan: SessionCheckpointStore.RestorePlan
     }
 
+    /// Ask `gh` about the active workspace's branch, off the main thread. Cheap enough to call after
+    /// every turn; a lookup already in flight is replaced rather than stacked.
+    public func refreshPullRequest() {
+        projectTrust = ProjectTrust.state(workspaceRoot: currentWorkspace.folderPath)
+        let folder = currentWorkspace.folderPath
+        guard !folder.isEmpty else { pullRequest = nil; return }
+        pullRequestRefresh?.cancel()
+        pullRequestRefresh = Task { [weak self] in
+            let result = await PullRequestTools.lookup(in: folder)
+            guard !Task.isCancelled, let self, self.currentWorkspace.folderPath == folder else { return }
+            self.pullRequest = result
+        }
+        if pullRequestTimer == nil {
+            // CI finishes on its own schedule. Checked while the app is in use, and only while a
+            // check is still running; a finished PR is not polled.
+            pullRequestTimer = Timer.scheduledTimer(withTimeInterval: 90, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, NSApp.isActive else { return }
+                    if case .status(let status)? = self.pullRequest, !status.pending.isEmpty { self.refreshPullRequest() }
+                }
+            }
+        }
+    }
+
+    /// Start, restart or stop the local model API to match the settings.
+    public func applyLocalAPISettings() {
+        let server = LocalAPIServer.shared
+        guard settings.localAPIEnabled else {
+            server.stop()
+            localAPIStatus = nil
+            return
+        }
+        let port = UInt16(clamping: max(1024, settings.localAPIPort))
+        do {
+            try server.start(port: port, token: LocalAPIServer.currentToken(), backend: LiveLocalAPIBackend())
+            localAPIStatus = "Listening on http://127.0.0.1:\(port)"
+        } catch {
+            localAPIStatus = "Could not start: \(error.localizedDescription)"
+        }
+    }
+
+    public func decideProjectTrust(_ trusted: Bool) {
+        ProjectTrust.decide(workspaceRoot: currentWorkspace.folderPath, trusted: trusted)
+        projectTrust = ProjectTrust.state(workspaceRoot: currentWorkspace.folderPath)
+    }
+
+    public func addReviewComment(_ comment: ReviewComment) {
+        reviewComments.append(comment)
+    }
+
+    public func removeReviewComment(_ id: UUID) {
+        reviewComments.removeAll { $0.id == id }
+    }
+
+    /// Send every collected review comment to the agent, as one message.
+    public func sendReviewComments() {
+        let prompt = ReviewComment.prompt(for: reviewComments)
+        guard !prompt.isEmpty else { return }
+        reviewComments = []
+        sendMessage(text: prompt)
+    }
+
+    /// Hand a red CI run to the agent.
+    public func fixFailingChecks() {
+        guard case .status(let status)? = pullRequest, !status.failing.isEmpty else { return }
+        let names = status.failing.map(\.name).joined(separator: ", ")
+        sendMessage(text: "CI is failing on pull request #\(status.number) (\(names)). Call pr_status with include_failed_logs to read the failure, find the cause, fix it, and run the tests locally before you stop. Do not push or open anything.")
+    }
+
     public func refreshRestorePoints() {
         guard let id = currentSessionId else {
             restorableMessageIds = []
@@ -995,7 +1086,13 @@ public final class AppState: ObservableObject {
 
         // Queue a follow-up instead of dropping the message when a turn is already running.
         if isGenerating {
-            queuedFollowUp = QueuedComposerMessage(text: trimmed, attachments: attachments)
+            // A second message while one is queued is added to it, not swapped in: replacing
+            // threw away what the person had already typed.
+            if let queued = queuedFollowUp {
+                queuedFollowUp = QueuedComposerMessage(text: queued.text + "\n\n" + trimmed, attachments: queued.attachments + attachments)
+            } else {
+                queuedFollowUp = QueuedComposerMessage(text: trimmed, attachments: attachments)
+            }
             composerText = ""
             showToast("Queued — sends when this turn finishes")
             onFinished?(false)
@@ -1088,6 +1185,10 @@ public final class AppState: ObservableObject {
         let plan = turnPlan(for: session, userText: trimmed)
 
         currentExecutionTask?.cancel()
+        // Names this turn. A turn that was stopped (or steered) finishes unwinding later, and must
+        // not mark the turn that replaced it as finished.
+        let turnToken = UUID()
+        activeTurnToken = turnToken
         currentExecutionTask = Task { [weak self] in
             // Speakers run one after another: each reads what the last one said. The queue can grow
             // mid-turn: an agent the user named may hand part of the work to a teammate by
@@ -1195,6 +1296,13 @@ public final class AppState: ObservableObject {
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
+                guard self.activeTurnToken == turnToken else {
+                    // Superseded by Stop or Steer: the state belongs to whatever replaced it.
+                    self.persistence.saveSessions(self.sessions)
+                    onFinished?(true)
+                    return
+                }
+                self.activeTurnToken = nil
                 self.isGenerating = false
                 self.currentExecutionTask = nil
                 self.persistence.saveSessions(self.sessions)
@@ -1202,6 +1310,7 @@ public final class AppState: ObservableObject {
                 self.refreshLoadedMLXModels()
                 self.announceTurnFinished()
                 self.refreshRestorePoints()
+                self.refreshPullRequest()
                 // A follow-up the user actually queued outranks resuming on our own — it is
                 // newer instructions, not just "keep going."
                 if self.queuedFollowUp != nil {
@@ -1335,9 +1444,19 @@ public final class AppState: ObservableObject {
         sendMessage(text: queued.text, attachments: queued.attachments)
     }
 
+    /// Interrupt the running turn and send the queued message now. What the agent had already
+    /// written and done stays; the new message continues from there. (Stop alone keeps the queue
+    /// for later; Steer is "stop, and take this instead".)
+    public func steerWithQueuedFollowUp() {
+        guard isGenerating, queuedFollowUp != nil else { return }
+        cancelCurrentGeneration()
+        flushQueuedFollowUp()
+    }
+
     public func cancelCurrentGeneration() {
         currentExecutionTask?.cancel()
         currentExecutionTask = nil
+        activeTurnToken = nil
         isGenerating = false
         ToolApprovalManager.shared.rejectAllPending()
         UserChoiceManager.shared.cancelAll()
