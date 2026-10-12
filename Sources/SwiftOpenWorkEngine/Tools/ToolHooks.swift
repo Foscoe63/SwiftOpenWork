@@ -183,7 +183,7 @@ public enum ToolHooks {
                 for (event, groups) in parse(data, isProject: true) { merged[event, default: []] += groups }
             }
         case let .untrusted(commands):
-            skipped = "This project defines \(commands.count) hook command\(commands.count == 1 ? "" : "s") in \(relativePath), which are not running until you trust them (Settings → Safety → Hooks)."
+            skipped = "This project defines \(commands.count) hook command\(commands.count == 1 ? "" : "s") in \(relativePath), which are not running until you trust them (Settings → Advanced → Permission Rules & Hooks)."
         }
         return (merged, skipped)
     }
