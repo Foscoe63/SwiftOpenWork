@@ -671,9 +671,35 @@ public struct AgentEditModalView: View {
                         HStack {
                             Text("Model Provider:")
                                 .font(.system(size: 11.5))
-                            Picker("", selection: $draft.providerId) {
+                            Picker("", selection: Binding(
+                                get: { draft.providerId },
+                                set: { newValue in
+                                    // A model id belongs to one provider; keeping it across a switch
+                                    // would name a model the new provider does not have.
+                                    if newValue != draft.providerId { draft.modelId = "" }
+                                    draft.providerId = newValue
+                                }
+                            )) {
+                                Text("Inherit from chat").tag("")
                                 ForEach(appState.providers.filter { $0.isEnabled }) { prov in
                                     Text(prov.name).tag(prov.id)
+                                }
+                            }
+                        }
+
+                        // Without a model the agent inherits its parent's, whatever the provider says.
+                        if let provider = appState.providers.first(where: { $0.id == draft.providerId }) {
+                            HStack {
+                                Text("Model:")
+                                    .font(.system(size: 11.5))
+                                Picker("", selection: $draft.modelId) {
+                                    Text("Inherit from chat").tag("")
+                                    if !draft.modelId.isEmpty, !provider.models.contains(where: { $0.id == draft.modelId }) {
+                                        Text(draft.modelId).tag(draft.modelId)
+                                    }
+                                    ForEach(provider.models) { model in
+                                        Text(model.name).tag(model.id)
+                                    }
                                 }
                             }
                         }
