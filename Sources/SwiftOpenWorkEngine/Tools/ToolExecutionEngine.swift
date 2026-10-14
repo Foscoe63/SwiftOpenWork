@@ -1966,10 +1966,15 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             // model. Unreachable is treated like off: once, before any work was done.
             if SubAgentExecutor.failedBeforeStarting(outcome),
                let parent = parentFrame, parent.provider.id != choice.provider.id {
-                if let callId {
-                    await LiveToolOutput.shared.append(callId: callId, chunk: "\(choice.provider.name) could not be reached; retrying on \(parent.model.name).\n")
-                }
+                // `failedBeforeStarting` is any first-call failure — a rejected model or parameter,
+                // a missing entitlement, a bad key — not only a server that is down, so say which.
                 let unreachable = outcome.stoppedBecause
+                if let callId {
+                    await LiveToolOutput.shared.append(
+                        callId: callId,
+                        chunk: "\(choice.provider.name) (\(choice.model.id)) failed: \(unreachable). Retrying on \(parent.model.name).\n"
+                    )
+                }
                 outcome = await runSubAgent(parent.provider, parent.model)
                 choiceNote = "\(targetAgent.name) is configured for \(choice.model.id) on \(choice.provider.name), "
                     + "which could not be used (\(unreachable)); it ran on \(parent.model.name) instead."
