@@ -352,6 +352,28 @@ public enum SubAgentExecutor {
                 }
                 iterations += 1
 
+                // Running out of steps used to cut a sub-agent off mid-edit with an empty report,
+                // so everything it had learned was lost. Warn it with a few steps left, and make the
+                // last one a tool-free wrap-up so the lead gets an account of what is done and what
+                // is not.
+                let finalStep = maxIterations > 2 && iterations == maxIterations
+                let warnAt = max(2, maxIterations / 5)
+                if maxIterations > 4, !finalStep, maxIterations - iterations + 1 == warnAt {
+                    messages.append(ChatMessage(role: .user, content: """
+                        [System]: You have \(warnAt) steps left out of \(maxIterations). Stop exploring. \
+                        Finish the change you are in the middle of, skip anything optional, and be ready \
+                        to report.
+                        """))
+                }
+                if finalStep {
+                    messages.append(ChatMessage(role: .user, content: """
+                        [System]: This is your last step and your tools are turned off. Reply with your \
+                        report: what is done (files changed), what is not done, and the exact next step \
+                        for whoever continues.
+                        """))
+                }
+                let roundTools: [Tool] = finalStep ? [] : tools
+
                 // Messages from other agents, before it decides its next step.
                 if let mailboxId {
                     let letters = AgentMailbox.shared.drain(mailboxId)
@@ -389,7 +411,7 @@ public enum SubAgentExecutor {
                                 temperature: subAgent.temperature,
                                 maxTokens: subAgent.maxTokens,
                                 reasoningEffort: reasoningEffort,
-                                tools: tools
+                                tools: roundTools
                             ) { chunk in
                                 if !chunk.deltaText.isEmpty { box.append(chunk.deltaText) }
                                 if !chunk.toolCalls.isEmpty { calls.add(chunk.toolCalls) }
@@ -435,7 +457,7 @@ public enum SubAgentExecutor {
                     // A model whose template the runtime does not recognise writes its calls as
                     // text. Without this, such a sub-agent "completed" having run nothing. Only
                     // a tool it was offered counts.
-                    let offeredNames = Set(tools.map(\.name))
+                    let offeredNames = Set(roundTools.map(\.name))
                     pending = TextToolCallParser.parse(text) { name in
                         offeredTools.contains(AgentRunner.canonicalToolName(name)) || offeredNames.contains(name)
                     }.map { ToolCallInfo(id: UUID().uuidString, toolName: $0.tool, argumentsJson: $0.args) }
@@ -444,7 +466,8 @@ public enum SubAgentExecutor {
 
                 if pending.isEmpty {
                     summary = text
-                    stoppedBecause = "completed"
+                    stoppedBecause = finalStep ? "hit its \(maxIterations)-step budget and wrapped up with this report" : "completed"
+                    if finalStep { succeeded = false }
                     break
                 }
 
