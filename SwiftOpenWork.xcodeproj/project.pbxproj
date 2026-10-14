@@ -1329,7 +1329,7 @@
 				CODE_SIGN_IDENTITY = "SwiftOpenWork Local Signing";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = SwiftOpenWork;
@@ -1344,7 +1344,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.10.0;
+				MARKETING_VERSION = 1.11.0;
 				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
 				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";
@@ -1483,7 +1483,7 @@
 				CODE_SIGN_IDENTITY = "SwiftOpenWork Local Signing";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 16;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = SwiftOpenWork;
@@ -1498,7 +1498,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.10.0;
+				MARKETING_VERSION = 1.11.0;
 				OTHER_CFLAGS = "$(inherited) -Wno-c++17-extensions";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited) -std=c++17 -Wno-c++17-extensions";
 				OTHER_METAL_FLAGS = "$(inherited) -Wno-c++17-extensions";
