@@ -173,6 +173,7 @@ public enum ACPAgentRunner {
         defer { if accumulator.message.isStreaming { accumulator.finalize() } }
 
         let prompt = session.messages.last(where: { $0.role == .user })?.content ?? ""
+        let turnStart = Date()
         AuditLog.shared.record(sessionId: session.id, event: "turn_start", fields: [
             "agent": agent.name, "external": config.displayLine, "unattended": ToolApprovalManager.shared.isUnattended,
             "prompt": AuditLog.scrubbed(prompt),
@@ -273,14 +274,22 @@ public enum ACPAgentRunner {
         } else if stopReason == "refusal" {
             accumulator.setHalt(reason: "refusal", text: "The agent declined to continue.")
         }
-        // External agents report at most the context in use, never what a turn sent or received,
-        // so the composer's Sent / Recv would stay at zero. Estimate from the text instead.
-        accumulator.setBilled(
-            prompt: max(accumulator.message.promptTokens, TokenAccounting.estimate(prompt)),
-            completion: max(accumulator.message.completionTokens,
-                            TokenAccounting.estimate(accumulator.message.content + (accumulator.message.reasoning ?? ""))),
-            lastPrompt: TokenAccounting.estimate(prompt)
-        )
+        // External agents report at most the context in use, never what a turn sent or received.
+        // Claude Code keeps per-call usage in its transcript, so read the real figures from there;
+        // anything else gets an estimate from the text, which is only the typed prompt and the reply.
+        if let configDir = ClaudeCodeUsage.configDir(for: config),
+           let turn = await Task.detached(priority: .utility, operation: {
+               ClaudeCodeUsage.turn(configDir: configDir, sessionId: sessionId, since: turnStart)
+           }).value {
+            accumulator.setBilled(prompt: turn.sent, completion: turn.received, lastPrompt: turn.lastPrompt)
+        } else {
+            accumulator.setBilled(
+                prompt: max(accumulator.message.promptTokens, TokenAccounting.estimate(prompt)),
+                completion: max(accumulator.message.completionTokens,
+                                TokenAccounting.estimate(accumulator.message.content + (accumulator.message.reasoning ?? ""))),
+                lastPrompt: TokenAccounting.estimate(prompt)
+            )
+        }
         AuditLog.shared.record(sessionId: session.id, event: "turn_end", fields: [
             "reason": failure != nil ? "agent_error" : stopReason, "agent": agent.name,
         ])

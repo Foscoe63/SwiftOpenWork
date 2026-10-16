@@ -114,6 +114,56 @@ public struct ClaudeCodeUsage: Sendable, Equatable {
         return result
     }
 
+    // MARK: - One turn
+
+    /// What one turn of a Claude Code session billed, for the composer's Sent / Recv. A turn with
+    /// tool steps is many model calls, each re-sending the whole context (mostly as cache reads).
+    public struct Turn: Sendable, Equatable {
+        /// Prompt-side tokens summed over every call: fresh input plus cache writes plus cache reads.
+        public var sent = 0
+        public var received = 0
+        /// The last call's prompt-side total, i.e. the context in use now.
+        public var lastPrompt = 0
+        public var calls = 0
+    }
+
+    /// Reads the session's transcript for the calls made since `since`. Blocking; nil when the
+    /// transcript is missing or holds nothing for the turn, so the caller can fall back to an estimate.
+    public static func turn(configDir: String, sessionId: String, since: Date) -> Turn? {
+        let root = URL(fileURLWithPath: configDir).appendingPathComponent("projects")
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return nil }
+        let stamp = ISO8601DateFormatter()
+        stamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plainStamp = ISO8601DateFormatter()
+        let cutoff = since.addingTimeInterval(-2)
+        var turn = Turn()
+        var seen = Set<String>()
+        var latest = Date.distantPast
+        for case let file as URL in walker where file.lastPathComponent == sessionId + ".jsonl" {
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
+            for line in text.split(separator: "\n") where line.contains("\"usage\"") {
+                guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                      object["type"] as? String == "assistant",
+                      let message = object["message"] as? [String: Any],
+                      let usage = message["usage"] as? [String: Any],
+                      let raw = object["timestamp"] as? String,
+                      let when = stamp.date(from: raw) ?? plainStamp.date(from: raw), when >= cutoff else { continue }
+                let key = (message["id"] as? String ?? "") + "|" + (object["requestId"] as? String ?? "")
+                if key != "|", !seen.insert(key).inserted { continue }
+                let prompt = (usage["input_tokens"] as? Int ?? 0)
+                    + (usage["cache_creation_input_tokens"] as? Int ?? 0)
+                    + (usage["cache_read_input_tokens"] as? Int ?? 0)
+                let output = usage["output_tokens"] as? Int ?? 0
+                if prompt + output == 0 { continue }
+                turn.sent += prompt
+                turn.received += output
+                turn.calls += 1
+                if when >= latest { latest = when; turn.lastPrompt = prompt }
+            }
+        }
+        return turn.calls > 0 ? turn : nil
+    }
+
     // MARK: - Showing
 
     public static func abbreviate(_ n: Int) -> String {
