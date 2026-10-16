@@ -1531,6 +1531,27 @@ public final class AppState: ObservableObject {
         persistence.saveSlashCommands(customSlashCommands)
     }
 
+    /// `/usage`: what the selected Claude Code agent's login has used, as a chat message.
+    private func showClaudeCodeUsage() {
+        guard let session = currentSession else { return }
+        let agent = currentAgent
+        guard let config = agent.externalAgent, let dir = ClaudeCodeUsage.configDir(for: config) else {
+            showToast("/usage needs a Claude Code agent selected (Settings → External Agents)")
+            return
+        }
+        Task { [weak self] in
+            let agentSession = await ACPAgentRunner.agentSessionId(chat: session, agent: agent)
+            let usage = await Task.detached { ClaudeCodeUsage.scan(configDir: dir) }.value
+            guard let self, var current = self.sessions.first(where: { $0.id == session.id }) else { return }
+            current.messages.append(ChatMessage(
+                sessionId: session.id, role: .assistant, content: usage.summary(sessionId: agentSession),
+                agentName: "Usage", agentAvatar: "chart.bar.fill", agentColor: "#0EA5E9"
+            ))
+            if let idx = self.sessions.firstIndex(where: { $0.id == session.id }) { self.sessions[idx] = current }
+            self.persistence.saveSessions(self.sessions)
+        }
+    }
+
     private func handleSlashCommand(_ command: String) -> Bool {
         let parts = command.split(separator: " ")
         guard let first = parts.first?.lowercased() else { return false }
@@ -1617,6 +1638,7 @@ public final class AppState: ObservableObject {
                     - `/model <name>` - Switch active model provider or open Providers catalog
                     - `/plan` - Toggle plan mode (read-only until exit_plan_mode)
                     - `/clear` - Clear messages in this session
+                    - `/usage` - Claude Code token usage for this chat and account
                     - `/compact` - Shrink what the model is sent; your chat stays as is
                     - Your own commands: Settings → Slash Commands
                     - `/settings` - Jump to App Settings
@@ -1636,6 +1658,10 @@ public final class AppState: ObservableObject {
                 }
                 persistence.saveSessions(sessions)
             }
+            return true
+
+        case "/usage":
+            showClaudeCodeUsage()
             return true
 
         case "/settings":

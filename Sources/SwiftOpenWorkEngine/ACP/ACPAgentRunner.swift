@@ -72,6 +72,10 @@ public enum ACPMapping {
     public static let presets: [Preset] = [
         Preset(name: "Claude Code", detail: "Anthropic's agent, through the Zed ACP adapter (needs Node)",
                config: ExternalAgentConfig(command: "npx", args: ["-y", "@zed-industries/claude-code-acp"])),
+        Preset(name: "Claude Code (second account)",
+               detail: "A separate Claude sign-in kept in ~/.claude-desktop. Run `CLAUDE_CONFIG_DIR=~/.claude-desktop claude`, then /login, once",
+               config: ExternalAgentConfig(command: "npx", args: ["-y", "@zed-industries/claude-code-acp"],
+                                           env: ["CLAUDE_CONFIG_DIR": NSHomeDirectory() + "/.claude-desktop"])),
         Preset(name: "Codex", detail: "OpenAI's agent, through the Zed ACP adapter (needs Node)",
                config: ExternalAgentConfig(command: "npx", args: ["-y", "@zed-industries/codex-acp"])),
         Preset(name: "Gemini CLI", detail: "Google's agent (`gemini --experimental-acp`)",
@@ -146,6 +150,11 @@ actor ACPSessionPool {
 public enum ACPAgentRunner {
 
     public static let clientName = "SwiftOpenWork"
+
+    /// The agent's own session id for this chat, once a turn has started one.
+    public static func agentSessionId(chat: Session, agent: Agent) async -> String? {
+        await ACPSessionPool.shared.entry(for: "\(chat.id)|\(agent.id)")?.sessionId
+    }
 
     public static func run(
         session: Session,
@@ -276,8 +285,16 @@ public enum ACPAgentRunner {
 
     // MARK: - Connecting
 
+    /// Markers a Claude Code session leaves in its children's environment. If this app was started
+    /// from one, passing them on makes the agent refuse to start ("cannot be launched inside
+    /// another Claude Code session"), which surfaced only as "Internal error".
+    static func isInheritedClaudeSession(_ name: String) -> Bool {
+        name == "CLAUDECODE" || name.hasPrefix("CLAUDE_CODE_") || name.hasPrefix("CLAUDE_AGENT_SDK_")
+    }
+
     private static func connect(config: ExternalAgentConfig, workspace: Workspace, events: EventPipe) async throws -> ACPSessionPool.Entry {
         var environment = ToolExecutionEngine.defaultEnvironment()
+        environment = environment.filter { !isInheritedClaudeSession($0.key) }
         for (name, value) in config.env { environment[name] = value }
         let connection = ACPConnection(
             executable: "/usr/bin/env", arguments: [config.command] + config.args,

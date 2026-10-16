@@ -36,6 +36,7 @@ public enum SlashCommands {
         BuiltIn(command: "/settings", description: "Open App Settings"),
         BuiltIn(command: "/tools", description: "Inspect MCP & built-in tools"),
         BuiltIn(command: "/memory", description: "Search or view long-term memory"),
+        BuiltIn(command: "/usage", description: "Show Claude Code token usage for this chat and account"),
         BuiltIn(command: "/help", description: "Show the command reference"),
     ]
 
