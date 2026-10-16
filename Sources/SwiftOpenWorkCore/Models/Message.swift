@@ -53,6 +53,11 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     public var isError: Bool
     public var promptTokens: Int
     public var completionTokens: Int
+    /// Everything billed across the model calls behind this message. `promptTokens` keeps only
+    /// the last call's figure (it is what fills the context window); a turn with tool steps made
+    /// several calls, so totals read these instead. Zero on messages saved before they existed.
+    public var billedPromptTokens: Int = 0
+    public var billedCompletionTokens: Int = 0
     /// Measured decode speed of the reply, when the provider reports one.
     public var generationTokensPerSecond: Double?
     /// Durable harness notices (compaction, tools-unsupported) — Radiant `notice` parts.
@@ -122,6 +127,7 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         case agentId, agentName, agentAvatar, agentColor, modelId, providerId
         case timestamp, toolCalls, subAgentTasks, attachments
         case isStreaming, isError, promptTokens, completionTokens, generationTokensPerSecond
+        case billedPromptTokens, billedCompletionTokens
         case notices, haltReason, haltText, thinkingBlocks
     }
 
@@ -148,6 +154,8 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         self.promptTokens = try container.decodeIfPresent(Int.self, forKey: .promptTokens) ?? 0
         self.generationTokensPerSecond = try container.decodeIfPresent(Double.self, forKey: .generationTokensPerSecond)
         self.completionTokens = try container.decodeIfPresent(Int.self, forKey: .completionTokens) ?? 0
+        self.billedPromptTokens = try container.decodeIfPresent(Int.self, forKey: .billedPromptTokens) ?? 0
+        self.billedCompletionTokens = try container.decodeIfPresent(Int.self, forKey: .billedCompletionTokens) ?? 0
         self.notices = try container.decodeIfPresent([String].self, forKey: .notices) ?? []
         self.haltReason = try container.decodeIfPresent(String.self, forKey: .haltReason)
         self.haltText = try container.decodeIfPresent(String.self, forKey: .haltText)
@@ -176,6 +184,8 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         try container.encode(isError, forKey: .isError)
         try container.encode(promptTokens, forKey: .promptTokens)
         try container.encode(completionTokens, forKey: .completionTokens)
+        try container.encode(billedPromptTokens, forKey: .billedPromptTokens)
+        try container.encode(billedCompletionTokens, forKey: .billedCompletionTokens)
         try container.encodeIfPresent(generationTokensPerSecond, forKey: .generationTokensPerSecond)
         try container.encode(notices, forKey: .notices)
         try container.encodeIfPresent(haltReason, forKey: .haltReason)

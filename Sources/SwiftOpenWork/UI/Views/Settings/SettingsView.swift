@@ -2116,6 +2116,7 @@ public struct SettingsView: View {
             WorkspaceRulesCard(appState: appState)
             PermissionsAndHooksCard(appState: appState)
             ExternalAgentsCard(appState: appState)
+            ClaudeUsageCard(appState: appState)
             LocalAPICard(
                 appState: appState,
                 enabled: $appState.settings.localAPIEnabled,

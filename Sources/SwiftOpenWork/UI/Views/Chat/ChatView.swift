@@ -65,6 +65,7 @@ public struct ChatView: View {
             VStack(spacing: 8) {
                 PlanModeBanner(appState: appState)
                 SessionTodosBar(appState: appState)
+                TokenStatsBar(appState: appState)
                 ComposerView(appState: appState)
             }
         }

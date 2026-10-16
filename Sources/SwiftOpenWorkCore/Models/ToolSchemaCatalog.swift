@@ -53,6 +53,22 @@ public enum ToolSchemaCatalog {
                 parametersJsonSchema: schemas["quit_app"]!
             ),
             Tool(
+                id: "tool_describe",
+                name: "tool_describe",
+                displayName: "Describe Tools",
+                description: "Load the full parameter schemas of built-in tools that the prompt lists by name only. Search by tool name or keywords; the tools it returns can then be called directly.",
+                category: .system,
+                parametersJsonSchema: schemas["tool_describe"]!
+            ),
+            Tool(
+                id: "skill_load",
+                name: "skill_load",
+                displayName: "Load Skill",
+                description: "Read the full instructions of a skill listed under Active Skills. The list shows only a short preview; load a skill before following it.",
+                category: .system,
+                parametersJsonSchema: schemas["skill_load"]!
+            ),
+            Tool(
                 id: "mcp_describe",
                 name: "mcp_describe",
                 displayName: "Describe MCP Tools",
@@ -468,6 +484,8 @@ public enum ToolSchemaCatalog {
         "gmail_search": #"{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer"}},"required":["query"]}"#,
         "google_calendar_list": #"{"type":"object","properties":{"days":{"type":"integer"},"max_results":{"type":"integer"}},"required":[]}"#,
         "google_calendar_upcoming": #"{"type":"object","properties":{"days":{"type":"integer"}},"required":[]}"#,
+        "tool_describe": #"{"type":"object","properties":{"query":{"type":"string","description":"A tool name, or words from its name or purpose. Space-separated words must all match."},"limit":{"type":"integer","description":"How many tools to load (default 6, max 12)."}},"required":["query"]}"#,
+        "skill_load": #"{"type":"object","properties":{"name":{"type":"string","description":"The skill's name exactly as listed under Active Skills."}},"required":["name"]}"#,
         "mcp_describe": #"{"type":"object","properties":{"query":{"type":"string","description":"Words from the tool's name or purpose, a server id, or an exact mcp__server__tool name. Space-separated words must all match."},"limit":{"type":"integer","description":"How many tools to load (default 6, max 12)."}},"required":["query"]}"#,
         "mcp_resources": #"{"type":"object","properties":{"server":{"type":"string","description":"Server id or name."},"action":{"type":"string","enum":["list_resources","read_resource","list_prompts","get_prompt"]},"uri":{"type":"string","description":"Resource URI for read_resource."},"name":{"type":"string","description":"Prompt name for get_prompt."},"arguments":{"type":"object","description":"Prompt arguments for get_prompt."}},"required":["server","action"]}"#,
         "mcp_call": #"{"type":"object","properties":{"server":{"type":"string"},"tool":{"type":"string"},"arguments":{"type":"object"}},"required":["server","tool"]}"#,

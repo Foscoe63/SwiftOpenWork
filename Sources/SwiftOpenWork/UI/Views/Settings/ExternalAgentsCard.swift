@@ -9,7 +9,20 @@ public struct ExternalAgentsCard: View {
     @ObservedObject var appState: AppState
     @State private var customName = ""
     @State private var customCommand = ""
+    @State private var customEnv = ""
     @State private var message: String?
+
+    /// `KEY=value` pairs separated by spaces; a leading `~` in a value is the home folder.
+    static func parseEnv(_ text: String) -> [String: String] {
+        var env: [String: String] = [:]
+        for word in text.split(separator: " ") {
+            guard let eq = word.firstIndex(of: "="), eq != word.startIndex else { continue }
+            let key = String(word[..<eq])
+            let value = String(word[word.index(after: eq)...])
+            env[key] = (value as NSString).expandingTildeInPath
+        }
+        return env
+    }
 
     public init(appState: AppState) {
         self.appState = appState
@@ -51,11 +64,13 @@ public struct ExternalAgentsCard: View {
                     Button("Add") {
                         let words = customCommand.split(separator: " ").map(String.init)
                         guard let command = words.first, !customName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                        add(name: customName, config: ExternalAgentConfig(command: command, args: Array(words.dropFirst())), detail: "Custom ACP agent")
-                        customName = ""; customCommand = ""
+                        add(name: customName, config: ExternalAgentConfig(command: command, args: Array(words.dropFirst()), env: Self.parseEnv(customEnv)), detail: "Custom ACP agent")
+                        customName = ""; customCommand = ""; customEnv = ""
                     }
                     .controlSize(.small)
                 }
+                TextField("Environment (optional), e.g. CLAUDE_CONFIG_DIR=~/.claude-work", text: $customEnv)
+                    .textFieldStyle(.roundedBorder)
 
                 if !external.isEmpty {
                     Divider()
@@ -84,5 +99,76 @@ public struct ExternalAgentsCard: View {
         agent.canSpawnSubAgents = false
         appState.saveAgent(agent)
         message = "\(name) added. Pick it from the agent menu in the composer."
+    }
+}
+
+/// Token use for each Claude Code login the External Agents list points at, so the second
+/// account can be told apart from the first. Read from Claude Code's own transcripts.
+public struct ClaudeUsageCard: View {
+    @ObservedObject var appState: AppState
+    @State private var usages: [ClaudeCodeUsage] = []
+    @State private var loading = false
+
+    public init(appState: AppState) {
+        self.appState = appState
+    }
+
+    /// One entry per config folder, with the names of the agents that use it.
+    private var folders: [(dir: String, agents: [String])] {
+        var order: [String] = []
+        var names: [String: [String]] = [:]
+        for agent in appState.agents {
+            guard let config = agent.externalAgent, let dir = ClaudeCodeUsage.configDir(for: config) else { continue }
+            if names[dir] == nil { order.append(dir) }
+            names[dir, default: []].append(agent.name)
+        }
+        return order.map { ($0, names[$0] ?? []) }
+    }
+
+    public var body: some View {
+        SettingsCard(
+            title: "Claude Code Usage",
+            description: "Tokens used by each Claude Code sign-in, read from its transcripts on this Mac. Your plan's remaining allowance is shown by /usage inside Claude Code. In a chat, /usage shows this chat too.",
+            icon: "chart.bar"
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                if folders.isEmpty {
+                    Text("Add Claude Code under External Agents to see its usage here.")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
+                }
+                ForEach(folders, id: \.dir) { folder in
+                    let usage = usages.first { $0.configDir == folder.dir }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(folder.agents.joined(separator: ", ")).font(.system(size: 12, weight: .semibold))
+                        Text("\(usage?.accountEmail ?? "not signed in") · \(folder.dir.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
+                            .font(.system(size: 10.5)).foregroundColor(.secondary)
+                        if let usage {
+                            row("Last 5 hours", usage.last5Hours)
+                            row("Today", usage.today)
+                            row("Last 7 days", usage.last7Days)
+                        } else {
+                            Text(loading ? "Reading…" : "—").font(.system(size: 11)).foregroundColor(.secondary)
+                        }
+                    }
+                }
+                Button(loading ? "Reading…" : "Refresh") { Task { await refresh() } }
+                    .controlSize(.small).disabled(loading)
+            }
+        }
+        .task { await refresh() }
+    }
+
+    private func row(_ label: String, _ tokens: ClaudeCodeUsage.Tokens) -> some View {
+        HStack {
+            Text(label).font(.system(size: 11)).frame(width: 90, alignment: .leading)
+            Text(ClaudeCodeUsage.line(tokens)).font(.system(size: 11, design: .monospaced)).foregroundColor(.secondary)
+        }
+    }
+
+    private func refresh() async {
+        let dirs = folders.map(\.dir)
+        loading = true
+        usages = await Task.detached { dirs.map { ClaudeCodeUsage.scan(configDir: $0) } }.value
+        loading = false
     }
 }
