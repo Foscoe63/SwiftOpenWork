@@ -134,8 +134,8 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     /// it already was, so callers that only care about the token totals need not look up pricing.
     public mutating func recordActivity(at date: Date = Date(), providers: [ModelProvider] = []) {
         updatedAt = date
-        totalPromptTokens = messages.reduce(0) { $0 + max(0, $1.promptTokens) }
-        totalCompletionTokens = messages.reduce(0) { $0 + max(0, $1.completionTokens) }
+        totalPromptTokens = TokenAccounting.stats(for: messages).sentTokens
+        totalCompletionTokens = TokenAccounting.stats(for: messages).receivedTokens
         if let model = providers.first(where: { $0.id == providerId })?.models.first(where: { $0.id == modelId }) {
             estimatedCost = Double(totalPromptTokens) / 1000.0 * model.costPer1kPrompt
                 + Double(totalCompletionTokens) / 1000.0 * model.costPer1kCompletion

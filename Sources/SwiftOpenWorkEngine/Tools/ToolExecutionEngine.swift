@@ -2122,6 +2122,48 @@ public final class ToolExecutionEngine: @unchecked Sendable {
             )
             return Self.mcpResult(output, startTime: startTime)
 
+        case "tool_describe":
+            let query = dict["query"] as? String ?? dict["name"] as? String ?? dict["tool"] as? String ?? ""
+            let limit = (dict["limit"] as? Int) ?? Int(dict["limit"] as? String ?? "") ?? MCPToolSearch.defaultLimit
+            let pool = PersistenceManager.shared.loadTools().filter { $0.isEnabled && BuiltInToolSearch.deferrable.contains($0.name) }
+                + ToolSchemaCatalog.parityDefaults.filter { BuiltInToolSearch.deferrable.contains($0.name) }
+            var seen = Set<String>()
+            let unique = pool.filter { seen.insert($0.name).inserted }
+            let found = MCPToolSearch.match(query: query, in: unique, limit: limit)
+            guard !found.isEmpty else {
+                return ToolExecutionResult(
+                    success: false, output: "",
+                    error: "No deferred tool matches '\(query)'. Try fewer or different words, or a tool name from the list.",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+            return ToolExecutionResult(
+                success: true,
+                output: "\(found.count) tool(s) loaded; call them directly by these names.\n\n" + MCPToolSearch.describe(found),
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+
+        case "skill_load":
+            let requested = (dict["name"] as? String ?? dict["skill"] as? String ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let skills = PersistenceManager.shared.loadSkills().filter { $0.isEnabled && $0.isAllowed(by: currentAgent.allowedSkillIds) }
+                + ProjectSkills.load(workspacePath: workspace.folderPath).filter { $0.isEnabled && $0.isAllowed(by: currentAgent.allowedSkillIds) }
+            guard !requested.isEmpty,
+                  let skill = skills.first(where: { $0.name.lowercased() == requested })
+                    ?? skills.first(where: { $0.name.lowercased().contains(requested) }) else {
+                return ToolExecutionResult(
+                    success: false, output: "",
+                    error: "No skill named '\(requested)'. Available: \(skills.map(\.name).sorted().joined(separator: ", ")).",
+                    durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                )
+            }
+            let body = skill.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            return ToolExecutionResult(
+                success: true,
+                output: "# Skill: \(skill.name)\n\n" + (body.isEmpty ? skill.description : body),
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+
         case "mcp_describe":
             let query = dict["query"] as? String ?? dict["name"] as? String ?? dict["tool"] as? String ?? ""
             let limit = (dict["limit"] as? Int) ?? Int(dict["limit"] as? String ?? "") ?? MCPToolSearch.defaultLimit

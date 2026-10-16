@@ -273,6 +273,14 @@ public enum ACPAgentRunner {
         } else if stopReason == "refusal" {
             accumulator.setHalt(reason: "refusal", text: "The agent declined to continue.")
         }
+        // External agents report at most the context in use, never what a turn sent or received,
+        // so the composer's Sent / Recv would stay at zero. Estimate from the text instead.
+        accumulator.setBilled(
+            prompt: max(accumulator.message.promptTokens, TokenAccounting.estimate(prompt)),
+            completion: max(accumulator.message.completionTokens,
+                            TokenAccounting.estimate(accumulator.message.content + (accumulator.message.reasoning ?? ""))),
+            lastPrompt: TokenAccounting.estimate(prompt)
+        )
         AuditLog.shared.record(sessionId: session.id, event: "turn_end", fields: [
             "reason": failure != nil ? "agent_error" : stopReason, "agent": agent.name,
         ])

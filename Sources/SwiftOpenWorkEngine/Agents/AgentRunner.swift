@@ -291,6 +291,16 @@ public final class AgentStreamAccumulator {
         onUpdate(message)
     }
 
+    /// The turn's running totals across every model call so far, for the composer's Sent / Recv.
+    public func setBilled(prompt: Int, completion: Int, lastPrompt: Int? = nil) {
+        // The last call's prompt is what the composer's Prompt shows once the box is empty. A
+        // provider that reports nothing left it at zero, so it takes the estimate.
+        if let lastPrompt, message.promptTokens <= 0 { message.promptTokens = lastPrompt }
+        message.billedPromptTokens = prompt
+        message.billedCompletionTokens = completion
+        onUpdate(message)
+    }
+
     public func setHalt(reason: String, text: String) {
         message.haltReason = reason
         message.haltText = text
@@ -1116,8 +1126,20 @@ var mcpPromptSummary = ""
         let canDelegate = !groupToolless
             && AgentRunner.subAgentSpawningAllowed(agent: agent, settings: loadedSettings)
             && AgentRunContext.depthLimit(for: agent, settings: loadedSettings) >= 1
+        // Specialised built-ins are listed by name and loaded on request; see `BuiltInToolSearch`.
+        // Skipped when there are no tools to speak of (inventory, group turns) and in plan mode,
+        // where the list is already cut down.
+        var deferredBuiltIns: [Tool] = []
+        if !inventoryPrompt && !groupToolless && !planModeActive {
+            let split = BuiltInToolSearch.partition(availableTools, prompt: lastPrompt)
+            availableTools = split.loaded
+            deferredBuiltIns = split.deferred
+        }
+        let skillsOffered = !inventoryPrompt && !groupToolless
         availableTools.removeAll { tool in
-            (tool.name == "agent_spawn" && !canDelegate)
+            (tool.name == "tool_describe" && deferredBuiltIns.isEmpty)
+                || (tool.name == "skill_load" && !skillsOffered)
+                || (tool.name == "agent_spawn" && !canDelegate)
                 || (tool.name == "agent_message" && !agent.canCommunicateWithOthers)
         }
         let teamSection = (inventoryPrompt || !canDelegate)
@@ -1159,6 +1181,7 @@ var mcpPromptSummary = ""
             skillsSection = """
 
             ### Active Skills
+            Only a short preview is shown. Call `skill_load` with a skill's name to read its full instructions before following it.
             \(skillLines.joined(separator: "\n"))
             """
         }
@@ -1204,6 +1227,9 @@ var mcpPromptSummary = ""
         var finalStepText: String?
 
         var turnPromptTokens = 0
+        // What the composer's Sent / Recv show: reported usage, or an estimate where none came.
+        var shownPromptTokens = 0
+        var shownCompletionTokens = 0
         var turnCompletionTokens = 0
         var identicalToolCounts: [String: Int] = [:]
         /// Signatures of calls parsed from the model's text and already sent to run this turn.
@@ -1274,6 +1300,7 @@ var mcpPromptSummary = ""
             Built-in tools (prefer native function/tool calling): \(builtInToolList)
             terminal_command/run_command: interactive:true for commands that prompt (answer them with send_input).
             \(mcpPromptSummary)
+            \(BuiltInToolSearch.promptSection(deferredBuiltIns))
             \(skillsSection)
             \(teamSection)
 
@@ -1510,6 +1537,17 @@ var mcpPromptSummary = ""
             // previous step again.
             turnPromptTokens += snap.promptTokens
             turnCompletionTokens += snap.completionTokens
+            // Some providers and external agents report no usage at all. The bar then shows an
+            // estimate for the step (about four characters a token) rather than a flat zero.
+            let requestChars = systemPromptWithTools.count
+                + messagesForRequest.reduce(0) { $0 + $1.content.count }
+                + availableTools.reduce(0) { $0 + $1.description.count + $1.parametersJsonSchema.count }
+            let stepPrompt = snap.promptTokens > 0 ? snap.promptTokens : max(1, requestChars / 4)
+            shownPromptTokens += stepPrompt
+            shownCompletionTokens += snap.completionTokens > 0
+                ? snap.completionTokens
+                : TokenAccounting.estimate(accumulator.message.content + (accumulator.message.reasoning ?? ""))
+            accumulator.setBilled(prompt: shownPromptTokens, completion: shownCompletionTokens, lastPrompt: stepPrompt)
             if turnPromptTokens + turnCompletionTokens > maxTurnTokens {
                 accumulator.setHalt(
                     reason: "token_budget",
@@ -2139,6 +2177,19 @@ var mcpPromptSummary = ""
                     for tool in MCPToolSearch.match(query: query, in: mcpTools, limit: limit)
                     where !availableTools.contains(where: { $0.id == tool.id || $0.name == tool.name })
                         && !(planModeActive && tool.requiresApproval) {
+                        availableTools.append(tool)
+                    }
+                }
+
+                // Same for built-in tools the model asked `tool_describe` to load.
+                if resultSuccess, Self.canonicalToolName(toolName) == "tool_describe",
+                   let data = argsJson.data(using: .utf8),
+                   let args = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                    let query = args["query"] as? String ?? args["name"] as? String ?? args["tool"] as? String ?? ""
+                    let limit = (args["limit"] as? Int) ?? Int(args["limit"] as? String ?? "") ?? MCPToolSearch.defaultLimit
+                    for tool in MCPToolSearch.match(query: query, in: deferredBuiltIns, limit: limit)
+                    where !availableTools.contains(where: { $0.id == tool.id || $0.name == tool.name })
+                        && !(planModeActive && ToolCallRepair.isBlockedInPlanMode(tool.name)) {
                         availableTools.append(tool)
                     }
                 }
