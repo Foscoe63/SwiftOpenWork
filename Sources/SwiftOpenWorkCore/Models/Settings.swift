@@ -400,7 +400,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         autoLoopBreakerEnabled: Bool = true,
         defaultReasoningEffort: ReasoningEffort = .medium,
         autoCompactContext: Bool = true,
-        contextCompactionThresholdTokens: Int = 100_000,
+        contextCompactionThresholdTokens: Int = 64_000,
         planModeEnabled: Bool = false,
         maxTurnTokens: Int = 2_000_000,
         playNotificationSounds: Bool = true,

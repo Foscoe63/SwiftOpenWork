@@ -238,7 +238,9 @@ public final class AppState: ObservableObject {
     /// sends anything themselves; capped in `maybeAutoContinue` so a stuck turn surfaces the
     /// ordinary Continue button instead of looping unattended forever.
     private var autoContinueChainCounts: [String: Int] = [:]
-    private static let autoContinueChainCap = 5
+    private static let autoContinueChainCap = 8
+    /// Pending delayed resumes (backoff or a usage-limit reset), by session id.
+    private var resumeTasks: [String: Task<Void, Never>] = [:]
     /// Set by tool cards when the user wants the turn-change sheet; ChatView observes it.
     @Published public var presentTurnChangeReview: Bool = false
     /// Messages in the current session whose turn can be rewound. Held as a set so the transcript
@@ -1110,6 +1112,7 @@ public final class AppState: ObservableObject {
         // nothing else did) should ever count against the cap.
         if !AutoContinuePolicy.isContinuePrompt(trimmed) {
             autoContinueChainCounts[session.id] = 0
+            resumeTasks[session.id]?.cancel()
         }
 
         // Handle slash commands
@@ -1401,18 +1404,18 @@ public final class AppState: ObservableObject {
         guard settings.autoContinueUntilDone else { return }
         guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
         guard let last = session.messages.last(where: { $0.role == .assistant }) else { return }
-        let pendingTodos = session.todos.contains { $0.status != .done }
-        if last.isError || last.haltReason == nil && AutoContinuePolicy.isTransientProviderError(last.content) {
-            // A transient provider failure (e.g. OpenRouter "cancelled") with work still pending is
-            // retried; any other error waits for the user.
-            guard pendingTodos, AutoContinuePolicy.isTransientProviderError(last.content) else { return }
-            let count = autoContinueChainCounts[sessionId] ?? 0
-            guard count < Self.autoContinueChainCap else { autoContinueChainCounts[sessionId] = 0; return }
-            autoContinueChainCounts[sessionId] = count + 1
-            sendMessage(text: continuePrompt(for: session))
+
+        // Out of usage on an account: nothing helps until it resets, so wait for that moment
+        // and resume then, rather than leaving the work parked until the user comes back.
+        if let resume = AutoContinuePolicy.usageLimitResume(in: last.content), last.haltReason != "stopped" {
+            scheduleResume(sessionId: sessionId, at: resume, anchor: session.messages.count)
             return
         }
-        guard AutoContinuePolicy.shouldAutoContinue(
+
+        let pendingTodos = session.todos.contains { $0.status != .done }
+        let transient = (last.isError || last.haltReason == nil) && AutoContinuePolicy.isTransientProviderError(last.content)
+        if last.isError && !transient { return }
+        guard transient || AutoContinuePolicy.shouldAutoContinue(
             haltReason: last.haltReason,
             finalText: last.content,
             pendingTodos: pendingTodos
@@ -1428,9 +1431,31 @@ public final class AppState: ObservableObject {
             return
         }
         autoContinueChainCounts[sessionId] = count + 1
-        sendMessage(text: continuePrompt(for: session))
+        // Stalls and provider hiccups come in runs; back off so a struggling model gets room.
+        let delay = (transient || last.haltReason == "empty_response") ? AutoContinuePolicy.retryDelay(attempt: count) : 0
+        scheduleResume(sessionId: sessionId, at: Date().addingTimeInterval(delay), anchor: session.messages.count)
     }
 
+    /// Sends a Continue at `date`, unless the user has said or started anything in the session
+    /// since (`anchor` is the message count when this was scheduled).
+    private func scheduleResume(sessionId: String, at date: Date, anchor: Int) {
+        resumeTasks[sessionId]?.cancel()
+        let wait = date.timeIntervalSinceNow
+        if wait <= 0.01 {
+            resumeTasks[sessionId] = nil
+            if let session = sessions.first(where: { $0.id == sessionId }) { sendMessage(text: continuePrompt(for: session)) }
+            return
+        }
+        resumeTasks[sessionId] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            self.resumeTasks[sessionId] = nil
+            guard !self.isGenerating,
+                  let session = self.sessions.first(where: { $0.id == sessionId }),
+                  session.messages.count == anchor else { return }
+            self.sendMessage(text: self.continuePrompt(for: session))
+        }
+    }
 
     public func updateSessionTodos(_ todos: [SessionTodoItem], sessionId: String? = nil) {
         let id = sessionId ?? currentSessionId
