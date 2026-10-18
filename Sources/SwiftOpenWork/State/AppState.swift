@@ -1400,8 +1400,18 @@ public final class AppState: ObservableObject {
     private func maybeAutoContinue(sessionId: String) {
         guard settings.autoContinueUntilDone else { return }
         guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
-        guard let last = session.messages.last(where: { $0.role == .assistant }), !last.isError else { return }
+        guard let last = session.messages.last(where: { $0.role == .assistant }) else { return }
         let pendingTodos = session.todos.contains { $0.status != .done }
+        if last.isError || last.haltReason == nil && AutoContinuePolicy.isTransientProviderError(last.content) {
+            // A transient provider failure (e.g. OpenRouter "cancelled") with work still pending is
+            // retried; any other error waits for the user.
+            guard pendingTodos, AutoContinuePolicy.isTransientProviderError(last.content) else { return }
+            let count = autoContinueChainCounts[sessionId] ?? 0
+            guard count < Self.autoContinueChainCap else { autoContinueChainCounts[sessionId] = 0; return }
+            autoContinueChainCounts[sessionId] = count + 1
+            sendMessage(text: continuePrompt(for: session))
+            return
+        }
         guard AutoContinuePolicy.shouldAutoContinue(
             haltReason: last.haltReason,
             finalText: last.content,

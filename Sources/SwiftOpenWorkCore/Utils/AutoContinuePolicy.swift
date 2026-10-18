@@ -43,6 +43,9 @@ public enum AutoContinuePolicy {
         // Ran out of budget mid-task, unambiguously not finished, regardless of todos — this is
         // exactly what the manual Continue button is already for.
         if haltReason == "round_cap" { return true }
+        // The model streamed nothing (a free/overloaded model does this right after a tool result).
+        // With tracked work still pending that is a stall, not a finish; the chain cap bounds retries.
+        if haltReason == "empty_response" { return pendingTodos }
         // Any other halt reason is one this policy does not yet recognise; a turn that halted for
         // a reason we cannot read is not something to resume blindly.
         guard haltReason == nil else { return false }
@@ -50,6 +53,15 @@ public enum AutoContinuePolicy {
         // "hello" / "Hi! How can I help?" must not loop forever just because it made no tool call.
         guard pendingTodos else { return false }
         return !endsWithQuestion(finalText)
+    }
+
+    /// Whether `text` is a provider failure worth retrying on its own: a dropped or cancelled
+    /// connection, a timeout, a 429/5xx. A bad key or a refused request is not.
+    public static func isTransientProviderError(_ text: String) -> Bool {
+        guard text.contains("Provider Error") else { return false }
+        let lower = text.lowercased()
+        return ["cancelled", "canceled", "timed out", "connection was lost", "network connection",
+                "overloaded", "rate limit", "429", "500", "502", "503", "504"].contains { lower.contains($0) }
     }
 
     /// A conservative check for "the assistant is asking the user something," so auto-continue

@@ -51,6 +51,20 @@ final class AutoContinuePolicyTests: XCTestCase {
         ))
     }
 
+    func testAnEmptyModelResponseWithPendingTodosIsResumed() {
+        XCTAssertTrue(AutoContinuePolicy.shouldAutoContinue(
+            haltReason: "empty_response", finalText: "The model returned an empty response.", pendingTodos: true
+        ))
+        XCTAssertFalse(AutoContinuePolicy.shouldAutoContinue(
+            haltReason: "empty_response", finalText: "The model returned an empty response.", pendingTodos: false
+        ))
+    }
+
+    func testTransientProviderErrorsAreRetryableButKeyErrorsAreNot() {
+        XCTAssertTrue(AutoContinuePolicy.isTransientProviderError("⚠️ **Provider Error (OpenRouter):**\n`cancelled`"))
+        XCTAssertFalse(AutoContinuePolicy.isTransientProviderError("⚠️ **Provider Error (OpenRouter):**\n`401 invalid api key`"))
+    }
+
     func testAnUnrecognisedHaltReasonIsNotResumedBlindly() {
         XCTAssertFalse(AutoContinuePolicy.shouldAutoContinue(
             haltReason: "some_future_reason", finalText: "...", pendingTodos: true
