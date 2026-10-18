@@ -97,9 +97,14 @@ actor ACPSessionPool {
         var sessionId: String
         var lastUsed: Date
         var supportsImages: Bool
+        /// The agent had no memory of this chat when it connected, so the first prompt must carry a recap.
+        var isFresh = false
     }
 
     private var entries: [String: Entry] = [:]
+    /// Keys with a turn in flight. A turn can outlast `idleLimit`, and `lastUsed` is only stamped
+    /// when it starts, so without this the reaper killed the agent mid-turn (exit status 15).
+    private var busy: Set<String> = []
     private var reaper: Task<Void, Never>?
     static let idleLimit: TimeInterval = 20 * 60
 
@@ -123,6 +128,24 @@ actor ACPSessionPool {
         }
     }
 
+    func setBusy(_ isBusy: Bool, for key: String) {
+        if isBusy { busy.insert(key) } else {
+            busy.remove(key)
+            entries[key]?.lastUsed = Date()
+        }
+    }
+
+    /// The agent's own id for a chat's conversation, kept across app launches so it can be resumed.
+    static func savedSessionId(for key: String) -> String? {
+        (UserDefaults.standard.dictionary(forKey: "acp.agentSessionIds") as? [String: String])?[key]
+    }
+
+    static func saveSessionId(_ id: String?, for key: String) {
+        var all = (UserDefaults.standard.dictionary(forKey: "acp.agentSessionIds") as? [String: String]) ?? [:]
+        all[key] = id
+        UserDefaults.standard.set(all, forKey: "acp.agentSessionIds")
+    }
+
     func remove(_ key: String) {
         entries.removeValue(forKey: key)?.connection.stop()
     }
@@ -134,7 +157,7 @@ actor ACPSessionPool {
 
     private func reapIdle() {
         let cutoff = Date().addingTimeInterval(-Self.idleLimit)
-        for (key, entry) in entries where entry.lastUsed < cutoff { remove(key) }
+        for (key, entry) in entries where entry.lastUsed < cutoff && !busy.contains(key) { remove(key) }
     }
 }
 
@@ -185,9 +208,9 @@ public enum ACPAgentRunner {
             return
         }
         var promptText = prompt
+        let key = "\(session.id)|\(agent.id)"
         if !promptHooks.context.isEmpty { promptText += "\n\n" + promptHooks.context.joined(separator: "\n") }
 
-        let key = "\(session.id)|\(agent.id)"
         let entry: ACPSessionPool.Entry
         let events = EventPipe()
         do {
@@ -195,8 +218,10 @@ public enum ACPAgentRunner {
                 entry = existing
                 events.attach(to: existing.connection)
             } else {
-                entry = try await connect(config: config, workspace: workspace, events: events)
+                entry = try await connect(config: config, workspace: workspace, events: events, resuming: ACPSessionPool.savedSessionId(for: key))
                 await ACPSessionPool.shared.store(entry, for: key)
+                ACPSessionPool.saveSessionId(entry.sessionId, for: key)
+                if entry.isFresh, let recap = Self.recap(of: session) { promptText = recap + "\n\n" + promptText }
             }
         } catch {
             accumulator.setHalt(reason: "agent_unavailable", text: Self.startFailure(config: config, error: error))
@@ -204,6 +229,8 @@ public enum ACPAgentRunner {
             return
         }
 
+        await ACPSessionPool.shared.setBusy(true, for: key)
+        defer { Task { await ACPSessionPool.shared.setBusy(false, for: key) } }
         let state = TurnState(accumulator: accumulator, workspace: workspace, sessionId: session.id, agentName: agent.name, onTodos: onSessionTodosUpdated)
         let sessionId = entry.sessionId
         let connection = entry.connection
@@ -263,6 +290,7 @@ public enum ACPAgentRunner {
         let stopReason = outcome.stopReason
         let failure = outcome.failure
         if failure != nil { await ACPSessionPool.shared.remove(key) }
+        if failure != nil && !Task.isCancelled { /* keep the saved id so the next turn can resume it */ }
 
         state.finishOpenToolCalls(cancelled: Task.isCancelled || stopReason == "cancelled")
         if let failure, !Task.isCancelled {
@@ -296,6 +324,24 @@ public enum ACPAgentRunner {
         _ = await ToolHooks.run(.stop, input: ["stop_reason": stopReason], workspaceRoot: workspace.folderPath, sessionId: session.id)
     }
 
+    /// What a new agent session is told about the chat so far, when it could not resume the old one.
+    static func recap(of session: Session) -> String? {
+        let prior = session.messages.dropLast(session.messages.last?.role == .user ? 1 : 0)
+            .filter { ($0.role == .user || $0.role == .assistant) && !$0.content.isEmpty }
+        guard !prior.isEmpty else { return nil }
+        func clip(_ text: String, _ n: Int) -> String { text.count > n ? String(text.prefix(n)) + "…" : text }
+        var lines = ["[Context: this chat was already under way, but your own session was lost. Earlier conversation:]"]
+        for m in prior.suffix(10) {
+            lines.append("\(m.role == .user ? "User" : "You"): \(clip(m.content, m.role == .user ? 1500 : 800))")
+        }
+        if !session.todos.isEmpty {
+            lines.append("Your task list at the time:")
+            for t in session.todos { lines.append("- [\(t.status.rawValue)] \(t.content)") }
+        }
+        lines.append("[End of context. Check the repository state (git status/diff) to see what was already done, then carry on.]")
+        return lines.joined(separator: "\n")
+    }
+
     static func startFailure(config: ExternalAgentConfig, error: Error) -> String {
         "Could not start \(config.displayLine).\n\(error.localizedDescription)\n\nCheck that the program is installed and on your PATH, and that it speaks the Agent Client Protocol (Settings → External Agents)."
     }
@@ -309,7 +355,7 @@ public enum ACPAgentRunner {
         name == "CLAUDECODE" || name.hasPrefix("CLAUDE_CODE_") || name.hasPrefix("CLAUDE_AGENT_SDK_")
     }
 
-    private static func connect(config: ExternalAgentConfig, workspace: Workspace, events: EventPipe) async throws -> ACPSessionPool.Entry {
+    private static func connect(config: ExternalAgentConfig, workspace: Workspace, events: EventPipe, resuming savedId: String? = nil) async throws -> ACPSessionPool.Entry {
         var environment = ToolExecutionEngine.defaultEnvironment()
         environment = environment.filter { !isInheritedClaudeSession($0.key) }
         for (name, value) in config.env { environment[name] = value }
@@ -335,14 +381,29 @@ public enum ACPAgentRunner {
             connection.stop()
             throw ACPConnection.RemoteError(code: -32003, message: "The agent needs you to sign in first. Run it once in a terminal to log in.")
         }
-        let created = try await connection.request("session/new", ["cwd": workspace.folderPath, "mcpServers": [Any]()], timeout: 60)
-        guard let sessionId = created["sessionId"] as? String else {
+        let capabilities = initialized["agentCapabilities"] as? [String: Any]
+        var sessionId: String?
+        var isFresh = true
+        // Resume the agent's own conversation when it can: it still holds what it was doing. The
+        // agent replays the history as updates while loading, which must not reach this turn.
+        if let savedId, (capabilities?["loadSession"] as? Bool) == true {
+            connection.rebind { _ in }
+            if (try? await connection.request("session/load", ["sessionId": savedId, "cwd": workspace.folderPath, "mcpServers": [Any]()], timeout: 120)) != nil {
+                sessionId = savedId
+                isFresh = false
+            }
+            events.attach(to: connection)
+        }
+        if sessionId == nil {
+            let created = try await connection.request("session/new", ["cwd": workspace.folderPath, "mcpServers": [Any]()], timeout: 60)
+            sessionId = created["sessionId"] as? String
+        }
+        guard let sessionId else {
             connection.stop()
             throw ACPConnection.RemoteError(code: -32602, message: "The agent did not return a session id.")
         }
-        let capabilities = initialized["agentCapabilities"] as? [String: Any]
         let images = ((capabilities?["promptCapabilities"] as? [String: Any])?["image"] as? Bool) ?? false
-        return ACPSessionPool.Entry(connection: connection, sessionId: sessionId, lastUsed: Date(), supportsImages: images)
+        return ACPSessionPool.Entry(connection: connection, sessionId: sessionId, lastUsed: Date(), supportsImages: images, isFresh: isFresh)
     }
 
     // MARK: - Event pipe
