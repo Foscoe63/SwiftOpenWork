@@ -881,13 +881,13 @@ public struct ComposerView: View {
     /// The per-turn token budget, adjustable (or off) without opening Settings.
     private var turnBudgetMenu: some View {
         let budget = appState.settings.maxTurnTokens
-        let presets = [1_000_000, 2_000_000, 5_000_000, 10_000_000]
+        let presets = [250_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000]
         return Menu {
             ForEach(presets, id: \.self) { value in
                 Button {
                     appState.settings.maxTurnTokens = value
                 } label: {
-                    Text("\(value / 1_000_000)M tokens per turn" + (budget == value ? "  ✓" : ""))
+                    Text("\(ContextMeter.abbreviate(value)) tokens per turn" + (budget == value ? "  ✓" : ""))
                 }
             }
             Divider()
@@ -900,7 +900,7 @@ public struct ComposerView: View {
             HStack(spacing: 4) {
                 Image(systemName: "gauge.with.dots.needle.67percent")
                     .font(.system(size: 10))
-                Text(budget <= 0 ? "Budget: Off" : "Budget: \(budget / 1_000_000)M")
+                Text(budget <= 0 ? "Budget: Off" : "Budget: \(ContextMeter.abbreviate(budget))")
                     .font(.system(size: 10, weight: .medium))
             }
             .padding(.horizontal, 6)
@@ -909,7 +909,7 @@ public struct ComposerView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Token budget for one turn. A turn halts with a Continue prompt when it goes over. Choose No limit to turn it off.")
+        .help("Token budget for one turn. A turn halts with a Continue prompt when it goes over (for Claude Code, counted cost-weighted). Choose No limit to turn it off.")
     }
 
     private var contextMeter: ContextMeter? {

@@ -2134,7 +2134,7 @@ public struct SettingsView: View {
                 }
 
                 if appState.settings.maxTurnTokens > 0 {
-                    SettingsRow(title: "Max Turn Tokens (\(appState.settings.maxTurnTokens / 1000)k)", subtitle: "Budget for a single turn", icon: "gauge.with.dots.needle.67percent") {
+                    SettingsRow(title: "Max Turn Tokens (\(appState.settings.maxTurnTokens / 1000)k)", subtitle: "Budget for a single turn. Lower it to stop a runaway turn sooner; for Claude Code it is counted cost-weighted (cache reads at a tenth)", icon: "gauge.with.dots.needle.67percent") {
                         Stepper("", value: $appState.settings.maxTurnTokens, in: 100_000...20_000_000, step: 100_000)
                     }
                 }

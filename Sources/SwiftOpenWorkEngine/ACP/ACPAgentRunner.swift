@@ -109,6 +109,14 @@ public enum ACPModelCatalog {
     }
 }
 
+/// Set by the budget watcher when a turn goes over, read once the turn has wound down.
+final class BudgetFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int?
+    var spent: Int? { lock.lock(); defer { lock.unlock() }; return value }
+    func trip(_ spent: Int) { lock.lock(); value = spent; lock.unlock() }
+}
+
 /// Keeps one agent process per chat and agent, so a conversation with an external agent is one ACP
 /// session across turns, and stops it after it has been idle for a while.
 actor ACPSessionPool {
@@ -299,6 +307,27 @@ public enum ACPAgentRunner {
             }
             return (stopReason, failure)
         }
+        // The turn budget (Settings → Max Turn Tokens) for Claude Code, which reports nothing until
+        // the turn is over: watch its transcript and cancel the turn when the weighted figure
+        // passes it. Other agents write no transcript this app can read, so they are not metered.
+        let budget = PersistenceManager.shared.loadSettings().maxTurnTokens
+        let overBudget = BudgetFlag()
+        var meter: Task<Void, Never>?
+        if budget > 0, let configDir = ClaudeCodeUsage.configDir(for: config) {
+            meter = Task.detached(priority: .utility) {
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 6 * 1_000_000_000)
+                    guard let turn = ClaudeCodeUsage.turn(configDir: configDir, sessionId: sessionId, since: turnStart) else { continue }
+                    let spent = turn.sent + turn.received * 5
+                    if spent > budget {
+                        overBudget.trip(spent)
+                        connection.notify("session/cancel", ["sessionId": sessionId])
+                        return
+                    }
+                }
+            }
+        }
+        defer { meter?.cancel() }
         let outcome = await withTaskCancellationHandler {
             await consumer.value
         } onCancel: {
@@ -315,7 +344,12 @@ public enum ACPAgentRunner {
         if failure != nil && !Task.isCancelled { /* keep the saved id so the next turn can resume it */ }
 
         state.finishOpenToolCalls(cancelled: Task.isCancelled || stopReason == "cancelled")
-        if let failure, !Task.isCancelled {
+        if let spent = overBudget.spent {
+            accumulator.setHalt(
+                reason: "token_budget",
+                text: "Turn token budget exceeded (about \(spent) weighted tokens > \(budget)). Press Continue to resume, or raise the budget in Settings."
+            )
+        } else if let failure, !Task.isCancelled {
             accumulator.setHalt(reason: "agent_error", text: failure.localizedDescription)
         } else if Task.isCancelled || stopReason == "cancelled" {
             accumulator.setHalt(reason: "stopped", text: "Generation stopped.")
@@ -353,8 +387,8 @@ public enum ACPAgentRunner {
         guard !prior.isEmpty else { return nil }
         func clip(_ text: String, _ n: Int) -> String { text.count > n ? String(text.prefix(n)) + "…" : text }
         var lines = ["[Context: this chat was already under way, but your own session was lost. Earlier conversation:]"]
-        for m in prior.suffix(10) {
-            lines.append("\(m.role == .user ? "User" : "You"): \(clip(m.content, m.role == .user ? 1500 : 800))")
+        for m in prior.suffix(6) {
+            lines.append("\(m.role == .user ? "User" : "You"): \(clip(m.content, m.role == .user ? 1000 : 500))")
         }
         if !session.todos.isEmpty {
             lines.append("Your task list at the time:")
@@ -377,9 +411,24 @@ public enum ACPAgentRunner {
         name == "CLAUDECODE" || name.hasPrefix("CLAUDE_CODE_") || name.hasPrefix("CLAUDE_AGENT_SDK_")
     }
 
+    /// Claude Code's own limits, tightened. Anything in the agent's own env still wins.
+    /// - compact the conversation at 60% of the window, not near the end, so the context each step
+    ///   re-sends stays smaller
+    /// - cap a shell command's output and an MCP tool's output at about half their defaults
+    /// - skip its background model calls (titles and similar)
+    nonisolated static let claudeCodeTokenDefaults: [String: String] = [
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "60",
+        "BASH_MAX_OUTPUT_LENGTH": "15000",
+        "MAX_MCP_OUTPUT_TOKENS": "10000",
+        "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
+    ]
+
     private static func connect(config: ExternalAgentConfig, workspace: Workspace, events: EventPipe, resuming savedId: String? = nil) async throws -> ACPSessionPool.Entry {
         var environment = ToolExecutionEngine.defaultEnvironment()
         environment = environment.filter { !isInheritedClaudeSession($0.key) }
+        if config.isClaudeCode {
+            for (name, value) in claudeCodeTokenDefaults { environment[name] = value }
+        }
         for (name, value) in config.env { environment[name] = value }
         let connection = ACPConnection(
             executable: "/usr/bin/env", arguments: [config.command] + config.args,

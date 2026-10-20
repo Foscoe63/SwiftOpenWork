@@ -58,7 +58,7 @@ public enum ContextCompactor {
 
     /// Fraction of the context window the transcript must fill before old tool results are
     /// folded away.
-    public static let foldPressureFraction = 0.4
+    public static let foldPressureFraction = 0.3
 
     /// A cheap, deliberately pessimistic token estimate for a working transcript: about three
     /// characters a token, which over-counts prose and is about right for code, so folding

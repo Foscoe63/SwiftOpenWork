@@ -97,3 +97,16 @@ final class ExternalAgentModelTests: XCTestCase {
         XCTAssertNil(ACPAgentRunner.sessionMeta(for: codex))
     }
 }
+
+final class TokenLimitTests: XCTestCase {
+    func testToolResultsAreBoundedToHeadAndTail() {
+        let text = String(repeating: "x", count: ToolBounds.maxResultChars + 5_000)
+        let bounded = ToolBounds.boundResult(text)
+        XCTAssertEqual(bounded.truncatedChars, 5_000)
+        XCTAssertLessThanOrEqual(bounded.text.count, ToolBounds.maxResultChars + 10)
+    }
+
+    func testClaudeCodeGetsTighterLimitsButEnvStillWins() {
+        XCTAssertEqual(ACPAgentRunner.claudeCodeTokenDefaults["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "60")
+    }
+}

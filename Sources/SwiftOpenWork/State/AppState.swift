@@ -1613,6 +1613,14 @@ public final class AppState: ObservableObject {
             return true
 
         case "/compact":
+            // An external agent keeps its own context, which this app cannot shrink. Claude Code
+            // has a /compact of its own, so the command goes to it as the prompt; any other
+            // external agent is told why nothing happened.
+            if let external = currentAgent.externalAgent {
+                if external.isClaudeCode { return false }
+                showToast("\(currentAgent.name) manages its own context; start a new chat to reset it")
+                return true
+            }
             guard let session = currentSession, let idx = sessions.firstIndex(where: { $0.id == session.id }) else { return true }
             guard !session.isGroup else {
                 showToast("/compact is not available in group chats")
