@@ -238,7 +238,10 @@ public final class AppState: ObservableObject {
     /// sends anything themselves; capped in `maybeAutoContinue` so a stuck turn surfaces the
     /// ordinary Continue button instead of looping unattended forever.
     private var autoContinueChainCounts: [String: Int] = [:]
-    private static let autoContinueChainCap = 8
+    private static let autoContinueChainCap = 4
+    /// An external agent's turn is many model calls re-sending a large context, and it may be on
+    /// Opus; a chain of them is where an allowance goes, so it gets fewer automatic retries.
+    private static let externalAutoContinueChainCap = 2
     /// Pending delayed resumes (backoff or a usage-limit reset), by session id.
     private var resumeTasks: [String: Task<Void, Never>] = [:]
     /// Set by tool cards when the user wants the turn-change sheet; ChatView observes it.
@@ -1424,7 +1427,8 @@ public final class AppState: ObservableObject {
             return
         }
         let count = autoContinueChainCounts[sessionId] ?? 0
-        guard count < Self.autoContinueChainCap else {
+        let cap = last.providerId == "acp" ? Self.externalAutoContinueChainCap : Self.autoContinueChainCap
+        guard count < cap else {
             // Capped, not disabled: the ordinary halt UI (and a plain "Continue" from the user)
             // is what breaks a chain that never actually finishes.
             autoContinueChainCounts[sessionId] = 0

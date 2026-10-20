@@ -2107,7 +2107,7 @@ public struct SettingsView: View {
                         .toggleStyle(.switch)
                 }
 
-                SettingsRow(title: "Auto-Continue Until Done", subtitle: "When a turn stops with the todo list still open and no question asked, send Continue automatically instead of waiting for you to (stops after 5 in a row)", icon: "arrow.clockwise") {
+                SettingsRow(title: "Auto-Continue Until Done", subtitle: "When a turn stops with the todo list still open and no question asked, send Continue automatically instead of waiting for you to (stops after 4 in a row, 2 for external agents)", icon: "arrow.clockwise") {
                     Toggle("", isOn: $appState.settings.autoContinueUntilDone)
                         .toggleStyle(.switch)
                 }

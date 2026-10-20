@@ -80,6 +80,9 @@ public struct ExternalAgentsCard: View {
                             Text(agent.name).font(.system(size: 12, weight: .medium))
                             Text(agent.externalAgent?.displayLine ?? "").font(.system(size: 10.5, design: .monospaced)).foregroundColor(.secondary).lineLimit(1)
                             Spacer()
+                            if let config = agent.externalAgent {
+                                modelPicker(for: agent, config: config)
+                            }
                             Button("Remove", role: .destructive) { appState.deleteAgent(agent) }.controlSize(.small)
                         }
                     }
@@ -87,6 +90,52 @@ public struct ExternalAgentsCard: View {
                 if let message { Text(message).font(.system(size: 11)).foregroundColor(.secondary) }
                 Text("An external agent's own tools run in its process: your hooks and the shell sandbox can't see them. What it asks permission for, and every file it reads or writes through this app, is covered by your rules, approvals and undo.")
                     .font(.system(size: 10.5)).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private static let claudeModels: [(label: String, value: String)] = [
+        ("Sonnet", "sonnet"), ("Opus", "opus"), ("Haiku", "haiku"),
+    ]
+
+    /// Choices for an agent's model: Claude's aliases, plus whatever the agent has told us it offers
+    /// (known after its first session), plus the current setting so it is always selectable.
+    private func modelChoices(for config: ExternalAgentConfig, current: String) -> [(label: String, value: String)] {
+        var choices: [(label: String, value: String)] = config.isClaudeCode ? Self.claudeModels : []
+        for model in ACPModelCatalog.models(for: config) where !choices.contains(where: { $0.value == model.id }) {
+            choices.append((model.name, model.id))
+        }
+        choices.append(("Agent's default", "default"))
+        if !choices.contains(where: { $0.value == current }) { choices.insert((current, current), at: 0) }
+        return choices
+    }
+
+    private func modelPicker(for agent: Agent, config: ExternalAgentConfig) -> some View {
+        let current = config.model ?? (config.isClaudeCode ? "sonnet" : "default")
+        return HStack(spacing: 6) {
+            Picker("Model", selection: Binding(
+                get: { current },
+                set: { value in
+                    var updated = agent
+                    updated.externalAgent?.model = value
+                    appState.saveAgent(updated)
+                }
+            )) {
+                ForEach(modelChoices(for: config, current: current), id: \.value) { Text($0.label).tag($0.value) }
+            }
+            .labelsHidden().controlSize(.small).frame(width: 150)
+            .help("The model this agent runs on. Pick a lighter one to use your allowance more slowly. Models are listed once the agent has started a session; applied at the start of each new session.")
+            if config.isClaudeCode {
+                Toggle("Lean", isOn: Binding(
+                    get: { config.effectiveLeanContext },
+                    set: { value in
+                        var updated = agent
+                        updated.externalAgent?.leanContext = value
+                        appState.saveAgent(updated)
+                    }
+                ))
+                .toggleStyle(.checkbox).controlSize(.small)
+                .help("Lean context: leave out your global MCP servers, skills and plugins, which are re-sent on every step. The project's own settings still apply. Takes effect on the next new session.")
             }
         }
     }

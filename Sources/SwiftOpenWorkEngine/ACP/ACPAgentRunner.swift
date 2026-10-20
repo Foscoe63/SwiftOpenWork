@@ -87,6 +87,28 @@ public enum ACPMapping {
     ]
 }
 
+/// The models each external agent has said it offers, remembered so Settings can list real choices
+/// for any agent instead of a guess. Filled in whenever an agent starts a session.
+public enum ACPModelCatalog {
+    public struct Model: Hashable, Sendable { public var id: String; public var name: String }
+
+    private static func key(_ config: ExternalAgentConfig) -> String { "acp.models.\(config.displayLine)" }
+
+    public static func models(for config: ExternalAgentConfig) -> [Model] {
+        let stored = UserDefaults.standard.array(forKey: key(config)) as? [[String]] ?? []
+        return stored.compactMap { $0.count == 2 ? Model(id: $0[0], name: $0[1]) : nil }
+    }
+
+    static func record(_ models: [String: Any]?, for config: ExternalAgentConfig) {
+        let list = (models?["availableModels"] as? [[String: Any]]) ?? []
+        let pairs = list.compactMap { m -> [String]? in
+            guard let id = m["modelId"] as? String else { return nil }
+            return [id, (m["name"] as? String) ?? id]
+        }
+        if !pairs.isEmpty { UserDefaults.standard.set(pairs, forKey: key(config)) }
+    }
+}
+
 /// Keeps one agent process per chat and agent, so a conversation with an external agent is one ACP
 /// session across turns, and stops it after it has been idle for a while.
 actor ACPSessionPool {
@@ -384,26 +406,70 @@ public enum ACPAgentRunner {
         let capabilities = initialized["agentCapabilities"] as? [String: Any]
         var sessionId: String?
         var isFresh = true
+        var models: [String: Any]?
         // Resume the agent's own conversation when it can: it still holds what it was doing. The
         // agent replays the history as updates while loading, which must not reach this turn.
         if let savedId, (capabilities?["loadSession"] as? Bool) == true {
             connection.rebind { _ in }
-            if (try? await connection.request("session/load", ["sessionId": savedId, "cwd": workspace.folderPath, "mcpServers": [Any]()], timeout: 120)) != nil {
+            if let loaded = try? await connection.request("session/load", sessionParams(cwd: workspace.folderPath, resuming: savedId, config: config), timeout: 120) {
                 sessionId = savedId
                 isFresh = false
+                models = loaded["models"] as? [String: Any]
             }
             events.attach(to: connection)
         }
         if sessionId == nil {
-            let created = try await connection.request("session/new", ["cwd": workspace.folderPath, "mcpServers": [Any]()], timeout: 60)
+            let created = try await connection.request("session/new", sessionParams(cwd: workspace.folderPath, resuming: nil, config: config), timeout: 60)
             sessionId = created["sessionId"] as? String
+            models = created["models"] as? [String: Any]
         }
         guard let sessionId else {
             connection.stop()
             throw ACPConnection.RemoteError(code: -32602, message: "The agent did not return a session id.")
         }
+        ACPModelCatalog.record(models, for: config)
+        if let wanted = config.effectiveModel {
+            await selectModel(wanted, among: models, connection: connection, sessionId: sessionId)
+        }
         let images = ((capabilities?["promptCapabilities"] as? [String: Any])?["image"] as? Bool) ?? false
         return ACPSessionPool.Entry(connection: connection, sessionId: sessionId, lastUsed: Date(), supportsImages: images, isFresh: isFresh)
+    }
+
+    /// Parameters for `session/new`, or `session/load` when `resuming`. Built here from plain
+    /// values so each is a fresh value to send.
+    private nonisolated static func sessionParams(cwd: String, resuming: String?, config: ExternalAgentConfig) -> [String: Any] {
+        var params: [String: Any] = ["cwd": cwd, "mcpServers": [Any]()]
+        if let resuming { params["sessionId"] = resuming }
+        if let meta = sessionMeta(for: config) { params["_meta"] = meta }
+        return params
+    }
+
+    /// Options for `session/new` and `session/load`. For Claude Code's adapter, a lean context
+    /// leaves out the user's global MCP servers, skills and plugins (their schemas and listings are
+    /// sent with every call; one session measured about 20K tokens before any work) and keeps the
+    /// project's own settings. Agents that don't know `_meta` ignore it.
+    nonisolated static func sessionMeta(for config: ExternalAgentConfig) -> [String: Any]? {
+        guard config.isClaudeCode, config.effectiveLeanContext else { return nil }
+        return ["claudeCode": ["options": [
+            "settingSources": ["project", "local"],
+            "strictMcpConfig": true,
+            "disallowedTools": ["NotebookEdit"],
+        ] as [String: Any]]]
+    }
+
+    /// Switches the agent's model. The adapter starts on its own default (Opus for Claude Code)
+    /// whatever the environment says, so this is asked of it after the session exists. `wanted`
+    /// is an alias such as "sonnet" or a full id; it is matched against what the agent offers,
+    /// and sent as it is when the agent listed nothing. A refusal leaves the agent's default.
+    static func selectModel(_ wanted: String, among models: [String: Any]?, connection: ACPConnection, sessionId: String) async {
+        let available = (models?["availableModels"] as? [[String: Any]]) ?? []
+        let lower = wanted.lowercased()
+        func matches(_ model: [String: Any]) -> Bool {
+            [(model["modelId"] as? String), (model["name"] as? String)].contains { $0?.lowercased().contains(lower) == true }
+        }
+        let modelId = available.first(where: matches)?["modelId"] as? String ?? wanted
+        if let current = models?["currentModelId"] as? String, current == modelId { return }
+        _ = try? await connection.request("session/set_model", ["sessionId": sessionId, "modelId": modelId], timeout: 30)
     }
 
     // MARK: - Event pipe

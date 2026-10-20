@@ -23,12 +23,36 @@ public struct ExternalAgentConfig: Codable, Hashable, Sendable {
     public var command: String
     public var args: [String]
     public var env: [String: String]
+    /// Model alias or id to switch the agent to after it starts ("sonnet", "opus", "haiku", or a
+    /// full id). nil means the app's default for that agent; "default" leaves the agent's own choice.
+    public var model: String?
+    /// Start the agent with a small context: only the project's settings (not the user's global
+    /// MCP servers, skills and plugins) and no notebook tool. nil means on for Claude Code.
+    public var leanContext: Bool?
 
-    public init(command: String, args: [String] = [], env: [String: String] = [:]) {
+    public init(command: String, args: [String] = [], env: [String: String] = [:], model: String? = nil, leanContext: Bool? = nil) {
         self.command = command
         self.args = args
         self.env = env
+        self.model = model
+        self.leanContext = leanContext
     }
+
+    /// Claude Code, through the Zed adapter or its own CLI.
+    public var isClaudeCode: Bool {
+        args.contains(where: { $0.contains("claude-code-acp") }) || command.hasSuffix("claude")
+    }
+
+    /// The model to switch to, or nil to leave the agent's own default. Claude Code defaults to
+    /// Sonnet: its own default is Opus, which uses a plan's allowance several times faster.
+    public var effectiveModel: String? {
+        let chosen = model?.trimmingCharacters(in: .whitespaces).lowercased()
+        if chosen == "default" { return nil }
+        if let chosen, !chosen.isEmpty { return chosen }
+        return isClaudeCode ? "sonnet" : nil
+    }
+
+    public var effectiveLeanContext: Bool { leanContext ?? isClaudeCode }
 
     /// The command line as the person would type it, for display.
     public var displayLine: String {

@@ -28,7 +28,8 @@ final class ClaudeCodeUsageTests: XCTestCase {
 
         let turn = try XCTUnwrap(ClaudeCodeUsage.turn(configDir: dir.path, sessionId: "s1", since: start))
         XCTAssertEqual(turn.calls, 2)
-        XCTAssertEqual(turn.sent, 20_003 + 30_004)
+        XCTAssertEqual(turn.rawSent, 20_003 + 30_004)
+        XCTAssertEqual(turn.sent, 3 + 2_000 + 4 + 3_000)   // cache reads count a tenth
         XCTAssertEqual(turn.received, 100)
         XCTAssertEqual(turn.lastPrompt, 30_004)
         XCTAssertNil(ClaudeCodeUsage.turn(configDir: dir.path, sessionId: "missing", since: start))
@@ -70,5 +71,29 @@ final class ClaudeCodeUsageTests: XCTestCase {
         let first = ExternalAgentConfig(command: "npx", args: ["-y", "@zed-industries/claude-code-acp"])
         XCTAssertEqual(ClaudeCodeUsage.configDir(for: first), ClaudeCodeUsage.defaultConfigDir)
         XCTAssertNil(ClaudeCodeUsage.configDir(for: ExternalAgentConfig(command: "opencode", args: ["acp"])))
+    }
+}
+
+final class ExternalAgentModelTests: XCTestCase {
+    private let claude = ExternalAgentConfig(command: "npx", args: ["-y", "@zed-industries/claude-code-acp"])
+
+    func testClaudeCodeDefaultsToSonnetAndLean() {
+        XCTAssertEqual(claude.effectiveModel, "sonnet")
+        XCTAssertTrue(claude.effectiveLeanContext)
+        XCTAssertNotNil(ACPAgentRunner.sessionMeta(for: claude))
+    }
+
+    func testExplicitModelAndDefaultAreHonoured() {
+        var config = claude
+        config.model = "Opus"
+        XCTAssertEqual(config.effectiveModel, "opus")
+        config.model = "default"
+        XCTAssertNil(config.effectiveModel)
+    }
+
+    func testOtherAgentsAreLeftAlone() {
+        let codex = ExternalAgentConfig(command: "npx", args: ["-y", "@zed-industries/codex-acp"])
+        XCTAssertNil(codex.effectiveModel)
+        XCTAssertNil(ACPAgentRunner.sessionMeta(for: codex))
     }
 }
