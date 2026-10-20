@@ -43,13 +43,57 @@ public enum AutoContinuePolicy {
         // Ran out of budget mid-task, unambiguously not finished, regardless of todos — this is
         // exactly what the manual Continue button is already for.
         if haltReason == "round_cap" { return true }
+        // The model streamed nothing (a free/overloaded model does this right after a tool result).
+        // With tracked work still pending that is a stall, not a finish; the chain cap bounds retries.
+        if haltReason == "empty_response" { return true }
         // Any other halt reason is one this policy does not yet recognise; a turn that halted for
         // a reason we cannot read is not something to resume blindly.
         guard haltReason == nil else { return false }
         // A natural end with nothing left tracked as pending is an ordinary finished reply —
         // "hello" / "Hi! How can I help?" must not loop forever just because it made no tool call.
-        guard pendingTodos else { return false }
+        guard pendingTodos else {
+            // No todo list, but a reply that ends announcing an action it never took is a stall.
+            return endsWithUnfulfilledIntent(finalText)
+        }
         return !endsWithQuestion(finalText)
+    }
+
+    /// Whether `text` is a provider failure worth retrying on its own: a dropped or cancelled
+    /// connection, a timeout, a 429/5xx. A bad key or a refused request is not.
+    public static func isTransientProviderError(_ text: String) -> Bool {
+        guard text.contains("Provider Error") else { return false }
+        let lower = text.lowercased()
+        return ["cancelled", "canceled", "timed out", "connection was lost", "network connection",
+                "overloaded", "rate limit", "429", "500", "502", "503", "504"].contains { lower.contains($0) }
+    }
+
+    /// Seconds to wait before the nth automatic retry (0-based): 2, 4, 8 … capped at 30.
+    public static func retryDelay(attempt: Int) -> TimeInterval {
+        min(30, 2 * pow(2, Double(max(0, attempt))))
+    }
+
+    /// When a "usage limit" failure says it lifts ("resets 11:40am (America/New_York)"), as the
+    /// next such moment after `now`; nil when the text is not a usage-limit failure, or
+    /// `fallback` seconds out when it is one that names no time.
+    public static func usageLimitResume(in text: String, now: Date = Date(), fallback: TimeInterval = 900) -> Date? {
+        let lower = text.lowercased()
+        guard lower.contains("out of extra usage") || lower.contains("usage limit") || lower.contains("limit reached") else { return nil }
+        let pattern = #"resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)"#
+        guard let re = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+              let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let hr = Range(m.range(at: 1), in: text).flatMap({ Int(text[$0]) }),
+              let ampm = Range(m.range(at: 3), in: text).map({ text[$0].lowercased() }),
+              let tzName = Range(m.range(at: 4), in: text).map({ String(text[$0]) }),
+              let tz = TimeZone(identifier: tzName)
+        else { return now.addingTimeInterval(fallback) }
+        let minute = Range(m.range(at: 2), in: text).flatMap { Int(text[$0]) } ?? 0
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = tz
+        var comps = DateComponents()
+        comps.hour = (hr % 12) + (ampm == "pm" ? 12 : 0)
+        comps.minute = minute
+        comps.second = 30 // a little past the stated time
+        return cal.nextDate(after: now, matching: comps, matchingPolicy: .nextTime)
     }
 
     /// A conservative check for "the assistant is asking the user something," so auto-continue

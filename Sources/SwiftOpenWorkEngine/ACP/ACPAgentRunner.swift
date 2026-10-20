@@ -87,6 +87,36 @@ public enum ACPMapping {
     ]
 }
 
+/// The models each external agent has said it offers, remembered so Settings can list real choices
+/// for any agent instead of a guess. Filled in whenever an agent starts a session.
+public enum ACPModelCatalog {
+    public struct Model: Hashable, Sendable { public var id: String; public var name: String }
+
+    private static func key(_ config: ExternalAgentConfig) -> String { "acp.models.\(config.displayLine)" }
+
+    public static func models(for config: ExternalAgentConfig) -> [Model] {
+        let stored = UserDefaults.standard.array(forKey: key(config)) as? [[String]] ?? []
+        return stored.compactMap { $0.count == 2 ? Model(id: $0[0], name: $0[1]) : nil }
+    }
+
+    static func record(_ models: [String: Any]?, for config: ExternalAgentConfig) {
+        let list = (models?["availableModels"] as? [[String: Any]]) ?? []
+        let pairs = list.compactMap { m -> [String]? in
+            guard let id = m["modelId"] as? String else { return nil }
+            return [id, (m["name"] as? String) ?? id]
+        }
+        if !pairs.isEmpty { UserDefaults.standard.set(pairs, forKey: key(config)) }
+    }
+}
+
+/// Set by the budget watcher when a turn goes over, read once the turn has wound down.
+final class BudgetFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int?
+    var spent: Int? { lock.lock(); defer { lock.unlock() }; return value }
+    func trip(_ spent: Int) { lock.lock(); value = spent; lock.unlock() }
+}
+
 /// Keeps one agent process per chat and agent, so a conversation with an external agent is one ACP
 /// session across turns, and stops it after it has been idle for a while.
 actor ACPSessionPool {
@@ -97,9 +127,14 @@ actor ACPSessionPool {
         var sessionId: String
         var lastUsed: Date
         var supportsImages: Bool
+        /// The agent had no memory of this chat when it connected, so the first prompt must carry a recap.
+        var isFresh = false
     }
 
     private var entries: [String: Entry] = [:]
+    /// Keys with a turn in flight. A turn can outlast `idleLimit`, and `lastUsed` is only stamped
+    /// when it starts, so without this the reaper killed the agent mid-turn (exit status 15).
+    private var busy: Set<String> = []
     private var reaper: Task<Void, Never>?
     static let idleLimit: TimeInterval = 20 * 60
 
@@ -123,6 +158,24 @@ actor ACPSessionPool {
         }
     }
 
+    func setBusy(_ isBusy: Bool, for key: String) {
+        if isBusy { busy.insert(key) } else {
+            busy.remove(key)
+            entries[key]?.lastUsed = Date()
+        }
+    }
+
+    /// The agent's own id for a chat's conversation, kept across app launches so it can be resumed.
+    static func savedSessionId(for key: String) -> String? {
+        (UserDefaults.standard.dictionary(forKey: "acp.agentSessionIds") as? [String: String])?[key]
+    }
+
+    static func saveSessionId(_ id: String?, for key: String) {
+        var all = (UserDefaults.standard.dictionary(forKey: "acp.agentSessionIds") as? [String: String]) ?? [:]
+        all[key] = id
+        UserDefaults.standard.set(all, forKey: "acp.agentSessionIds")
+    }
+
     func remove(_ key: String) {
         entries.removeValue(forKey: key)?.connection.stop()
     }
@@ -134,7 +187,7 @@ actor ACPSessionPool {
 
     private func reapIdle() {
         let cutoff = Date().addingTimeInterval(-Self.idleLimit)
-        for (key, entry) in entries where entry.lastUsed < cutoff { remove(key) }
+        for (key, entry) in entries where entry.lastUsed < cutoff && !busy.contains(key) { remove(key) }
     }
 }
 
@@ -173,6 +226,7 @@ public enum ACPAgentRunner {
         defer { if accumulator.message.isStreaming { accumulator.finalize() } }
 
         let prompt = session.messages.last(where: { $0.role == .user })?.content ?? ""
+        let turnStart = Date()
         AuditLog.shared.record(sessionId: session.id, event: "turn_start", fields: [
             "agent": agent.name, "external": config.displayLine, "unattended": ToolApprovalManager.shared.isUnattended,
             "prompt": AuditLog.scrubbed(prompt),
@@ -184,9 +238,9 @@ public enum ACPAgentRunner {
             return
         }
         var promptText = prompt
+        let key = "\(session.id)|\(agent.id)"
         if !promptHooks.context.isEmpty { promptText += "\n\n" + promptHooks.context.joined(separator: "\n") }
 
-        let key = "\(session.id)|\(agent.id)"
         let entry: ACPSessionPool.Entry
         let events = EventPipe()
         do {
@@ -194,8 +248,10 @@ public enum ACPAgentRunner {
                 entry = existing
                 events.attach(to: existing.connection)
             } else {
-                entry = try await connect(config: config, workspace: workspace, events: events)
+                entry = try await connect(config: config, workspace: workspace, events: events, resuming: ACPSessionPool.savedSessionId(for: key))
                 await ACPSessionPool.shared.store(entry, for: key)
+                ACPSessionPool.saveSessionId(entry.sessionId, for: key)
+                if entry.isFresh, let recap = Self.recap(of: session) { promptText = recap + "\n\n" + promptText }
             }
         } catch {
             accumulator.setHalt(reason: "agent_unavailable", text: Self.startFailure(config: config, error: error))
@@ -203,6 +259,8 @@ public enum ACPAgentRunner {
             return
         }
 
+        await ACPSessionPool.shared.setBusy(true, for: key)
+        defer { Task { await ACPSessionPool.shared.setBusy(false, for: key) } }
         let state = TurnState(accumulator: accumulator, workspace: workspace, sessionId: session.id, agentName: agent.name, onTodos: onSessionTodosUpdated)
         let sessionId = entry.sessionId
         let connection = entry.connection
@@ -249,6 +307,27 @@ public enum ACPAgentRunner {
             }
             return (stopReason, failure)
         }
+        // The turn budget (Settings → Max Turn Tokens) for Claude Code, which reports nothing until
+        // the turn is over: watch its transcript and cancel the turn when the weighted figure
+        // passes it. Other agents write no transcript this app can read, so they are not metered.
+        let budget = PersistenceManager.shared.loadSettings().maxTurnTokens
+        let overBudget = BudgetFlag()
+        var meter: Task<Void, Never>?
+        if budget > 0, let configDir = ClaudeCodeUsage.configDir(for: config) {
+            meter = Task.detached(priority: .utility) {
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 6 * 1_000_000_000)
+                    guard let turn = ClaudeCodeUsage.turn(configDir: configDir, sessionId: sessionId, since: turnStart) else { continue }
+                    let spent = turn.sent + turn.received * 5
+                    if spent > budget {
+                        overBudget.trip(spent)
+                        connection.notify("session/cancel", ["sessionId": sessionId])
+                        return
+                    }
+                }
+            }
+        }
+        defer { meter?.cancel() }
         let outcome = await withTaskCancellationHandler {
             await consumer.value
         } onCancel: {
@@ -262,9 +341,15 @@ public enum ACPAgentRunner {
         let stopReason = outcome.stopReason
         let failure = outcome.failure
         if failure != nil { await ACPSessionPool.shared.remove(key) }
+        if failure != nil && !Task.isCancelled { /* keep the saved id so the next turn can resume it */ }
 
         state.finishOpenToolCalls(cancelled: Task.isCancelled || stopReason == "cancelled")
-        if let failure, !Task.isCancelled {
+        if let spent = overBudget.spent {
+            accumulator.setHalt(
+                reason: "token_budget",
+                text: "Turn token budget exceeded (about \(spent) weighted tokens > \(budget)). Press Continue to resume, or raise the budget in Settings."
+            )
+        } else if let failure, !Task.isCancelled {
             accumulator.setHalt(reason: "agent_error", text: failure.localizedDescription)
         } else if Task.isCancelled || stopReason == "cancelled" {
             accumulator.setHalt(reason: "stopped", text: "Generation stopped.")
@@ -273,18 +358,44 @@ public enum ACPAgentRunner {
         } else if stopReason == "refusal" {
             accumulator.setHalt(reason: "refusal", text: "The agent declined to continue.")
         }
-        // External agents report at most the context in use, never what a turn sent or received,
-        // so the composer's Sent / Recv would stay at zero. Estimate from the text instead.
-        accumulator.setBilled(
-            prompt: max(accumulator.message.promptTokens, TokenAccounting.estimate(prompt)),
-            completion: max(accumulator.message.completionTokens,
-                            TokenAccounting.estimate(accumulator.message.content + (accumulator.message.reasoning ?? ""))),
-            lastPrompt: TokenAccounting.estimate(prompt)
-        )
+        // External agents report at most the context in use, never what a turn sent or received.
+        // Claude Code keeps per-call usage in its transcript, so read the real figures from there;
+        // anything else gets an estimate from the text, which is only the typed prompt and the reply.
+        if let configDir = ClaudeCodeUsage.configDir(for: config),
+           let turn = await Task.detached(priority: .utility, operation: {
+               ClaudeCodeUsage.turn(configDir: configDir, sessionId: sessionId, since: turnStart)
+           }).value {
+            accumulator.setBilled(prompt: turn.sent, completion: turn.received, lastPrompt: turn.lastPrompt)
+        } else {
+            accumulator.setBilled(
+                prompt: max(accumulator.message.promptTokens, TokenAccounting.estimate(prompt)),
+                completion: max(accumulator.message.completionTokens,
+                                TokenAccounting.estimate(accumulator.message.content + (accumulator.message.reasoning ?? ""))),
+                lastPrompt: TokenAccounting.estimate(prompt)
+            )
+        }
         AuditLog.shared.record(sessionId: session.id, event: "turn_end", fields: [
             "reason": failure != nil ? "agent_error" : stopReason, "agent": agent.name,
         ])
         _ = await ToolHooks.run(.stop, input: ["stop_reason": stopReason], workspaceRoot: workspace.folderPath, sessionId: session.id)
+    }
+
+    /// What a new agent session is told about the chat so far, when it could not resume the old one.
+    static func recap(of session: Session) -> String? {
+        let prior = session.messages.dropLast(session.messages.last?.role == .user ? 1 : 0)
+            .filter { ($0.role == .user || $0.role == .assistant) && !$0.content.isEmpty }
+        guard !prior.isEmpty else { return nil }
+        func clip(_ text: String, _ n: Int) -> String { text.count > n ? String(text.prefix(n)) + "…" : text }
+        var lines = ["[Context: this chat was already under way, but your own session was lost. Earlier conversation:]"]
+        for m in prior.suffix(6) {
+            lines.append("\(m.role == .user ? "User" : "You"): \(clip(m.content, m.role == .user ? 1000 : 500))")
+        }
+        if !session.todos.isEmpty {
+            lines.append("Your task list at the time:")
+            for t in session.todos { lines.append("- [\(t.status.rawValue)] \(t.content)") }
+        }
+        lines.append("[End of context. Check the repository state (git status/diff) to see what was already done, then carry on.]")
+        return lines.joined(separator: "\n")
     }
 
     static func startFailure(config: ExternalAgentConfig, error: Error) -> String {
@@ -300,9 +411,24 @@ public enum ACPAgentRunner {
         name == "CLAUDECODE" || name.hasPrefix("CLAUDE_CODE_") || name.hasPrefix("CLAUDE_AGENT_SDK_")
     }
 
-    private static func connect(config: ExternalAgentConfig, workspace: Workspace, events: EventPipe) async throws -> ACPSessionPool.Entry {
+    /// Claude Code's own limits, tightened. Anything in the agent's own env still wins.
+    /// - compact the conversation at 60% of the window, not near the end, so the context each step
+    ///   re-sends stays smaller
+    /// - cap a shell command's output and an MCP tool's output at about half their defaults
+    /// - skip its background model calls (titles and similar)
+    nonisolated static let claudeCodeTokenDefaults: [String: String] = [
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "60",
+        "BASH_MAX_OUTPUT_LENGTH": "15000",
+        "MAX_MCP_OUTPUT_TOKENS": "10000",
+        "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
+    ]
+
+    private static func connect(config: ExternalAgentConfig, workspace: Workspace, events: EventPipe, resuming savedId: String? = nil) async throws -> ACPSessionPool.Entry {
         var environment = ToolExecutionEngine.defaultEnvironment()
         environment = environment.filter { !isInheritedClaudeSession($0.key) }
+        if config.isClaudeCode {
+            for (name, value) in claudeCodeTokenDefaults { environment[name] = value }
+        }
         for (name, value) in config.env { environment[name] = value }
         let connection = ACPConnection(
             executable: "/usr/bin/env", arguments: [config.command] + config.args,
@@ -326,14 +452,73 @@ public enum ACPAgentRunner {
             connection.stop()
             throw ACPConnection.RemoteError(code: -32003, message: "The agent needs you to sign in first. Run it once in a terminal to log in.")
         }
-        let created = try await connection.request("session/new", ["cwd": workspace.folderPath, "mcpServers": [Any]()], timeout: 60)
-        guard let sessionId = created["sessionId"] as? String else {
+        let capabilities = initialized["agentCapabilities"] as? [String: Any]
+        var sessionId: String?
+        var isFresh = true
+        var models: [String: Any]?
+        // Resume the agent's own conversation when it can: it still holds what it was doing. The
+        // agent replays the history as updates while loading, which must not reach this turn.
+        if let savedId, (capabilities?["loadSession"] as? Bool) == true {
+            connection.rebind { _ in }
+            if let loaded = try? await connection.request("session/load", sessionParams(cwd: workspace.folderPath, resuming: savedId, config: config), timeout: 120) {
+                sessionId = savedId
+                isFresh = false
+                models = loaded["models"] as? [String: Any]
+            }
+            events.attach(to: connection)
+        }
+        if sessionId == nil {
+            let created = try await connection.request("session/new", sessionParams(cwd: workspace.folderPath, resuming: nil, config: config), timeout: 60)
+            sessionId = created["sessionId"] as? String
+            models = created["models"] as? [String: Any]
+        }
+        guard let sessionId else {
             connection.stop()
             throw ACPConnection.RemoteError(code: -32602, message: "The agent did not return a session id.")
         }
-        let capabilities = initialized["agentCapabilities"] as? [String: Any]
+        ACPModelCatalog.record(models, for: config)
+        if let wanted = config.effectiveModel {
+            await selectModel(wanted, among: models, connection: connection, sessionId: sessionId)
+        }
         let images = ((capabilities?["promptCapabilities"] as? [String: Any])?["image"] as? Bool) ?? false
-        return ACPSessionPool.Entry(connection: connection, sessionId: sessionId, lastUsed: Date(), supportsImages: images)
+        return ACPSessionPool.Entry(connection: connection, sessionId: sessionId, lastUsed: Date(), supportsImages: images, isFresh: isFresh)
+    }
+
+    /// Parameters for `session/new`, or `session/load` when `resuming`. Built here from plain
+    /// values so each is a fresh value to send.
+    private nonisolated static func sessionParams(cwd: String, resuming: String?, config: ExternalAgentConfig) -> [String: Any] {
+        var params: [String: Any] = ["cwd": cwd, "mcpServers": [Any]()]
+        if let resuming { params["sessionId"] = resuming }
+        if let meta = sessionMeta(for: config) { params["_meta"] = meta }
+        return params
+    }
+
+    /// Options for `session/new` and `session/load`. For Claude Code's adapter, a lean context
+    /// leaves out the user's global MCP servers, skills and plugins (their schemas and listings are
+    /// sent with every call; one session measured about 20K tokens before any work) and keeps the
+    /// project's own settings. Agents that don't know `_meta` ignore it.
+    nonisolated static func sessionMeta(for config: ExternalAgentConfig) -> [String: Any]? {
+        guard config.isClaudeCode, config.effectiveLeanContext else { return nil }
+        return ["claudeCode": ["options": [
+            "settingSources": ["project", "local"],
+            "strictMcpConfig": true,
+            "disallowedTools": ["NotebookEdit"],
+        ] as [String: Any]]]
+    }
+
+    /// Switches the agent's model. The adapter starts on its own default (Opus for Claude Code)
+    /// whatever the environment says, so this is asked of it after the session exists. `wanted`
+    /// is an alias such as "sonnet" or a full id; it is matched against what the agent offers,
+    /// and sent as it is when the agent listed nothing. A refusal leaves the agent's default.
+    static func selectModel(_ wanted: String, among models: [String: Any]?, connection: ACPConnection, sessionId: String) async {
+        let available = (models?["availableModels"] as? [[String: Any]]) ?? []
+        let lower = wanted.lowercased()
+        func matches(_ model: [String: Any]) -> Bool {
+            [(model["modelId"] as? String), (model["name"] as? String)].contains { $0?.lowercased().contains(lower) == true }
+        }
+        let modelId = available.first(where: matches)?["modelId"] as? String ?? wanted
+        if let current = models?["currentModelId"] as? String, current == modelId { return }
+        _ = try? await connection.request("session/set_model", ["sessionId": sessionId, "modelId": modelId], timeout: 30)
     }
 
     // MARK: - Event pipe

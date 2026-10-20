@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftOpenWorkCore
+import SwiftOpenWorkEngine
 
 /// Prompt / Sent / Recv above the composer. Prompt is the box's estimate while typing, then the
 /// last billed prompt; Sent and Recv are billed totals for the session. All three follow the
@@ -17,11 +18,17 @@ public struct TokenStatsBar: View {
             draft: appState.composerText,
             lastBilledPrompt: billed.lastPromptTokens
         )
-        HStack(spacing: 14) {
-            stat("Prompt", prompt)
-            stat("Sent", billed.sentTokens)
-            stat("Recv", billed.receivedTokens)
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 6) {
+            if billed.lastPromptTokens >= Self.contextWarningTokens {
+                contextWarning(billed.lastPromptTokens)
+            }
+            cacheIdleNote(lastPrompt: billed.lastPromptTokens)
+            HStack(spacing: 14) {
+                stat("Prompt", prompt)
+                stat("Sent", billed.sentTokens)
+                stat("Recv", billed.receivedTokens)
+                Spacer(minLength: 0)
+            }
         }
         .padding(.horizontal, 20)
         .help("Prompt is this box (~4 characters per token) while you type, then the last billed prompt. Sent and Recv are billed tokens for this session.")
@@ -29,6 +36,52 @@ public struct TokenStatsBar: View {
         .accessibilityLabel(
             "Prompt \(TokenAccounting.grouped(prompt)) tokens, \(TokenAccounting.grouped(billed.sentTokens)) sent, \(TokenAccounting.grouped(billed.receivedTokens)) received"
         )
+    }
+
+    /// Past this, each step of a tool-using agent re-sends a very large context.
+    static let contextWarningTokens = 100_000
+
+    private func contextWarning(_ tokens: Int) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+            Text("This chat's context is \(TokenAccounting.grouped(tokens)) tokens, and every step re-sends it. A new chat will use your allowance much more slowly.")
+                .font(.system(size: 11)).foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            if appState.currentAgent.externalAgent?.isClaudeCode == true {
+                Button("Compact") { appState.sendMessage(text: "/compact") }
+                    .controlSize(.small)
+                    .help("Ask Claude Code to summarise the conversation so far, so each step re-sends much less.")
+            }
+            Button("New chat") {
+                let agentId = appState.currentSession?.messages.last(where: { $0.role == .assistant })?.agentId
+                appState.createNewSession(agentId: agentId)
+            }
+            .controlSize(.small)
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
+    }
+
+    /// Providers keep a prompt in cache for about five minutes. Past that, the next message pays to
+    /// write the whole context again, which is the common reason a message after a break costs far
+    /// more than the one before it.
+    static let cacheLifetime: TimeInterval = 5 * 60
+    static let cacheNoteMinimumTokens = 50_000
+
+    @ViewBuilder
+    private func cacheIdleNote(lastPrompt: Int) -> some View {
+        if lastPrompt >= Self.cacheNoteMinimumTokens,
+           let last = appState.currentSession?.messages.last(where: { $0.role == .assistant && !$0.isStreaming }) {
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                let idle = context.date.timeIntervalSince(last.timestamp)
+                if idle > Self.cacheLifetime, !appState.isGenerating {
+                    Text("Idle for \(Int(idle / 60)) min, so the prompt cache has expired: the next message re-sends about \(ContextMeter.abbreviate(lastPrompt)) tokens at full price. Compact or start a new chat first if you don't need all of it.")
+                        .font(.system(size: 10.5)).foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
     }
 
     private func stat(_ label: String, _ value: Int) -> some View {

@@ -1205,6 +1205,20 @@ var mcpPromptSummary = ""
         // must be told which request is current or it keeps only the session's first one.
         let currentRequestId = workingMessages.last(where: ContextCompactor.isPersonRequest)?.id
 
+        // A bare "Continue" carries no task, and after an agent or model switch the new model has
+        // no memory of one: restate the last real request and the open todos so it resumes that
+        // work instead of inventing its own.
+        if AutoContinuePolicy.isContinuePrompt(lastPrompt),
+           let task = session.messages.last(where: { $0.role == .user && !AutoContinuePolicy.isContinuePrompt($0.content) && $0.content.count > 40 }) {
+            var note = "[System]: You are resuming interrupted work. The user's task, which you must finish (do not start a different one):\n"
+                + String(task.content.prefix(4000))
+            let open = session.todos.filter { $0.status != .done }
+            if !open.isEmpty {
+                note += "\nOpen todos:\n" + open.map { "- [\($0.status.rawValue)] \($0.content)" }.joined(separator: "\n")
+            }
+            workingMessages.append(ChatMessage(sessionId: session.id, role: .user, content: note))
+        }
+
         // UserPromptSubmit hooks: a hook may refuse the message or hand the model context for it.
         // The context rides as a "[System]:" note, which is dropped from the saved transcript like
         // the loop's other steering, so it is re-derived each turn rather than replayed.

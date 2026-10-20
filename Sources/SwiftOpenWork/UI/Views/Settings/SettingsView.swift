@@ -2107,7 +2107,7 @@ public struct SettingsView: View {
                         .toggleStyle(.switch)
                 }
 
-                SettingsRow(title: "Auto-Continue Until Done", subtitle: "When a turn stops with the todo list still open and no question asked, send Continue automatically instead of waiting for you to (stops after 5 in a row)", icon: "arrow.clockwise") {
+                SettingsRow(title: "Auto-Continue Until Done", subtitle: "When a turn stops with the todo list still open and no question asked, send Continue automatically instead of waiting for you to (stops after 4 in a row, 2 for external agents)", icon: "arrow.clockwise") {
                     Toggle("", isOn: $appState.settings.autoContinueUntilDone)
                         .toggleStyle(.switch)
                 }
@@ -2134,7 +2134,7 @@ public struct SettingsView: View {
                 }
 
                 if appState.settings.maxTurnTokens > 0 {
-                    SettingsRow(title: "Max Turn Tokens (\(appState.settings.maxTurnTokens / 1000)k)", subtitle: "Budget for a single turn", icon: "gauge.with.dots.needle.67percent") {
+                    SettingsRow(title: "Max Turn Tokens (\(appState.settings.maxTurnTokens / 1000)k)", subtitle: "Budget for a single turn. Lower it to stop a runaway turn sooner; for Claude Code it is counted cost-weighted (cache reads at a tenth)", icon: "gauge.with.dots.needle.67percent") {
                         Stepper("", value: $appState.settings.maxTurnTokens, in: 100_000...20_000_000, step: 100_000)
                     }
                 }

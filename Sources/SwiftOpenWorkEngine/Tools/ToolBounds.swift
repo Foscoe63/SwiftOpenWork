@@ -3,7 +3,11 @@ import SwiftOpenWorkCore
 
 /// Radiant-style central tool result bound + time budget (tool-bounds.js parity).
 public enum ToolBounds {
-    public static let maxResultChars = 40_000
+    /// What one tool result may add to the transcript (about 6K tokens). Every later step re-sends
+    /// it until it is folded away, so a 40K-character result (about 10K tokens) cost that again on
+    /// each step. Head and tail are kept; the model can ask for the rest with offset/limit or a
+    /// narrower search.
+    public static let maxResultChars = 24_000
 
     public struct Bounded: Sendable {
         public let text: String
@@ -23,7 +27,7 @@ public enum ToolBounds {
         return Bounded(
             text: sliced,
             truncatedChars: truncated,
-            notice: "Tool result truncated (\(truncated) chars omitted). Head and tail retained."
+            notice: "Tool result truncated (\(truncated) chars omitted). Head and tail retained; ask for a narrower range or search to see the rest."
         )
     }
 }

@@ -51,6 +51,44 @@ final class AutoContinuePolicyTests: XCTestCase {
         ))
     }
 
+    func testAnEmptyModelResponseWithPendingTodosIsResumed() {
+        XCTAssertTrue(AutoContinuePolicy.shouldAutoContinue(
+            haltReason: "empty_response", finalText: "The model returned an empty response.", pendingTodos: true
+        ))
+        XCTAssertTrue(AutoContinuePolicy.shouldAutoContinue(
+            haltReason: "empty_response", finalText: "The model returned an empty response.", pendingTodos: false
+        ))
+    }
+
+    func testTransientProviderErrorsAreRetryableButKeyErrorsAreNot() {
+        XCTAssertTrue(AutoContinuePolicy.isTransientProviderError("⚠️ **Provider Error (OpenRouter):**\n`cancelled`"))
+        XCTAssertFalse(AutoContinuePolicy.isTransientProviderError("⚠️ **Provider Error (OpenRouter):**\n`401 invalid api key`"))
+    }
+
+    func testAnAnnouncedButUntakenActionIsResumedEvenWithoutTodos() {
+        XCTAssertTrue(AutoContinuePolicy.shouldAutoContinue(
+            haltReason: nil, finalText: "Now let me check the build:", pendingTodos: false
+        ))
+    }
+
+    func testRetryDelayBacksOffAndCaps() {
+        XCTAssertEqual(AutoContinuePolicy.retryDelay(attempt: 0), 2)
+        XCTAssertEqual(AutoContinuePolicy.retryDelay(attempt: 2), 8)
+        XCTAssertEqual(AutoContinuePolicy.retryDelay(attempt: 9), 30)
+    }
+
+    func testUsageLimitResumeParsesTheResetTime() throws {
+        let tz = TimeZone(identifier: "America/New_York")!
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = tz
+        let now = cal.date(from: DateComponents(year: 2026, month: 10, day: 18, hour: 11, minute: 0))!
+        let at = try XCTUnwrap(AutoContinuePolicy.usageLimitResume(
+            in: "Internal error: You're out of extra usage · resets 11:40am (America/New_York)", now: now))
+        XCTAssertEqual(cal.component(.hour, from: at), 11)
+        XCTAssertEqual(cal.component(.minute, from: at), 40)
+        XCTAssertEqual(cal.component(.day, from: at), 18)
+        XCTAssertNil(AutoContinuePolicy.usageLimitResume(in: "build failed"))
+    }
+
     func testAnUnrecognisedHaltReasonIsNotResumedBlindly() {
         XCTAssertFalse(AutoContinuePolicy.shouldAutoContinue(
             haltReason: "some_future_reason", finalText: "...", pendingTodos: true

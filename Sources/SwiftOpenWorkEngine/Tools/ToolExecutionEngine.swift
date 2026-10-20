@@ -2596,7 +2596,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     }
 
     /// Lines returned when the caller does not ask for a specific window.
-    public static let defaultReadLineLimit = 2_000
+    public static let defaultReadLineLimit = 600
     /// Individual lines longer than this are clipped; minified bundles otherwise blow the budget.
     public static let maxReadLineLength = 2_000
 
