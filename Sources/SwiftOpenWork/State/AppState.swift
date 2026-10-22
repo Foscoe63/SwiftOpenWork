@@ -1421,7 +1421,8 @@ public final class AppState: ObservableObject {
         guard transient || AutoContinuePolicy.shouldAutoContinue(
             haltReason: last.haltReason,
             finalText: last.content,
-            pendingTodos: pendingTodos
+            pendingTodos: pendingTodos,
+            external: last.providerId == "acp"
         ) else {
             autoContinueChainCounts[sessionId] = 0
             return

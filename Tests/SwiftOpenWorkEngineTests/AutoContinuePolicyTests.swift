@@ -13,6 +13,26 @@ final class AutoContinuePolicyTests: XCTestCase {
         ))
     }
 
+    func testAnExternalAgentThatEndedItsTurnIsNotResumedOnAGuess() {
+        // Pending todos and a trailing "let me check" are what a stalled local model looks like;
+        // from Claude Code they are a stale list and a closing sentence, and a resume is costly.
+        XCTAssertFalse(AutoContinuePolicy.shouldAutoContinue(
+            haltReason: nil, finalText: "Now let me check the logs:", pendingTodos: true, external: true
+        ))
+        XCTAssertFalse(AutoContinuePolicy.shouldAutoContinue(
+            haltReason: nil, finalText: "Done.", pendingTodos: true, external: true
+        ))
+    }
+
+    func testAnExternalAgentThatHitItsCapStillResumes() {
+        XCTAssertTrue(AutoContinuePolicy.shouldAutoContinue(
+            haltReason: "round_cap", finalText: "", pendingTodos: false, external: true
+        ))
+        XCTAssertTrue(AutoContinuePolicy.shouldAutoContinue(
+            haltReason: "empty_response", finalText: "", pendingTodos: true, external: true
+        ))
+    }
+
     func testARoundCapHaltAlwaysContinuesRegardlessOfTodos() {
         XCTAssertTrue(AutoContinuePolicy.shouldAutoContinue(
             haltReason: "round_cap", finalText: "Reached the autonomous round cap.", pendingTodos: false

@@ -32,10 +32,16 @@ public enum AutoContinuePolicy {
     /// when the user pressed Stop, `"round_cap"` when the autonomous round budget ran out, or nil
     /// when the turn ended on its own. `finalText` is that message's content. `pendingTodos` is
     /// whether the session's todo list has any item not marked done.
+    ///
+    /// `external` is a turn run by another program (Claude Code and the like). Its turn ending
+    /// without a halt is the agent saying it is done: its todo list is often left stale, and each
+    /// resumed turn re-sends a large context, so a guess from the todos or the last sentence costs
+    /// far more than the stall it might catch. Only a halt that says it did not finish resumes.
     public static func shouldAutoContinue(
         haltReason: String?,
         finalText: String,
-        pendingTodos: Bool
+        pendingTodos: Bool,
+        external: Bool = false
     ) -> Bool {
         // An explicit Stop is the user taking the wheel; resuming it automatically would make
         // Stop feel ignored.
@@ -49,6 +55,7 @@ public enum AutoContinuePolicy {
         // Any other halt reason is one this policy does not yet recognise; a turn that halted for
         // a reason we cannot read is not something to resume blindly.
         guard haltReason == nil else { return false }
+        if external { return false }
         // A natural end with nothing left tracked as pending is an ordinary finished reply —
         // "hello" / "Hi! How can I help?" must not loop forever just because it made no tool call.
         guard pendingTodos else {
