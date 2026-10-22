@@ -418,6 +418,27 @@ public struct AgentEditModalView: View {
     @ObservedObject var appState: AppState
     var onSave: (Agent) -> Void
     var onCancel: () -> Void
+    /// Collapsed tool headings: "tools", "mcp", or "mcp:<server id>".
+    @State private var collapsedSections: Set<String> = []
+
+    private func isExpanded(_ key: String) -> Bool { !collapsedSections.contains(key) }
+
+    private func toggleSection(_ key: String) {
+        if collapsedSections.contains(key) { collapsedSections.remove(key) } else { collapsedSections.insert(key) }
+    }
+
+    private func collapsibleHeading(_ title: String, key: String, font: Font) -> some View {
+        Button { toggleSection(key) } label: {
+            HStack(spacing: 4) {
+                Image(systemName: isExpanded(key) ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .frame(width: 10)
+                Text(title).font(font)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
 
     private let availableAvatars = [
         "sparkles", "brain.head.profile", "chevron.left.forwardslash.chevron.right",
@@ -449,8 +470,8 @@ public struct AgentEditModalView: View {
         if !servers.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Divider()
-                Text("MCP Tools")
-                    .font(.system(size: 12, weight: .bold))
+                collapsibleHeading("MCP Tools", key: "mcp", font: .system(size: 12, weight: .bold))
+                if isExpanded("mcp") {
                 Text("Pick single tools from a server. Ticking the whole server above allows all of its tools.")
                     .font(.system(size: 10.5))
                     .foregroundColor(.secondary)
@@ -458,8 +479,8 @@ public struct AgentEditModalView: View {
                     let names = (advertised[server.id] ?? [])
                         .filter { MCPToolGate.isToolEnabled(server: server, toolName: $0) }
                         .sorted()
-                    Text(server.name)
-                        .font(.system(size: 11, weight: .semibold))
+                    collapsibleHeading(server.name, key: "mcp:\(server.id)", font: .system(size: 11, weight: .semibold))
+                    if isExpanded("mcp:\(server.id)") {
                     ForEach(names, id: \.self) { name in
                         let id = "mcp__\(server.id)__\(name)"
                         let wholeServer = "mcp_\(server.id)"
@@ -485,6 +506,8 @@ public struct AgentEditModalView: View {
                                 .font(.system(size: 11, design: .monospaced))
                         }
                     }
+                    }
+                }
                 }
             }
         }
@@ -592,8 +615,7 @@ public struct AgentEditModalView: View {
                     // Allowed Tools
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Text("Allowed Tools & Capabilities")
-                                .font(.system(size: 12, weight: .bold))
+                            collapsibleHeading("Allowed Tools & Capabilities", key: "tools", font: .system(size: 12, weight: .bold))
                             Spacer()
                             Button("Select All") {
                                 for t in appState.tools {
@@ -606,6 +628,7 @@ public struct AgentEditModalView: View {
                             .font(.system(size: 11))
                         }
 
+                        if isExpanded("tools") {
                         ForEach(appState.tools) { tool in
                             let isIncluded = draft.allowedToolIds.contains(tool.id) || draft.allowedToolIds.contains(tool.name)
                             Toggle(isOn: Binding(
@@ -631,6 +654,7 @@ public struct AgentEditModalView: View {
                                         .foregroundColor(.secondary)
                                 }
                             }
+                        }
                         }
                     }
 
