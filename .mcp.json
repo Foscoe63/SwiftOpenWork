@@ -19,6 +19,16 @@
       "env": {
         "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer"
       }
+    },
+    "graphicle": {
+      "command": "graphicle",
+      "args": [
+        "mcp",
+        "--project",
+        ".",
+        "--tools",
+        "essentials"
+      ]
     }
   }
 }
