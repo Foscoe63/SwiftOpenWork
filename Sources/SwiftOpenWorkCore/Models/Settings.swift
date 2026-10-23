@@ -218,6 +218,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var defaultReasoningEffort: ReasoningEffort
     public var autoCompactContext: Bool
     public var contextCompactionThresholdTokens: Int
+    /// A local model that writes a short summary of the messages compaction drops, as
+    /// `providerId|modelId`. Empty means no summary: the exact digest alone is used.
+    public var compactionSummarizerModel: String
     public var planModeEnabled: Bool
     /// Halts a turn once its token use passes this. 0 turns the limit off.
     public var maxTurnTokens: Int
@@ -401,6 +404,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         defaultReasoningEffort: ReasoningEffort = .medium,
         autoCompactContext: Bool = true,
         contextCompactionThresholdTokens: Int = 64_000,
+        compactionSummarizerModel: String = "",
         planModeEnabled: Bool = false,
         maxTurnTokens: Int = 2_000_000,
         playNotificationSounds: Bool = true,
@@ -494,6 +498,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.defaultReasoningEffort = defaultReasoningEffort
         self.autoCompactContext = autoCompactContext
         self.contextCompactionThresholdTokens = contextCompactionThresholdTokens
+        self.compactionSummarizerModel = compactionSummarizerModel
         self.planModeEnabled = planModeEnabled
         self.maxTurnTokens = maxTurnTokens
         self.playNotificationSounds = playNotificationSounds
@@ -572,6 +577,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.defaultReasoningEffort = try container.decodeIfPresent(ReasoningEffort.self, forKey: .defaultReasoningEffort) ?? def.defaultReasoningEffort
         self.autoCompactContext = try container.decodeIfPresent(Bool.self, forKey: .autoCompactContext) ?? def.autoCompactContext
         self.contextCompactionThresholdTokens = try container.decodeIfPresent(Int.self, forKey: .contextCompactionThresholdTokens) ?? def.contextCompactionThresholdTokens
+        self.compactionSummarizerModel = try container.decodeIfPresent(String.self, forKey: .compactionSummarizerModel) ?? ""
         self.planModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .planModeEnabled) ?? false
         self.maxTurnTokens = try container.decodeIfPresent(Int.self, forKey: .maxTurnTokens) ?? 2_000_000
         self.playNotificationSounds = try container.decodeIfPresent(Bool.self, forKey: .playNotificationSounds) ?? def.playNotificationSounds

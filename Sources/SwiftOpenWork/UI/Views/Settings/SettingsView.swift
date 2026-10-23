@@ -1184,6 +1184,28 @@ public struct SettingsView: View {
                     SettingsRow(title: "Compaction Threshold (\(appState.settings.contextCompactionThresholdTokens / 1000)k tokens)", subtitle: "Transcript size that triggers a summarize pass (never above 70% of the model's window)", icon: "arrow.down.right.and.arrow.up.left") {
                         Stepper("", value: $appState.settings.contextCompactionThresholdTokens, in: 8000...256_000, step: 4000)
                     }
+
+                    SettingsRow(title: "Compaction Summary Model", subtitle: "A local model writes short notes on the steps compaction drops, beside the exact list of files and commands. Local providers only, so nothing leaves this Mac. Off by default.", icon: "text.append") {
+                        let choices: [(value: String, label: String)] = appState.providers
+                            .filter { $0.isEnabled && CompactionSummarizer.isLocal($0.kind) }
+                            .flatMap { provider in
+                                provider.models.map {
+                                    (CompactionSummarizer.settingValue(providerId: provider.id, modelId: $0.id), "\(provider.name) · \($0.name)")
+                                }
+                            }
+                        let current = appState.settings.compactionSummarizerModel
+                        Picker("", selection: $appState.settings.compactionSummarizerModel) {
+                            Text("Off").tag("")
+                            if !current.isEmpty, !choices.contains(where: { $0.value == current }) {
+                                Text("Unavailable (\(current))").tag(current)
+                            }
+                            ForEach(choices, id: \.value) { choice in
+                                Text(choice.label).tag(choice.value)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 260)
+                    }
                 }
 
                 SettingsRow(title: "Audio Notifications", subtitle: "Play chime when agents finish long tasks", icon: "speaker.wave.2") {

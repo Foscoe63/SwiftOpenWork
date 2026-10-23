@@ -154,6 +154,8 @@ public enum SubAgentExecutor {
             if neverAvailable.contains(tool.name) { return false }
             if tool.name == "agent_spawn" && !canRecurse { return false }
             if tool.name == "agent_message" && !subAgent.canCommunicateWithOthers { return false }
+            // Shortened results point at this tool, so a restricted agent needs it too.
+            if tool.name == "recall_output" { return true }
             // An empty allowlist means "everything the workspace allows", which is how existing
             // agents are configured; a populated one is a real restriction.
             if !subAgent.allowedToolIds.isEmpty,
@@ -582,8 +584,10 @@ public enum SubAgentExecutor {
                     messages.append(ChatMessage(
                         id: call.id,
                         role: .tool,
-                        content: ToolBounds.boundResult(AgentRunner.describeToolResult(result)
-                            + (repeats >= 3 ? "\n\n[Stuck breaker] You have made this identical call \(repeats) times; its result has not changed. Use what you have, or finish with your report." : "")).text,
+                        content: ToolResultPipeline.process(
+                            AgentRunner.describeToolResult(result), toolName: call.toolName, sessionId: frame.sessionId
+                        ).text
+                            + (repeats >= 3 ? "\n\n[Stuck breaker] You have made this identical call \(repeats) times; its result has not changed. Use what you have, or finish with your report." : ""),
                         attachments: result.producedImages.map {
                             MessageAttachment(
                                 name: ($0 as NSString).lastPathComponent,

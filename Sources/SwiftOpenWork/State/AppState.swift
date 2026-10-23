@@ -1627,7 +1627,10 @@ public final class AppState: ObservableObject {
                 showToast("/compact is not available in group chats")
                 return true
             }
-            let result = ContextCompactor.compactNow(session.modelHistory())
+            let result = ContextCompactor.compactNow(session.modelHistory(), pinnedFacts: session.pinnedFacts)
+            if result.didCompact {
+                ContextSavings.shared.recordTokens(sessionId: session.id, savedTokens: max(0, result.tokensBefore - result.tokensAfter))
+            }
             guard result.didCompact else {
                 showToast("Nothing to compact yet")
                 return true
@@ -1639,6 +1642,47 @@ public final class AppState: ObservableObject {
             )
             persistence.saveSessions(sessions)
             showToast("Compacted: ~\(ContextMeter.abbreviate(result.tokensBefore)) → ~\(ContextMeter.abbreviate(result.tokensAfter)) tokens")
+            return true
+
+        case "/pin", "/unpin", "/pins":
+            guard let session = currentSession, let idx = sessions.firstIndex(where: { $0.id == session.id }) else { return true }
+            let argument = String(command.dropFirst(first.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            switch first {
+            case "/pin":
+                var facts = session.pinnedFacts
+                switch PinnedFacts.add(argument, to: &facts) {
+                case .added(let count):
+                    sessions[idx].pinnedFacts = facts
+                    persistence.saveSessions(sessions)
+                    showToast("Pinned (\(count)): compaction will keep it")
+                case .duplicate: showToast("Already pinned")
+                case .empty: showToast("Say what to pin: /pin <fact>")
+                case .full: showToast("\(PinnedFacts.maxFacts) facts are pinned already; /unpin one first")
+                }
+            case "/unpin":
+                var facts = session.pinnedFacts
+                switch PinnedFacts.remove(argument, from: &facts) {
+                case .removed:
+                    sessions[idx].pinnedFacts = facts
+                    persistence.saveSessions(sessions)
+                    showToast("Unpinned")
+                case .cleared(let count):
+                    sessions[idx].pinnedFacts = facts
+                    persistence.saveSessions(sessions)
+                    showToast("Unpinned \(count) fact(s)")
+                case .notFound: showToast("Nothing pinned there; /pins lists them")
+                }
+            default:
+                sessions[idx].messages.append(ChatMessage(
+                    sessionId: session.id,
+                    role: .assistant,
+                    content: PinnedFacts.listing(session.pinnedFacts),
+                    agentName: "System Help",
+                    agentAvatar: "pin.fill",
+                    agentColor: "#8B5CF6"
+                ))
+                persistence.saveSessions(sessions)
+            }
             return true
 
         case "/plan":
@@ -1688,6 +1732,7 @@ public final class AppState: ObservableObject {
                     - `/clear` - Clear messages in this session
                     - `/usage` - Claude Code token usage for this chat and account
                     - `/compact` - Shrink what the model is sent; your chat stays as is
+                    - `/pin <fact>` - Keep a fact through compaction (`/pins` lists them, `/unpin <n>` removes one)
                     - Your own commands: Settings → Slash Commands
                     - `/settings` - Jump to App Settings
                     - `/tools` - Inspect MCP & built-in tools

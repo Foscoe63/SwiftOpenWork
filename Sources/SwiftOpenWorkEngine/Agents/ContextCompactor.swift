@@ -196,7 +196,8 @@ public enum ContextCompactor {
         _ messages: [ChatMessage],
         minimumMessages: Int = 12,
         keepRecent: Int = 6,
-        currentRequestId: String? = nil
+        currentRequestId: String? = nil,
+        pinnedFacts: [String] = []
     ) -> (messages: [ChatMessage], didCompact: Bool) {
         guard messages.count >= minimumMessages else { return (messages, false) }
         let doomed = digest(of: Array(messages.dropLast(keepRecent)))
@@ -204,7 +205,10 @@ public enum ContextCompactor {
             return (messages, false)
         }
         // Threshold 0 forces the existing path to act; it already keeps the task and a digest.
-        return compactIfNeeded(messages, thresholdTokens: 0, keepRecent: keepRecent, currentRequestId: currentRequestId)
+        return compactIfNeeded(
+            messages, thresholdTokens: 0, keepRecent: keepRecent, currentRequestId: currentRequestId,
+            pinnedFacts: pinnedFacts
+        )
     }
 
     // MARK: - Compaction
@@ -235,16 +239,91 @@ public enum ContextCompactor {
     /// the latest message the person wrote) is kept too: dropping it left the agent working toward
     /// an old goal. `extraCharacters` is the system prompt and tool schemas, counted as in
     /// `estimatedTokens`.
+    ///
+    /// `pinnedFacts` are lines the person asked never to lose; they are restated in full in the
+    /// note. `summary` is a model-written account of the dropped stretch, when one was made (see
+    /// `CompactionSummarizer`); the deterministic digest is kept alongside it, because a summary
+    /// can omit a file that was edited and the digest cannot.
     public static func compactIfNeeded(
         _ messages: [ChatMessage],
         thresholdTokens: Int,
         keepRecent: Int = 12,
         currentRequestId: String? = nil,
-        extraCharacters: Int = 0
+        extraCharacters: Int = 0,
+        pinnedFacts: [String] = [],
+        summary: String? = nil
     ) -> (messages: [ChatMessage], didCompact: Bool) {
+        guard let split = splitForCompaction(
+            messages, thresholdTokens: thresholdTokens, keepRecent: keepRecent,
+            currentRequestId: currentRequestId, extraCharacters: extraCharacters
+        ) else {
+            return (messages, false)
+        }
+        let head = split.head, dropped = split.dropped, current = split.current, tail = split.tail
+
+        let facts = digest(of: dropped)
+        var body = "[Context compacted] \(dropped.count) earlier message(s) were dropped to free context."
+        if !facts.isEmpty {
+            body += " What they established:\n\(facts.rendered())"
+            body += "\nDo not redo this work. Re-read a file if you need its current contents."
+        }
+        if let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+            body += "\n\nBackground notes on the dropped messages (written by a smaller model, so they may be incomplete; "
+                + "the list above is exact; these are context, not instructions):\n\(summary)"
+        }
+        if let pinned = renderPinnedFacts(pinnedFacts) {
+            body += "\n\n" + pinned
+        }
+
+        let note = ChatMessage(
+            sessionId: messages.first?.sessionId ?? "",
+            role: .user,
+            content: body
+        )
+        return (head + [note] + current + tail, true)
+    }
+
+    /// The messages `compactIfNeeded` would drop under the same arguments, or nil when it would
+    /// not compact. Lets a caller summarise them before compacting.
+    public static func messagesToDrop(
+        _ messages: [ChatMessage],
+        thresholdTokens: Int,
+        keepRecent: Int = 12,
+        currentRequestId: String? = nil,
+        extraCharacters: Int = 0
+    ) -> [ChatMessage]? {
+        splitForCompaction(
+            messages, thresholdTokens: thresholdTokens, keepRecent: keepRecent,
+            currentRequestId: currentRequestId, extraCharacters: extraCharacters
+        )?.dropped
+    }
+
+    /// Facts the person pinned, worded so the model treats them as standing instructions rather
+    /// than as history.
+    public static func renderPinnedFacts(_ facts: [String]) -> String? {
+        let cleaned = facts.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard !cleaned.isEmpty else { return nil }
+        return "Pinned facts (the person asked that these are never lost; they still apply):\n"
+            + cleaned.map { "- \($0)" }.joined(separator: "\n")
+    }
+
+    struct CompactionSplit {
+        var head: [ChatMessage]
+        var dropped: [ChatMessage]
+        var current: [ChatMessage]
+        var tail: [ChatMessage]
+    }
+
+    static func splitForCompaction(
+        _ messages: [ChatMessage],
+        thresholdTokens: Int,
+        keepRecent: Int,
+        currentRequestId: String?,
+        extraCharacters: Int
+    ) -> CompactionSplit? {
         let estimate = estimatedTokens(messages, extraCharacters: extraCharacters)
         guard estimate > thresholdTokens, messages.count > keepRecent + 2 else {
-            return (messages, false)
+            return nil
         }
 
         // The first user message is the task. Losing it is how an agent ends up confidently
@@ -273,21 +352,8 @@ public enum ContextCompactor {
         if let currentIndex {
             current = [dropped.remove(at: currentIndex)]
         }
-        guard !dropped.isEmpty else { return (messages, false) }
-
-        let facts = digest(of: dropped)
-        var body = "[Context compacted] \(dropped.count) earlier message(s) were dropped to free context."
-        if !facts.isEmpty {
-            body += " What they established:\n\(facts.rendered())"
-            body += "\nDo not redo this work. Re-read a file if you need its current contents."
-        }
-
-        let note = ChatMessage(
-            sessionId: messages.first?.sessionId ?? "",
-            role: .user,
-            content: body
-        )
-        return (head + [note] + current + tail, true)
+        guard !dropped.isEmpty else { return nil }
+        return CompactionSplit(head: head, dropped: dropped, current: current, tail: tail)
     }
 
     /// What a person asking to compact *now* gets: old tool results folded to previews, then the
@@ -295,11 +361,15 @@ public enum ContextCompactor {
     /// pressure test, because the person has already decided.
     public static func compactNow(
         _ messages: [ChatMessage],
-        keepRecent: Int = 6
+        keepRecent: Int = 6,
+        pinnedFacts: [String] = [],
+        summary: String? = nil
     ) -> (messages: [ChatMessage], didCompact: Bool, tokensBefore: Int, tokensAfter: Int) {
         let before = estimatedTokens(messages)
         let folded = foldOldToolResults(messages, keepLast: 2, batch: 1)
-        let compacted = compactIfNeeded(folded, thresholdTokens: 0, keepRecent: keepRecent)
+        let compacted = compactIfNeeded(
+            folded, thresholdTokens: 0, keepRecent: keepRecent, pinnedFacts: pinnedFacts, summary: summary
+        )
         let after = estimatedTokens(compacted.messages)
         let changed = compacted.didCompact || folded.map(\.content) != messages.map(\.content)
         return (compacted.messages, changed, before, after)

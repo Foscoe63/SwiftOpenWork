@@ -2164,6 +2164,22 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
 
+        case "recall_output":
+            func intArgument(_ key: String) -> Int? { (dict[key] as? Int) ?? Int(dict[key] as? String ?? "") }
+            let recalled = ToolOutputStore.shared.recall(
+                id: dict["id"] as? String ?? dict["output_id"] as? String ?? "",
+                query: dict["query"] as? String ?? dict["search"] as? String ?? dict["q"] as? String,
+                start: intArgument("start") ?? intArgument("offset"),
+                lines: intArgument("lines") ?? intArgument("limit"),
+                sessionId: AgentRunContext.current?.sessionId
+            )
+            return ToolExecutionResult(
+                success: recalled.success,
+                output: recalled.success ? recalled.text : "",
+                error: recalled.success ? nil : recalled.text,
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+
         case "mcp_describe":
             let query = dict["query"] as? String ?? dict["name"] as? String ?? dict["tool"] as? String ?? ""
             let limit = (dict["limit"] as? Int) ?? Int(dict["limit"] as? String ?? "") ?? MCPToolSearch.defaultLimit

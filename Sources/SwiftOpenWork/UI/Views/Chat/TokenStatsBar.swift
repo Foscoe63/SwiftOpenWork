@@ -18,6 +18,7 @@ public struct TokenStatsBar: View {
             draft: appState.composerText,
             lastBilledPrompt: billed.lastPromptTokens
         )
+        let saved = ContextSavings.shared.tokensSaved(sessionId: appState.currentSession?.id)
         VStack(alignment: .leading, spacing: 6) {
             if billed.lastPromptTokens >= Self.contextWarningTokens {
                 contextWarning(billed.lastPromptTokens)
@@ -27,6 +28,10 @@ public struct TokenStatsBar: View {
                 stat("Prompt", prompt)
                 stat("Sent", billed.sentTokens)
                 stat("Recv", billed.receivedTokens)
+                if saved > 0 {
+                    stat("Saved", saved)
+                        .help("About \(TokenAccounting.grouped(saved)) tokens kept out of this chat's context by shortening large tool results and by compaction (~4 characters per token). Shortened results are saved in full; the model can read any part back with recall_output.")
+                }
                 Spacer(minLength: 0)
             }
         }
@@ -35,6 +40,7 @@ public struct TokenStatsBar: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "Prompt \(TokenAccounting.grouped(prompt)) tokens, \(TokenAccounting.grouped(billed.sentTokens)) sent, \(TokenAccounting.grouped(billed.receivedTokens)) received"
+                + (saved > 0 ? ", \(TokenAccounting.grouped(saved)) saved" : "")
         )
     }
 

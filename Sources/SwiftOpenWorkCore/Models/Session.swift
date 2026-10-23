@@ -32,6 +32,9 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     /// The room option "others re-plan": naming one agent also has the rest revise their own
     /// plans. See `GroupChat.plan`.
     public var groupFollowUp: Bool = false
+    /// Facts the person pinned with `/pin`. Compaction restates them in full, so they survive
+    /// however much of the conversation around them is dropped.
+    public var pinnedFacts: [String] = []
 
     /// Two agents make a room; one is just a chat with that agent.
     public var isGroup: Bool { participantIds.count >= 2 }
@@ -102,6 +105,7 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
         modelContext = try c.decodeIfPresent(ModelContextSnapshot.self, forKey: .modelContext)
         participantIds = try c.decodeIfPresent([String].self, forKey: .participantIds) ?? []
         groupFollowUp = try c.decodeIfPresent(Bool.self, forKey: .groupFollowUp) ?? false
+        pinnedFacts = try c.decodeIfPresent([String].self, forKey: .pinnedFacts) ?? []
     }
 
     /// What to send the model as this session's history.

@@ -1391,27 +1391,58 @@ var mcpPromptSummary = ""
             // been paid on the uncompacted one — and it happens at a milestone rather than
             // mid-task.
             if loadedSettings.autoCompactContext, reachedMilestoneThisIteration {
-                let compacted = ContextCompactor.compactAtMilestone(workingMessages, currentRequestId: currentRequestId)
+                let tokensBefore = ContextCompactor.estimatedTokens(workingMessages)
+                let compacted = ContextCompactor.compactAtMilestone(
+                    workingMessages, currentRequestId: currentRequestId, pinnedFacts: session.pinnedFacts
+                )
                 workingMessages = compacted.messages
                 if compacted.didCompact {
+                    ContextSavings.shared.recordTokens(
+                        sessionId: session.id,
+                        savedTokens: tokensBefore - ContextCompactor.estimatedTokens(workingMessages)
+                    )
                     accumulator.appendNotice("Milestone reached — earlier steps compacted.")
                 }
             }
             reachedMilestoneThisIteration = false
 
             if loadedSettings.autoCompactContext {
+                let threshold = ContextCompactor.compactionThreshold(
+                    settingTokens: loadedSettings.contextCompactionThresholdTokens,
+                    contextWindow: model.contextWindow
+                )
+                // A local model's account of what is about to be dropped, when the person chose
+                // one. Asked only when compaction will actually happen.
+                var droppedSummary: String?
+                if !loadedSettings.compactionSummarizerModel.isEmpty,
+                   let dropped = ContextCompactor.messagesToDrop(
+                    workingMessages, thresholdTokens: threshold,
+                    currentRequestId: currentRequestId, extraCharacters: systemPromptWithTools.count
+                   ) {
+                    droppedSummary = await CompactionSummarizer.summarize(
+                        dropped,
+                        setting: loadedSettings.compactionSummarizerModel,
+                        providers: PersistenceManager.shared.loadProviders()
+                    )
+                }
+                let tokensBefore = ContextCompactor.estimatedTokens(workingMessages)
                 let compacted = ContextCompactor.compactIfNeeded(
                     workingMessages,
-                    thresholdTokens: ContextCompactor.compactionThreshold(
-                        settingTokens: loadedSettings.contextCompactionThresholdTokens,
-                        contextWindow: model.contextWindow
-                    ),
+                    thresholdTokens: threshold,
                     currentRequestId: currentRequestId,
-                    extraCharacters: systemPromptWithTools.count
+                    extraCharacters: systemPromptWithTools.count,
+                    pinnedFacts: session.pinnedFacts,
+                    summary: droppedSummary
                 )
                 workingMessages = compacted.messages
                 if compacted.didCompact {
-                    accumulator.appendNotice("Context compacted to free tokens.")
+                    ContextSavings.shared.recordTokens(
+                        sessionId: session.id,
+                        savedTokens: tokensBefore - ContextCompactor.estimatedTokens(workingMessages)
+                    )
+                    accumulator.appendNotice(droppedSummary == nil
+                        ? "Context compacted to free tokens."
+                        : "Context compacted to free tokens; a local model summarised the dropped steps.")
                 }
             }
 
@@ -2148,13 +2179,13 @@ var mcpPromptSummary = ""
                     }
                 }
 
-                let bounded = ToolBounds.boundResult(resultOutput + stuckNudge)
-                if let notice = bounded.notice {
+                let processed = ToolResultPipeline.process(resultOutput, toolName: toolName, sessionId: session.id)
+                if let notice = processed.notice {
                     accumulator.appendNotice(notice)
                 }
 
                 callInfo.status = resultSuccess ? .success : .error
-                callInfo.resultOutput = bounded.text
+                callInfo.resultOutput = processed.text + stuckNudge
                 callInfo.errorMessage = resultError
                 callInfo.durationMs = (CFAbsoluteTimeGetCurrent() - startTool) * 1000
                 accumulator.updateToolCall(callInfo)
@@ -2260,7 +2291,7 @@ var mcpPromptSummary = ""
                     id: callId,
                     sessionId: session.id,
                     role: .tool,
-                    content: bounded.text,
+                    content: processed.text + stuckNudge,
                     // Images the tool produced ride along on the message, so the provider can
                     // hand them to the model rather than the model reading a path it cannot open.
                     attachments: producedImages.map { path in

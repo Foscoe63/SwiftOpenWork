@@ -29,6 +29,9 @@ public enum SlashCommands {
     /// Handled in `AppState.handleSlashCommand`. A custom command may not take one of these names.
     public static let builtIn: [BuiltIn] = [
         BuiltIn(command: "/compact", description: "Shrink what the model is sent; your chat stays as is"),
+        BuiltIn(command: "/pin", description: "Pin a fact that compaction must never drop: /pin <fact>"),
+        BuiltIn(command: "/unpin", description: "Remove a pinned fact by its number: /unpin <n>, or /unpin all"),
+        BuiltIn(command: "/pins", description: "List this session's pinned facts"),
         BuiltIn(command: "/clear", description: "Clear messages in this session"),
         BuiltIn(command: "/plan", description: "Toggle plan mode (read-only until exit_plan_mode)"),
         BuiltIn(command: "/agent", description: "Switch the active agent, or open the Agents hub"),
