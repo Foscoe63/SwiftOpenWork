@@ -424,6 +424,11 @@ public enum ACPAgentRunner {
     ]
 
     private static func connect(config: ExternalAgentConfig, workspace: Workspace, events: EventPipe, resuming savedId: String? = nil) async throws -> ACPSessionPool.Entry {
+        // Spawning in a folder that is gone fails inside the agent as a bare "ENOENT".
+        var isFolder: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: workspace.folderPath, isDirectory: &isFolder), isFolder.boolValue else {
+            throw ACPConnection.RemoteError(code: -32004, message: "This workspace's folder no longer exists: \(workspace.folderPath)\nRe-point the workspace to a folder that does, or reconnect the drive it was on.")
+        }
         var environment = ToolExecutionEngine.defaultEnvironment()
         environment = environment.filter { !isInheritedClaudeSession($0.key) }
         if config.isClaudeCode {
@@ -438,6 +443,18 @@ public enum ACPAgentRunner {
         do { try connection.start(onIncoming: { events.deliver($0) }) } catch {
             throw ACPConnection.RemoteError(code: -32000, message: error.localizedDescription)
         }
+        do {
+            return try await handshake(connection: connection, config: config, workspace: workspace, events: events, resuming: savedId)
+        } catch let error as ACPConnection.RemoteError {
+            // "Internal error" alone says nothing; the agent's stderr usually says why.
+            let tail = connection.recentStandardError
+            connection.stop()
+            guard !tail.isEmpty else { throw error }
+            throw ACPConnection.RemoteError(code: error.code, message: error.message + "\n\nAgent output:\n" + String(tail.suffix(1500)))
+        }
+    }
+
+    private static func handshake(connection: ACPConnection, config: ExternalAgentConfig, workspace: Workspace, events: EventPipe, resuming savedId: String?) async throws -> ACPSessionPool.Entry {
         let initialized = try await connection.request("initialize", [
             "protocolVersion": 1,
             "clientCapabilities": ["fs": ["readTextFile": true, "writeTextFile": true]],
