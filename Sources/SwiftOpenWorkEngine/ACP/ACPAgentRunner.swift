@@ -71,10 +71,10 @@ public enum ACPMapping {
 
     public static let presets: [Preset] = [
         Preset(name: "Claude Code", detail: "Anthropic's agent, through the Zed ACP adapter (needs Node)",
-               config: ExternalAgentConfig(command: "npx", args: ["-y", "@zed-industries/claude-code-acp"])),
+               config: ExternalAgentConfig(command: "npx", args: ["-y", "@agentclientprotocol/claude-agent-acp"])),
         Preset(name: "Claude Code (second account)",
                detail: "A separate Claude sign-in kept in ~/.claude-desktop. Run `CLAUDE_CONFIG_DIR=~/.claude-desktop claude`, then /login, once",
-               config: ExternalAgentConfig(command: "npx", args: ["-y", "@zed-industries/claude-code-acp"],
+               config: ExternalAgentConfig(command: "npx", args: ["-y", "@agentclientprotocol/claude-agent-acp"],
                                            env: ["CLAUDE_CONFIG_DIR": NSHomeDirectory() + "/.claude-desktop"])),
         Preset(name: "Codex", detail: "OpenAI's agent, through the Zed ACP adapter (needs Node)",
                config: ExternalAgentConfig(command: "npx", args: ["-y", "@zed-industries/codex-acp"])),

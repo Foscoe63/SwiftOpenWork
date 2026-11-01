@@ -75,15 +75,25 @@ public struct ExternalAgentsCard: View {
                 if !external.isEmpty {
                     Divider()
                     ForEach(external) { agent in
-                        HStack {
-                            Image(systemName: agent.avatar)
-                            Text(agent.name).font(.system(size: 12, weight: .medium))
-                            Text(agent.externalAgent?.displayLine ?? "").font(.system(size: 10.5, design: .monospaced)).foregroundColor(.secondary).lineLimit(1)
-                            Spacer()
-                            if let config = agent.externalAgent {
-                                modelPicker(for: agent, config: config)
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Image(systemName: agent.avatar)
+                                Text(agent.name).font(.system(size: 12, weight: .medium))
+                                Spacer()
+                                if let config = agent.externalAgent {
+                                    modelPicker(for: agent, config: config)
+                                }
+                                Button("Remove", role: .destructive) { appState.deleteAgent(agent) }.controlSize(.small)
                             }
-                            Button("Remove", role: .destructive) { appState.deleteAgent(agent) }.controlSize(.small)
+                            if let config = agent.externalAgent {
+                                CommandLineField(line: config.displayLine) { words in
+                                    guard let command = words.first else { return }
+                                    var updated = agent
+                                    updated.externalAgent?.command = command
+                                    updated.externalAgent?.args = Array(words.dropFirst())
+                                    appState.saveAgent(updated)
+                                }
+                            }
                         }
                     }
                 }
@@ -219,5 +229,36 @@ public struct ClaudeUsageCard: View {
         loading = true
         usages = await Task.detached { dirs.map { ClaudeCodeUsage.scan(configDir: $0) } }.value
         loading = false
+    }
+}
+
+/// An agent's launch command, editable in place so a renamed package or changed flag is a
+/// settings change, not a code change. Saved on Return or when focus leaves the field.
+private struct CommandLineField: View {
+    let line: String
+    let onCommit: ([String]) -> Void
+    @State private var text: String
+    @FocusState private var focused: Bool
+
+    init(line: String, onCommit: @escaping ([String]) -> Void) {
+        self.line = line
+        self.onCommit = onCommit
+        _text = State(initialValue: line)
+    }
+
+    private func commit() {
+        let words = text.split(separator: " ").map(String.init)
+        guard !words.isEmpty, words.joined(separator: " ") != line else { return }
+        onCommit(words)
+    }
+
+    var body: some View {
+        TextField("Command, e.g. npx -y @agentclientprotocol/claude-agent-acp", text: $text)
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 10.5, design: .monospaced))
+            .focused($focused)
+            .onSubmit(commit)
+            .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
+            .help("The command this agent is started with. Edit it if the program or package is renamed; applies to the next session.")
     }
 }

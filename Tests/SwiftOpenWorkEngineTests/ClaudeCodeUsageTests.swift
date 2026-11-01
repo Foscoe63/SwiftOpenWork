@@ -66,16 +66,16 @@ final class ClaudeCodeUsageTests: XCTestCase {
     }
 
     func testConfigDirFollowsTheAgentsEnvironment() {
-        let second = ExternalAgentConfig(command: "npx", args: ["-y", "@zed-industries/claude-code-acp"], env: ["CLAUDE_CONFIG_DIR": "/tmp/x"])
+        let second = ExternalAgentConfig(command: "npx", args: ["-y", "@agentclientprotocol/claude-agent-acp"], env: ["CLAUDE_CONFIG_DIR": "/tmp/x"])
         XCTAssertEqual(ClaudeCodeUsage.configDir(for: second), "/tmp/x")
-        let first = ExternalAgentConfig(command: "npx", args: ["-y", "@zed-industries/claude-code-acp"])
+        let first = ExternalAgentConfig(command: "npx", args: ["-y", "@agentclientprotocol/claude-agent-acp"])
         XCTAssertEqual(ClaudeCodeUsage.configDir(for: first), ClaudeCodeUsage.defaultConfigDir)
         XCTAssertNil(ClaudeCodeUsage.configDir(for: ExternalAgentConfig(command: "opencode", args: ["acp"])))
     }
 }
 
 final class ExternalAgentModelTests: XCTestCase {
-    private let claude = ExternalAgentConfig(command: "npx", args: ["-y", "@zed-industries/claude-code-acp"])
+    private let claude = ExternalAgentConfig(command: "npx", args: ["-y", "@agentclientprotocol/claude-agent-acp"])
 
     func testClaudeCodeDefaultsToSonnetAndLean() {
         XCTAssertEqual(claude.effectiveModel, "sonnet")

@@ -40,7 +40,7 @@ public struct ExternalAgentConfig: Codable, Hashable, Sendable {
 
     /// Claude Code, through the Zed adapter or its own CLI.
     public var isClaudeCode: Bool {
-        args.contains(where: { $0.contains("claude-code-acp") }) || command.hasSuffix("claude")
+        args.contains(where: { $0.contains("claude-code-acp") || $0.contains("claude-agent-acp") }) || command.hasSuffix("claude")
     }
 
     /// The model to switch to, or nil to leave the agent's own default. Claude Code defaults to
