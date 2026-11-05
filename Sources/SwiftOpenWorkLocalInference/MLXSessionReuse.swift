@@ -67,6 +67,14 @@ public enum MLXSessionReuse {
             if isGeneratedReply {
                 return incoming.role == role
             }
+            // A reply the model itself wrote that the transcript later renders empty (a turn
+            // that ended on a stop, or only on tool/ask_user calls) is the same generation, not
+            // a rewrite of settled history. Treating it as divergence re-read the whole
+            // conversation ("history diverged at message 3") and burned the turn budget.
+            if role == "assistant", incoming.role == "assistant", incoming.content.isEmpty,
+               incoming.hasAttachments == hasAttachments {
+                return true
+            }
             return incoming.role == role
                 && incoming.content == content
                 && incoming.hasAttachments == hasAttachments

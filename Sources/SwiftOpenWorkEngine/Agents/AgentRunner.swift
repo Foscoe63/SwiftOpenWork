@@ -1195,6 +1195,14 @@ var mcpPromptSummary = ""
             )
         }
 
+        // Skills the user installed once for every project (`~/.agents/skills`, `~/.claude/skills`).
+        // Not behind the workspace trust gate: they are the user's own, not the repository's.
+        if !inventoryPrompt {
+            skillsSection += ProjectSkills.globalPromptBlock(
+                ProjectSkills.loadGlobal().filter { $0.isAllowed(by: agent.allowedSkillIds) }
+            )
+        }
+
         var iteration = 0
         // Continue from the transcript the model saw last turn, so the local engine's cache
         // extends it instead of re-reading the whole conversation (see `Session.modelHistory`).
@@ -1215,6 +1223,21 @@ var mcpPromptSummary = ""
             let open = session.todos.filter { $0.status != .done }
             if !open.isEmpty {
                 note += "\nOpen todos:\n" + open.map { "- [\($0.status.rawValue)] \($0.content)" }.joined(separator: "\n")
+            }
+            if !session.pinnedFacts.isEmpty {
+                note += "\nPinned facts:\n" + session.pinnedFacts.prefix(20).map { "- \($0)" }.joined(separator: "\n")
+            }
+            // What the interrupted turn already did, so a resume does not re-explore from scratch.
+            // Each repeated step re-sends the whole context, so re-reading is the costly mistake.
+            let done = session.messages.reversed()
+                .first(where: { $0.role == .assistant && !$0.toolCalls.isEmpty })?
+                .toolCalls.suffix(30).map { call -> String in
+                    let args = call.argumentsJson.replacingOccurrences(of: "\n", with: " ")
+                    return "- \(call.toolName) \(args.prefix(100))"
+                } ?? []
+            if !done.isEmpty {
+                note += "\nAlready done in the interrupted turn (do not repeat these reads or listings; use what you already learned):\n"
+                    + done.joined(separator: "\n")
             }
             workingMessages.append(ChatMessage(sessionId: session.id, role: .user, content: note))
         }
@@ -1241,6 +1264,7 @@ var mcpPromptSummary = ""
         var finalStepText: String?
 
         var turnPromptTokens = 0
+        var lastStepPrompt = 0
         // What the composer's Sent / Recv show: reported usage, or an estimate where none came.
         var shownPromptTokens = 0
         var shownCompletionTokens = 0
@@ -1344,6 +1368,10 @@ var mcpPromptSummary = ""
                  means one expression is too complex. Break it into separate `let` values with
                  explicit types; do not restructure the code around it.
             1. Do not narrate ("I will check…" / "Let me…"). Call the tool immediately, then answer.
+               Every tool round re-sends the whole conversation, so rounds are the expensive part:
+               when several calls do not depend on each other (reading five files, listing two
+               folders, grep plus git_status), issue them all in ONE response instead of one per
+               round. Never re-read a file or re-list a folder you already have.
             2. Prefer native tool calls. Markdown fallback only if needed:
             ```tool_call
             {"tool": "file_list", "parameters": {"path": "."}}
@@ -1580,7 +1608,16 @@ var mcpPromptSummary = ""
             // This step's own usage. The message keeps the last value it was given, so when a
             // provider reported nothing for a step, adding the message's figure counted the
             // previous step again.
-            turnPromptTokens += snap.promptTokens
+            // On a local engine with a prefix cache, each step's reported prompt includes the
+            // previous steps' text, which was already in the cache and cost nothing to re-read.
+            // Only what the step added counts toward the budget, so it caps real work (new reads,
+            // new output) and not the number of rounds times the context size.
+            if CompactionSummarizer.isLocal(provider.kind), lastStepPrompt > 0, snap.promptTokens >= lastStepPrompt {
+                turnPromptTokens += snap.promptTokens - lastStepPrompt
+            } else {
+                turnPromptTokens += snap.promptTokens
+            }
+            if snap.promptTokens > 0 { lastStepPrompt = snap.promptTokens }
             turnCompletionTokens += snap.completionTokens
             // Some providers and external agents report no usage at all. The bar then shows an
             // estimate for the step (about four characters a token) rather than a flat zero.

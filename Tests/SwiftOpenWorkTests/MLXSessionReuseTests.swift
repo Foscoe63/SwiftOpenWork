@@ -294,4 +294,12 @@ extension MLXSessionReuseTests {
     func testNoDivergenceDescribesNothing() {
         XCTAssertNil(MLXSessionReuse.describeDivergence(consumed: [msg("user", "a")], incoming: [msg("user", "a"), msg("user", "b")]))
     }
+
+    func testAReplyTheTranscriptLaterRendersEmptyDoesNotDivergeTheCache() {
+        let consumed = [msg("user", "a"), msg("assistant", "I'd be happy to help"), msg("user", "b")]
+        let incoming = [msg("user", "a"), msg("assistant", ""), msg("user", "b"), msg("user", "c")]
+        let decision = MLXSessionReuse.decide(cachedKey: key(), cachedConsumed: consumed, incomingKey: key(), incoming: incoming)
+        if case .advance = decision { return }
+        XCTFail("a blanked assistant rendering rebuilt the cache: \(decision)")
+    }
 }
