@@ -191,4 +191,10 @@ final class LegacyAgentAllowlistTests: XCTestCase {
     func testANewAgentCanUseEverythingByDefault() {
         XCTAssertTrue(Agent(name: "New").allowedToolIds.isEmpty)
     }
+
+    func testASuccessfulEditEndsTheRepeatCount() {
+        XCTAssertTrue(SubAgentExecutor.edit(resetsRepeatCountsFor: "edit_file", succeeded: true))
+        XCTAssertFalse(SubAgentExecutor.edit(resetsRepeatCountsFor: "edit_file", succeeded: false))
+        XCTAssertFalse(SubAgentExecutor.edit(resetsRepeatCountsFor: "build_project", succeeded: true))
+    }
 }
