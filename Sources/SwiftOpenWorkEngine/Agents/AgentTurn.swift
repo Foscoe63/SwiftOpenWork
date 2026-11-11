@@ -662,7 +662,13 @@ mcpPromptSummary = ""
             """
         }
         // What changes between turns goes after the cache boundary.
-        let volatilePrompt = [workspaceSnapshot.map { WorkspaceContext.gitLine($0) } ?? "", handoffSection]
+        // Saved facts change between turns (and mid-session), so they sit after the cache boundary.
+        let memorySection = (inventoryPrompt || groupToolless) ? "" : MemoryPrompt.promptBlock(
+            items: MemoryPrompt.relevant(PersistenceManager.shared.loadMemories(), workspaceId: workspace.id),
+            projectFile: ProjectTrust.mayLoad(workspaceRoot: workspace.folderPath)
+                ? MemoryPrompt.projectFile(workspaceRoot: workspace.folderPath) : nil
+        )
+        let volatilePrompt = [workspaceSnapshot.map { WorkspaceContext.gitLine($0) } ?? "", memorySection, handoffSection]
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .joined(separator: "\n")
         systemPromptWithTools = PromptCache.join(stable: stablePrompt, volatile: volatilePrompt)

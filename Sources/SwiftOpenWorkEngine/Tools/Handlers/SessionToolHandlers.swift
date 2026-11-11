@@ -115,9 +115,19 @@ extension ToolExecutionEngine {
             category: .fact,
             tags: [currentAgent.name]
         )
-        var mems = PersistenceManager.shared.loadMemories()
-        mems.insert(item, at: 0)
-        PersistenceManager.shared.saveMemories(mems)
+        if (dict["scope"] as? String)?.lowercased() == "project" {
+            guard !content.isEmpty,
+                  MemoryPrompt.appendToProjectFile(key: key, content: content, workspaceRoot: workspace.folderPath) else {
+                return ToolExecutionResult(success: false, output: "", error: "Could not write \(MemoryPrompt.projectFileRelativePath).",
+                                           durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+            }
+            return ToolExecutionResult(
+                success: true,
+                output: "Saved [\(key)] to \(MemoryPrompt.projectFileRelativePath); every agent working in this project will see it.",
+                durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            )
+        }
+        PersistenceManager.shared.saveMemories(MemoryPrompt.upserting(item, into: PersistenceManager.shared.loadMemories()))
         return ToolExecutionResult(
             success: true,
             output: "Stored fact to long-term memory with key: [\(key)]",

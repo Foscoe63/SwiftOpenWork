@@ -486,7 +486,7 @@ public enum ToolSchemaCatalog {
         "mlx_vision_describe": #"{"type":"object","properties":{"path":{"type":"string"},"prompt":{"type":"string"}},"required":["path"]}"#,
         "image_analyze": #"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
         "agent_message": #"{"type":"object","properties":{"to_agent_id":{"type":"string","description":"The recipient's id or name. A running agent gets it at its next step; one not running gets it if spawned later in this chat."},"content":{"type":"string","description":"The message: a question, a decision, or something it needs to know."}},"required":["to_agent_id","content"]}"#,
-        "memory_store": #"{"type":"object","properties":{"key":{"type":"string"},"content":{"type":"string"},"category":{"type":"string"}},"required":["content"]}"#,
+        "memory_store": #"{"type":"object","properties":{"key":{"type":"string","description":"Short name; saving the same key again replaces it"},"content":{"type":"string","description":"The durable fact: a decision and why, a convention, a user correction, how to build or test"},"category":{"type":"string"},"scope":{"type":"string","description":"\"project\" writes .swiftopenwork/memory.md in the repository for every contributor; omit for private memory"}},"required":["content"]}"#,
         "memory_recall": #"{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}"#,
         "gmail_list": #"{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer"}},"required":[]}"#,
         "gmail_search": #"{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer"}},"required":["query"]}"#,
