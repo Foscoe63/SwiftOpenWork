@@ -671,7 +671,7 @@ public struct AgentEditModalView: View {
                              : "Only the skills ticked below are shown to this agent.")
                             .font(.system(size: 10.5))
                             .foregroundColor(.secondary)
-                        ForEach(appState.skills) { skill in
+                        ForEach(appState.skills + ProjectSkills.loadGlobal()) { skill in
                             Toggle(skill.name, isOn: Binding(
                                 get: { skill.isAllowed(by: draft.allowedSkillIds) && !(draft.allowedSkillIds ?? []).isEmpty },
                                 set: { on in

@@ -7,6 +7,8 @@ public enum SkillSource: String, Codable, CaseIterable, Sendable {
     case manual = "manual"
     /// Read from `.swiftopenwork/skills/` in the workspace, not from `skills.json`.
     case project = "project"
+    /// Read from `~/.agents/skills` or `~/.claude/skills`, installed once for every workspace.
+    case global = "global"
 
     public var displayName: String {
         switch self {
@@ -15,6 +17,7 @@ public enum SkillSource: String, Codable, CaseIterable, Sendable {
         case .urlImport: return "URL Import"
         case .manual: return "Custom"
         case .project: return "Project"
+        case .global: return "Installed"
         }
     }
 
@@ -25,6 +28,7 @@ public enum SkillSource: String, Codable, CaseIterable, Sendable {
         case .urlImport: return "globe"
         case .manual: return "pencil.and.outline"
         case .project: return "folder.badge.gearshape"
+        case .global: return "square.stack.3d.up"
         }
     }
 }

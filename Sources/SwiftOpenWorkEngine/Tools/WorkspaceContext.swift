@@ -21,11 +21,14 @@ public enum WorkspaceContext {
         /// Paths reported by `git status --porcelain`, already trimmed to a useful count.
         public var gitChanges: [String]
         public var gitChangeCount: Int
+        /// Build and test commands found in the project's own files; see `detectBuildCommands`.
+        public var buildCommands: [String] = []
 
         public static func == (a: Snapshot, b: Snapshot) -> Bool {
             a.path == b.path && a.projectKinds == b.projectKinds && a.topLevel == b.topLevel
                 && a.nested.map { [$0.folder] + $0.entries } == b.nested.map { [$0.folder] + $0.entries }
                 && a.gitBranch == b.gitBranch && a.gitChanges == b.gitChanges && a.gitChangeCount == b.gitChangeCount
+                && a.buildCommands == b.buildCommands
         }
 
         public init(
@@ -80,6 +83,70 @@ public enum WorkspaceContext {
             }
         }
         return kinds
+    }
+
+    /// How to build and test, read from the project's own files, so the agent does not try
+    /// `cargo test`, `vitest`, `bun test` and `npm test` in turn to find out which one works.
+    /// Looks in the folder and two levels of subfolders (`desktop/src-tauri/Cargo.toml`).
+    public static func detectBuildCommands(
+        at path: String,
+        fileManager: FileManager = .default,
+        limit: Int = 8
+    ) -> [String] {
+        let skipped: Set<String> = ["node_modules", "target", "build", "dist", "DerivedData", "Pods", "vendor", "docs"]
+        var folders: [(relative: String, full: String)] = [("", path)]
+        var index = 0
+        while index < folders.count, folders.count < 40 {
+            let current = folders[index]
+            index += 1
+            guard current.relative.split(separator: "/").count < 2,
+                  let entries = try? fileManager.contentsOfDirectory(atPath: current.full) else { continue }
+            for name in entries.sorted() where !name.hasPrefix(".") && !skipped.contains(name) {
+                let full = (current.full as NSString).appendingPathComponent(name)
+                var isDir: ObjCBool = false
+                if fileManager.fileExists(atPath: full, isDirectory: &isDir), isDir.boolValue, !name.hasSuffix(".xcodeproj") {
+                    folders.append((current.relative.isEmpty ? name : current.relative + "/" + name, full))
+                }
+            }
+        }
+
+        var commands: [String] = []
+        func add(_ command: String, in relative: String) {
+            commands.append(relative.isEmpty ? "`\(command)`" : "`cd \(relative) && \(command)`")
+        }
+        func exists(_ name: String, in folder: String) -> Bool {
+            fileManager.fileExists(atPath: (folder as NSString).appendingPathComponent(name))
+        }
+        func read(_ name: String, in folder: String) -> String? {
+            try? String(contentsOfFile: (folder as NSString).appendingPathComponent(name), encoding: .utf8)
+        }
+
+        for (relative, folder) in folders {
+            if let data = read("package.json", in: folder)?.data(using: .utf8),
+               let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+               let scripts = object["scripts"] as? [String: Any] {
+                // The lockfile names the package manager the project actually uses.
+                let runner = exists("bun.lock", in: folder) || exists("bun.lockb", in: folder) ? "bun"
+                    : exists("pnpm-lock.yaml", in: folder) ? "pnpm"
+                    : exists("yarn.lock", in: folder) ? "yarn" : "npm"
+                for key in ["test", "typecheck", "build", "lint"] {
+                    guard let body = scripts[key] as? String else { continue }
+                    add("\(runner) run \(key)  # \(body.prefix(60))", in: relative)
+                }
+            }
+            if exists("Cargo.toml", in: folder) { add("cargo test", in: relative) }
+            if exists("go.mod", in: folder) { add("go test ./...", in: relative) }
+            if exists("Package.swift", in: folder) {
+                add(exists("swift.sh", in: (folder as NSString).appendingPathComponent("Scripts"))
+                    ? "Scripts/swift.sh test" : "swift test", in: relative)
+            }
+            if read("Makefile", in: folder)?.contains("\ntest:") == true || read("Makefile", in: folder)?.hasPrefix("test:") == true {
+                add("make test", in: relative)
+            }
+            if read("pyproject.toml", in: folder)?.contains("pytest") == true { add("pytest", in: relative) }
+            if commands.count >= limit { break }
+        }
+        return Array(commands.prefix(limit))
     }
 
     public static func topLevelEntries(
@@ -143,6 +210,10 @@ public enum WorkspaceContext {
         if !snapshot.projectKinds.isEmpty {
             lines.append("Project: \(snapshot.projectKinds.joined(separator: ", "))")
         }
+        if !snapshot.buildCommands.isEmpty {
+            lines.append("Build/test commands found in the project (use these; do not try other runners to find out): "
+                + snapshot.buildCommands.joined(separator: "; "))
+        }
         if includeGit, let branch = snapshot.gitBranch {
             if snapshot.gitChangeCount == 0 {
                 lines.append("Git: on `\(branch)`, working tree clean")
@@ -181,7 +252,7 @@ public enum WorkspaceContext {
         }
         let facts = git(folderPath)
         let topLevel = topLevelEntries(at: folderPath, fileManager: fileManager)
-        return Snapshot(
+        var snapshot = Snapshot(
             path: folderPath,
             projectKinds: detectProjectKinds(at: folderPath, fileManager: fileManager),
             topLevel: topLevel,
@@ -190,6 +261,8 @@ public enum WorkspaceContext {
             gitChanges: facts.changes,
             gitChangeCount: facts.total
         )
+        snapshot.buildCommands = detectBuildCommands(at: folderPath, fileManager: fileManager)
+        return snapshot
     }
 
     /// Branch and dirty-file summary, or nils when this is not a git repository.

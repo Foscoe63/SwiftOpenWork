@@ -78,10 +78,7 @@ final class NoDeadFeaturesTests: XCTestCase {
     /// A declared tool with no `case` reaches the model as a callable function and comes back
     /// "unknown tool" — the model then retries it, because nothing said the attempt was hopeless.
     func testEverySeededToolIsImplemented() throws {
-        let engine = try String(
-            contentsOf: SourceTree.url("Engine/Tools/ToolExecutionEngine.swift"),
-            encoding: .utf8
-        )
+        let engine = try SourceTree.toolEngineSource()
         let declarations = try String(
             contentsOf: SourceTree.url("Storage/PersistenceManager.swift"),
             encoding: .utf8

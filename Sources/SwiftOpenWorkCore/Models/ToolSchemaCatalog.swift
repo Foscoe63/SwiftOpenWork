@@ -441,7 +441,7 @@ public enum ToolSchemaCatalog {
         "preview_logs": #"{"type":"object","properties":{"lines":{"type":"integer","description":"Server log lines to return, default 80."},"clear_console":{"type":"boolean","description":"Clear the browser console after reading it."}}}"#,
         "preview_stop": #"{"type":"object","properties":{}}"#,
 
-        "file_read": #"{"type":"object","properties":{"path":{"type":"string","description":"File path"},"offset":{"type":"integer","description":"First line (1-indexed, optional)"},"limit":{"type":"integer","description":"Max lines (optional)"}},"required":["path"]}"#,
+        "file_read": #"{"type":"object","properties":{"path":{"type":"string","description":"File path"},"offset":{"type":"integer","description":"First line (1-indexed, optional)"},"limit":{"type":"integer","description":"Max lines (optional). Reads return at least 200 lines when the file has them, so ask for the whole region you need in one call"},"ranges":{"type":"array","items":{"type":"string"},"description":"Several windows of this file in one call, e.g. [\"10-60\",\"200-260\"]"}},"required":["path"]}"#,
         "read_file": #"{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["path"]}"#,
         "file_write": #"{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string","description":"Full file content"}},"required":["path","content"]}"#,
         "write_file": #"{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}"#,
@@ -486,7 +486,7 @@ public enum ToolSchemaCatalog {
         "mlx_vision_describe": #"{"type":"object","properties":{"path":{"type":"string"},"prompt":{"type":"string"}},"required":["path"]}"#,
         "image_analyze": #"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
         "agent_message": #"{"type":"object","properties":{"to_agent_id":{"type":"string","description":"The recipient's id or name. A running agent gets it at its next step; one not running gets it if spawned later in this chat."},"content":{"type":"string","description":"The message: a question, a decision, or something it needs to know."}},"required":["to_agent_id","content"]}"#,
-        "memory_store": #"{"type":"object","properties":{"key":{"type":"string"},"content":{"type":"string"},"category":{"type":"string"}},"required":["content"]}"#,
+        "memory_store": #"{"type":"object","properties":{"key":{"type":"string","description":"Short name; saving the same key again replaces it"},"content":{"type":"string","description":"The durable fact: a decision and why, a convention, a user correction, how to build or test"},"category":{"type":"string"},"scope":{"type":"string","description":"\"project\" writes .swiftopenwork/memory.md in the repository for every contributor; omit for private memory"}},"required":["content"]}"#,
         "memory_recall": #"{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}"#,
         "gmail_list": #"{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer"}},"required":[]}"#,
         "gmail_search": #"{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer"}},"required":["query"]}"#,

@@ -192,7 +192,11 @@ public enum AgentRoleProfiles {
 
     /// Which skills each agent is shown (`Agent.allowedSkillIds`). Skills used to go to every agent.
     /// `project:<folder>` names a skill in the repository's `.swiftopenwork/skills/`.
-    public static let skillsByAgentId: [String: [String]] = [
+    public static let skillsByAgentId: [String: [String]] = baseSkillsByAgentId.reduce(into: [:]) { result, entry in
+        result[entry.key] = entry.value + (globalSkillsByAgentId[entry.key] ?? [])
+    }
+
+    static let baseSkillsByAgentId: [String: [String]] = [
         "lead-assistant": ["task-delegation-skill", "git-expert-skill", "project:build-and-test"],
         "coder-agent": ["swift-conventions-skill", "git-expert-skill", "project:build-and-test"],
         "research-agent": ["source-evaluation-skill"],
@@ -218,6 +222,79 @@ public enum AgentRoleProfiles {
         "operations-pm-agent": ["project-planning-skill", "task-delegation-skill"],
         "comms-organizer-agent": ["comms-briefing-skill"],
     ]
+
+    /// Skills installed for the user in `~/.agents/skills` (BAMA, "Build Any Mac App", and the
+    /// engineering-workflow skills beside it), per agent. Skills for other tools (Orca, ai-memory,
+    /// the Understand graph, skill authoring) are left off every agent: they need tools this app lacks.
+    /// `global:<folder>` names a skill by its folder, as `ProjectSkills.loadGlobal` ids it.
+    ///
+    /// Only the agents whose work the skill is for get it: an agent that never builds, designs or
+    /// plans a Mac app would only carry the descriptions in its prompt. Agents not listed here
+    /// (sales, finance, education, data, the Cowork agents) get none.
+    public static let globalSkillsByAgentId: [String: [String]] = [
+        // Orchestrates; `bama` is the router that picks the next skill, the rest are for workers.
+        "lead-assistant": [
+            "global:bama", "global:planning-and-task-breakdown", "global:spec-driven-development",
+            "global:interview-me",
+        ],
+        "coder-agent": [
+            "global:swift-swiftui", "global:build-and-verify", "global:test-mac-app", "global:performance",
+            "global:os-integrations", "global:layout-grid", "global:new-mac-app",
+            "global:debugging-and-error-recovery", "global:incremental-implementation",
+            "global:test-driven-development", "global:swift-testing-pro", "global:swiftui-pro",
+            "global:code-simplification",
+        ],
+        "research-agent": ["global:research", "global:source-driven-development"],
+        "reviewer-agent": [
+            "global:swift-swiftui", "global:test-mac-app", "global:improve-architecture",
+            "global:mac-design", "global:layout-grid", "global:performance",
+            "global:code-review-and-quality", "global:swiftui-pro", "global:swift-testing-pro",
+            "global:code-simplification", "global:doubt-driven-development",
+        ],
+        "architect-agent": [
+            "global:improve-architecture", "global:app-brief", "global:user-stories",
+            "global:os-integrations", "global:swift-swiftui", "global:api-and-interface-design",
+            "global:documentation-and-adrs", "global:spec-driven-development",
+            "global:deprecation-and-migration", "global:planning-and-task-breakdown",
+        ],
+        "explainer-agent": ["global:swift-swiftui"],
+        "security-agent": ["global:os-integrations", "global:security-and-hardening"],
+        "design-agent": [
+            "global:mac-design", "global:design-system", "global:design-kit", "global:design-from-app",
+            "global:layout-grid", "global:app-icon", "global:ux-design", "global:swiftui-design-principles",
+        ],
+        "devops-agent": [
+            "global:build-and-verify", "global:test-mac-app", "global:ci-cd-and-automation",
+            "global:shipping-and-launch", "global:observability-and-instrumentation",
+            "global:git-workflow-and-versioning",
+        ],
+        "docs-agent": [
+            "global:app-brief", "global:user-stories", "global:documentation-and-adrs",
+            "global:source-driven-development",
+        ],
+        "operations-pm-agent": [
+            "global:user-stories", "global:app-brief", "global:planning-and-task-breakdown",
+        ],
+    ]
+
+    /// Adds each built-in agent's `globalSkillsByAgentId` entries to an allowlist it already has.
+    /// An agent with an empty allowlist already sees everything, so it is left alone. Returns true
+    /// when anything changed.
+    @discardableResult
+    public static func addGlobalSkills(to agents: inout [Agent]) -> Bool {
+        var changed = false
+        for i in agents.indices where agents[i].isBuiltIn {
+            guard let wanted = globalSkillsByAgentId[agents[i].id],
+                  var skills = agents[i].allowedSkillIds, !skills.isEmpty else { continue }
+            let missing = wanted.filter { !skills.contains($0) }
+            guard !missing.isEmpty else { continue }
+            skills.append(contentsOf: missing)
+            agents[i].allowedSkillIds = skills
+            agents[i].updatedAt = Date()
+            changed = true
+        }
+        return changed
+    }
 
     /// Names a mix-up left on the wrong agent, and what the seed calls them.
     static let swappedNames: [String: (wrong: String, right: String)] = [

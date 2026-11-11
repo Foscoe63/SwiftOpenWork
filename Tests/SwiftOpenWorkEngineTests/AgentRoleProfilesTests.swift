@@ -61,7 +61,7 @@ final class AgentRoleProfilesTests: XCTestCase {
         for id in ids where id != "lead-assistant" {
             let skills = AgentRoleProfiles.skillsByAgentId[id] ?? []
             XCTAssertFalse(skills.isEmpty, "\(id) has no skill profile")
-            for skill in skills where !skill.hasPrefix("project:") {
+            for skill in skills where !skill.hasPrefix("project:") && !skill.hasPrefix("global:") {
                 XCTAssertTrue(known.contains(skill), "\(id) lists unknown skill \(skill)")
             }
             XCTAssertTrue(toolSets.insert(AgentRoleProfiles.toolsByAgentId[id] ?? []).inserted, "\(id) shares its tool list")
@@ -164,5 +164,59 @@ final class AgentRoleProfilesTests: XCTestCase {
         for skill in AgentRoleProfiles.newAgentSkills {
             XCTAssertTrue(skills.contains(skill), "baseline lists unknown skill \(skill)")
         }
+    }
+
+    // MARK: - Installed (global) skills
+
+    /// BAMA's 21 skills plus the workflow skills beside them. A role entry naming anything else would never load.
+    private let bamaSkills: Set<String> = [
+        "agent-cli", "app-brief", "app-icon", "bama", "build-and-verify", "clone", "design-from-app",
+        "design-kit", "design-system", "improve-architecture", "improve-loop", "layout-grid", "mac-design",
+        "new-mac-app", "os-integrations", "performance", "research", "swift-swiftui", "test-mac-app",
+        "user-stories", "ux-design",
+        // Engineering-workflow skills installed beside them.
+        "planning-and-task-breakdown", "spec-driven-development", "interview-me",
+        "debugging-and-error-recovery", "incremental-implementation", "test-driven-development",
+        "swift-testing-pro", "swiftui-pro", "code-simplification", "source-driven-development",
+        "code-review-and-quality", "doubt-driven-development", "api-and-interface-design",
+        "documentation-and-adrs", "deprecation-and-migration", "security-and-hardening",
+        "swiftui-design-principles", "ci-cd-and-automation", "shipping-and-launch",
+        "observability-and-instrumentation", "git-workflow-and-versioning",
+    ]
+
+    func testEveryGlobalSkillEntryNamesARealInstalledSkill() {
+        let builtInIds = Set(PersistenceManager.shared.defaultAgents.map(\.id) + RadiantBuiltInAgents.agents.map(\.id))
+        for (agentId, entries) in AgentRoleProfiles.globalSkillsByAgentId {
+            XCTAssertTrue(builtInIds.contains(agentId) || agentId.hasSuffix("-agent"), "unknown agent \(agentId)")
+            XCTAssertEqual(Set(entries).count, entries.count, "\(agentId) lists a skill twice")
+            for entry in entries {
+                XCTAssertTrue(entry.hasPrefix("global:"), entry)
+                XCTAssertTrue(bamaSkills.contains(String(entry.dropFirst("global:".count))), "\(agentId): \(entry)")
+            }
+            XCTAssertTrue(
+                (AgentRoleProfiles.skillsByAgentId[agentId] ?? []).contains(entries[0]),
+                "\(agentId) profile misses its global skills"
+            )
+        }
+    }
+
+    func testAddGlobalSkillsExtendsAnExistingAllowlistOnceAndSparesTheRest() {
+        var coder = Agent(name: "Coder", allowedToolIds: ["grep"], allowedSkillIds: ["swift-conventions-skill"], isBuiltIn: true)
+        coder.id = "coder-agent"
+        var everything = Agent(name: "Reviewer", allowedToolIds: ["grep"], allowedSkillIds: [], isBuiltIn: true)
+        everything.id = "reviewer-agent"
+        var sales = Agent(name: "Sales", allowedToolIds: ["grep"], allowedSkillIds: ["sales-outreach-skill"], isBuiltIn: true)
+        sales.id = "sales-agent"
+        var custom = Agent(name: "Mine", allowedToolIds: ["grep"], allowedSkillIds: ["teaching-skill"])
+        custom.id = "coder-agent"
+
+        var agents = [coder, everything, sales, custom]
+        XCTAssertTrue(AgentRoleProfiles.addGlobalSkills(to: &agents))
+        XCTAssertTrue(agents[0].allowedSkillIds?.contains("global:swift-swiftui") == true)
+        XCTAssertTrue(agents[0].allowedSkillIds?.contains("swift-conventions-skill") == true, "keeps what it had")
+        XCTAssertEqual(agents[1].allowedSkillIds, [], "an empty list already means everything")
+        XCTAssertEqual(agents[2].allowedSkillIds, ["sales-outreach-skill"], "sales has no installed skills")
+        XCTAssertEqual(agents[3].allowedSkillIds, ["teaching-skill"], "user-made agents are not touched")
+        XCTAssertFalse(AgentRoleProfiles.addGlobalSkills(to: &agents), "second pass changes nothing")
     }
 }

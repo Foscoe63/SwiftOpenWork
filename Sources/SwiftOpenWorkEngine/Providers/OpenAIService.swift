@@ -29,7 +29,13 @@ public final class OpenAIService: LLMProviderClient, Sendable {
         request.timeoutInterval = 8
         let (_, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse {
-            return http.statusCode == 200 || http.statusCode == 401 || http.statusCode == 403
+            if http.statusCode == 200 { return true }
+            // 401/403 mean something answered, so the host is reachable; say when the key is the problem.
+            if http.statusCode == 401 || http.statusCode == 403 {
+                if provider.apiKey.isEmpty { return true }
+                throw NSError(domain: "OpenAIService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "The server rejected the API key (HTTP \(http.statusCode))"])
+            }
+            throw NSError(domain: "OpenAIService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "\(endpoint) answered HTTP \(http.statusCode)"])
         }
         return false
     }

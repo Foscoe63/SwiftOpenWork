@@ -273,10 +273,7 @@ final class NewlyWiredSettingsTests: XCTestCase {
     /// callback is what writes `AppState.interAgentMessages` — the store the Agent Messages
     /// inspector renders. A message built and not passed there is one the user never sees.
     func testEveryAgentMessageIsForwardedToTheInspector() throws {
-        let runner = try String(
-            contentsOf: SourceTree.url("Engine/Agents/AgentRunner.swift"),
-            encoding: .utf8
-        )
+        let runner = try SourceTree.agentLoopSource()
         // Delegation now happens through `agent_spawn`; both halves of the exchange — the task
         // handed over and the report that came back — are built where its result is read.
         let forwardedInline = runner.components(separatedBy: "onInterAgentMessage(AgentMessage(").count - 1

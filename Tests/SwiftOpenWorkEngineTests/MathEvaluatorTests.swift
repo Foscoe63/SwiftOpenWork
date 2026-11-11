@@ -41,7 +41,7 @@ final class MathEvaluatorTests: XCTestCase {
     }
 
     func testCalculatorNoLongerUsesNSExpression() throws {
-        let source = try String(contentsOf: SourceTree.url("Engine/Tools/ToolExecutionEngine.swift"), encoding: .utf8)
+        let source = try SourceTree.toolEngineSource()
         XCTAssertFalse(source.contains("NSExpression("))
     }
 }

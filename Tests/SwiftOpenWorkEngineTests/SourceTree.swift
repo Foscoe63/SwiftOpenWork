@@ -33,4 +33,31 @@ enum SourceTree {
     static func read(_ path: String) throws -> String {
         try String(contentsOf: url(path), encoding: .utf8)
     }
+
+    /// Several files as one text, for a check on code that is spread over more than one file.
+    static func read(_ paths: [String]) throws -> String {
+        try paths.map(read).joined(separator: "\n")
+    }
+
+    /// The tool engine with its built-in tools: `ToolExecutionEngine.swift`, the registry, and
+    /// every handler file under `Tools/Handlers/`.
+    static func toolEngineSource() throws -> String {
+        let handlers = swiftFiles
+            .filter { $0.deletingLastPathComponent().lastPathComponent == "Handlers" }
+            .map(\.lastPathComponent)
+            .sorted()
+        return try read(["ToolExecutionEngine.swift", "ToolHandlerRegistry.swift"] + handlers)
+    }
+
+    /// The agent loop: `AgentRunner.swift` and the turn it runs, `AgentTurn.swift`.
+    static func agentLoopSource() throws -> String {
+        try read(["AgentRunner.swift", "AgentTurn.swift"])
+    }
+
+    /// The Settings window: `SettingsView.swift` and the `SettingsView+<Section>.swift` files its
+    /// pages live in.
+    static func settingsViewSource() throws -> String {
+        let sections = swiftFiles.map(\.lastPathComponent).filter { $0.hasPrefix("SettingsView+") }.sorted()
+        return try read(["SettingsView.swift"] + sections)
+    }
 }

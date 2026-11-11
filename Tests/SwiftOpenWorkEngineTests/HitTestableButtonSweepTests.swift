@@ -47,7 +47,8 @@ final class HitTestableButtonSweepTests: XCTestCase {
 
         for case let url as URL in walker where url.pathExtension == "swift" {
             let name = url.lastPathComponent
-            if Self.exemptFiles.contains(name) { continue }
+            // SettingsView's pages live in `SettingsView+<Section>.swift`; the exemption covers them too.
+            if Self.exemptFiles.contains(name) || name.hasPrefix("SettingsView+") { continue }
             let lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n", omittingEmptySubsequences: false)
 
             for (index, line) in lines.enumerated() where line.contains("buttonStyle(.plain)") {

@@ -14,10 +14,19 @@ public final class OllamaService: LLMProviderClient, Sendable {
         self.session = URLSession(configuration: config)
     }
 
+    /// Ollama has no key of its own, but a proxy or remote host in front of it may want a bearer token.
+    private static func authorize(_ request: inout URLRequest, for provider: ModelProvider) async {
+        let hydrated = await ProviderCredentials.hydrated(provider)
+        if !hydrated.apiKey.isEmpty {
+            request.setValue("Bearer \(hydrated.apiKey)", forHTTPHeaderField: "Authorization")
+        }
+    }
+
     public func testConnection(provider: ModelProvider) async throws -> Bool {
         let url = URL(string: "\(provider.baseUrl)/api/tags")!
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
+        await Self.authorize(&request, for: provider)
         request.timeoutInterval = 5
         let (_, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse {
@@ -30,6 +39,7 @@ public final class OllamaService: LLMProviderClient, Sendable {
         guard let url = URL(string: "\(provider.baseUrl)/api/tags") else { return [] }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
+        await Self.authorize(&request, for: provider)
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return [] }
         
@@ -64,6 +74,7 @@ public final class OllamaService: LLMProviderClient, Sendable {
         guard let url = URL(string: "\(provider.baseUrl)/api/pull") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        await Self.authorize(&request, for: provider)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body: [String: Any] = ["name": modelName, "stream": true]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -102,6 +113,7 @@ public final class OllamaService: LLMProviderClient, Sendable {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        await Self.authorize(&request, for: provider)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         var formattedMessages: [[String: Any]] = []

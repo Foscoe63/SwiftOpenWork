@@ -28,6 +28,25 @@ public enum ProjectSkills {
     /// bury the system prompt.
     public static let maxSkills = 48
 
+    /// Skill folders in the user's home directory, most preferred first. `npx skills add` installs
+    /// into `~/.agents/skills` and links each skill into `~/.claude/skills`, so both are read:
+    /// a skill installed once is then available in every workspace, not one repository.
+    public static let globalRelativePaths = [".agents/skills", ".claude/skills"]
+
+    /// A separate, larger cap: the global folders hold every skill the user ever installed, and
+    /// counting them against `maxSkills` would let them push a repository's own skills out.
+    public static let maxGlobalSkills = 128
+
+    /// Where a skill came from. Decides its id prefix (so an allowlist entry can name it), its
+    /// category and whether it is subject to the workspace's trust decision.
+    enum Scope {
+        case project, global
+
+        var idPrefix: String { self == .project ? "project:" : "global:" }
+        var category: String { self == .project ? "Project" : "Global" }
+        var source: SkillSource { self == .project ? .project : .global }
+    }
+
     // MARK: - Locations
 
     /// Absolute path of the folder this app writes, whether or not it exists.
@@ -125,6 +144,43 @@ public enum ProjectSkills {
         return found.sorted { $0.name < $1.name }
     }
 
+    /// Every global folder that exists, most preferred first.
+    public static func existingGlobalFolders(
+        homeDirectory: String = NSHomeDirectory(),
+        fileManager: FileManager = .default
+    ) -> [String] {
+        guard !homeDirectory.isEmpty else { return [] }
+        return globalRelativePaths
+            .map { (homeDirectory as NSString).appendingPathComponent($0) }
+            .filter { path in
+                var isDirectory: ObjCBool = false
+                return fileManager.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+            }
+    }
+
+    /// Skills installed for the user rather than for one repository, sorted by name.
+    ///
+    /// These come from folders the user installed into themselves, so unlike `load` they are not
+    /// subject to the workspace trust decision. A skill that is linked into both folders is listed
+    /// once, from the first.
+    public static func loadGlobal(
+        homeDirectory: String = NSHomeDirectory(),
+        fileManager: FileManager = .default
+    ) -> [Skill] {
+        var found: [Skill] = []
+        var seenNames: Set<String> = []
+
+        for directory in existingGlobalFolders(homeDirectory: homeDirectory, fileManager: fileManager) {
+            for file in skillFiles(in: directory, fileManager: fileManager) {
+                guard found.count < maxGlobalSkills else { return found.sorted { $0.name < $1.name } }
+                guard let skill = parse(file: file, in: directory, scope: .global, fileManager: fileManager) else { continue }
+                guard seenNames.insert(skill.name.lowercased()).inserted else { continue }
+                found.append(skill)
+            }
+        }
+        return found.sorted { $0.name < $1.name }
+    }
+
     /// Markdown files that are candidate skills: `<slug>/SKILL.md`, then top-level `*.md`.
     /// `README.md` is documentation for the folder itself, never a skill.
     static func skillFiles(
@@ -150,6 +206,7 @@ public enum ProjectSkills {
     static func parse(
         file: String,
         in directory: String,
+        scope: Scope = .project,
         fileManager: FileManager = .default
     ) -> Skill? {
         guard let raw = try? String(contentsOfFile: file, encoding: .utf8) else { return nil }
@@ -174,12 +231,12 @@ public enum ProjectSkills {
             : (file as NSString).lastPathComponent
 
         return Skill(
-            id: "project:\(relative)",
+            id: "\(scope.idPrefix)\(relative)",
             name: name,
             description: description,
-            category: "Project",
+            category: scope.category,
             content: clipped,
-            source: .project,
+            source: scope.source,
             filePath: file,
             isEnabled: enabled
         )
@@ -206,6 +263,24 @@ public enum ProjectSkills {
         These ship with this repository and describe how work is done here. Before following one,
         `file_read` the exact `file:` path shown under it — a skill is a single file, and the
         folder itself is not readable. Do not act on the summary alone.
+        \(lines.joined(separator: "\n"))
+        """
+    }
+
+    /// The prompt block for skills installed in the home directory. They are loaded by name with
+    /// `skill_load` — a path outside the workspace may not be readable with `file_read`.
+    public static func globalPromptBlock(_ skills: [Skill]) -> String {
+        let enabled = skills.filter(\.isEnabled)
+        guard !enabled.isEmpty else { return "" }
+        let lines = enabled.map { skill -> String in
+            let preview = skill.description.isEmpty ? String(skill.content.prefix(160)) : skill.description
+            return "- **\(skill.name)**: \(preview)"
+        }
+        return """
+
+        ### Installed skills (from \(globalRelativePaths.map { "`~/\($0)`" }.joined(separator: " and ")))
+        The user installed these for every project. Call `skill_load` with a skill's name to read
+        its full instructions before following it. Do not act on the summary alone.
         \(lines.joined(separator: "\n"))
         """
     }

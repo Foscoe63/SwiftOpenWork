@@ -303,6 +303,16 @@ public final class PersistenceManager: Sendable {
                 ]
             ),
             ModelProvider(
+                id: "omlx-server",
+                name: "oMLX (Server)",
+                type: .local,
+                kind: .custom,
+                baseUrl: "http://127.0.0.1:8000/v1",
+                apiKey: "",
+                isEnabled: false,
+                models: []
+            ),
+            ModelProvider(
                 id: "vmlx-local",
                 name: "vMLX (Vision & Multi-Modal)",
                 type: .local,
@@ -450,6 +460,14 @@ public final class PersistenceManager: Sendable {
             loaded.append(splash)
             modified = true
         }
+        // The oMLX server entry, for the same reason: `.omlx` is the built-in engine, so a real
+        // oMLX server needs its own OpenAI-compatible provider.
+        let omlxServerSeedId = "omlx-server"
+        if !loaded.contains(where: { $0.id == omlxServerSeedId }),
+           let omlxServer = defaultProviders.first(where: { $0.id == omlxServerSeedId }) {
+            loaded.append(omlxServer)
+            modified = true
+        }
         if modified {
             saveProviders(loaded)
         }
@@ -474,6 +492,12 @@ public final class PersistenceManager: Sendable {
         for i in sanitized.indices {
             let key = sanitized[i].apiKey
             guard !key.isEmpty else { continue }
+            // Already stored by an earlier save: skip the Keychain write. Every provider's key was
+            // rewritten on every save, which made typing in a settings field stall the main thread.
+            if ProviderCredentials.cachedKey(for: sanitized[i].id) == key {
+                sanitized[i].apiKey = ""
+                continue
+            }
             if KeychainManager.shared.saveSecret(key, forKey: "provider_key_\(sanitized[i].id)") {
                 sanitized[i].apiKey = ""
                 ProviderCredentials.remember(key, for: sanitized[i].id)
@@ -583,6 +607,14 @@ public final class PersistenceManager: Sendable {
         if !UserDefaults.standard.bool(forKey: hindsightKey) {
             if AgentRoleProfiles.migrateToHindsight(&items) { modified = true }
             UserDefaults.standard.set(true, forKey: hindsightKey)
+        }
+
+        // Skills installed in ~/.agents/skills (BAMA) go to the agents whose role uses them, once,
+        // so a skill the user later unticks on an agent is not put back every launch.
+        let globalSkillsKey = "agentGlobalSkills.v2"
+        if !UserDefaults.standard.bool(forKey: globalSkillsKey) {
+            if AgentRoleProfiles.addGlobalSkills(to: &items) { modified = true }
+            UserDefaults.standard.set(true, forKey: globalSkillsKey)
         }
 
         // Sanitize any invalid or obsolete SF symbols loaded from user's disk cache

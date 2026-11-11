@@ -1853,7 +1853,7 @@ public final class AppState: ObservableObject {
     /// until the key was used. Called when those screens appear; reads run off the main thread, and
     /// nothing is saved — the keys are already in the Keychain.
     public func loadProviderKeysForDisplay() {
-        let missing = providers.filter { $0.type == .cloud && $0.apiKey.isEmpty }
+        let missing = providers.filter { $0.apiKey.isEmpty && $0.kind != .omlx && $0.kind != .vmlx }
         guard !missing.isEmpty else { return }
         Task { [weak self] in
             for provider in missing {
