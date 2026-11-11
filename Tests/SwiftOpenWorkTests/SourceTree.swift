@@ -53,4 +53,11 @@ enum SourceTree {
     static func agentLoopSource() throws -> String {
         try read(["AgentRunner.swift", "AgentTurn.swift"])
     }
+
+    /// The Settings window: `SettingsView.swift` and the `SettingsView+<Section>.swift` files its
+    /// pages live in.
+    static func settingsViewSource() throws -> String {
+        let sections = swiftFiles.map(\.lastPathComponent).filter { $0.hasPrefix("SettingsView+") }.sorted()
+        return try read(["SettingsView.swift"] + sections)
+    }
 }

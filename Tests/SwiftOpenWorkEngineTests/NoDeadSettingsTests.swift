@@ -89,10 +89,7 @@ final class NoDeadSettingsTests: XCTestCase {
     /// The other half: a field nothing exposes is unreachable configuration.
     func testEverySettingIsReachableFromTheUI() throws {
         let fields = try declaredFields()
-        let settingsView = try String(
-            contentsOf: SourceTree.url("UI/Views/Settings/SettingsView.swift"),
-            encoding: .utf8
-        )
+        let settingsView = try SourceTree.settingsViewSource()
         let notUserFacing: Set<String> = [
             // Set implicitly by switching workspace, not by a control.
             "defaultWorkspaceId",

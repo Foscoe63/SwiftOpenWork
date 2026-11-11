@@ -105,7 +105,7 @@ final class GoogleCredentialStoreTests: XCTestCase {
     }
 
     func testTheSettingsPageNoLongerReadsSecretsSynchronously() throws {
-        let source = try String(contentsOf: SourceTree.url("Sources/UI/Views/Settings/SettingsView.swift"), encoding: .utf8)
+        let source = try SourceTree.settingsViewSource()
         XCTAssertTrue(source.contains("await GoogleIntegrationsService.shared.loadCredentials()"))
         for property in ["clientId", "clientSecret", "apiKey"] {
             XCTAssertFalse(source.contains("= google.\(property)"),
