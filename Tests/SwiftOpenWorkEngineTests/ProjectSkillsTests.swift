@@ -103,6 +103,75 @@ final class ProjectSkillsTests: XCTestCase {
         XCTAssertTrue(shared.content.contains("New copy."), "\(ProjectSkills.relativePath) must win")
     }
 
+    // MARK: - Global folders
+
+    /// A stand-in home directory, so the tests never read the real `~/.agents/skills`.
+    private func writeGlobal(_ relative: String, _ contents: String) throws {
+        try writeSkill("home/\(relative)", contents)
+    }
+
+    private var home: String { root.appendingPathComponent("home").path }
+
+    func testLoadsSkillsInstalledInTheHomeDirectory() throws {
+        try writeGlobal(".agents/skills/bama/SKILL.md", "---\nname: bama\ndescription: Router.\n---\n\nPick the next skill.")
+
+        let skills = ProjectSkills.loadGlobal(homeDirectory: home)
+        XCTAssertEqual(skills.map(\.name), ["bama"])
+        XCTAssertEqual(skills[0].id, "global:bama/SKILL.md")
+        XCTAssertEqual(skills[0].source, .global)
+        XCTAssertEqual(skills[0].category, "Global")
+        XCTAssertTrue(skills[0].isAllowed(by: ["global:bama"]), "role profiles name a skill by its folder")
+        XCTAssertFalse(skills[0].isAllowed(by: ["global:bam"]))
+    }
+
+    func testBothHomeFoldersAreReadAndALinkedSkillIsListedOnce() throws {
+        try writeGlobal(".agents/skills/bama/SKILL.md", "---\nname: bama\n---\n\nReal copy.")
+        try writeGlobal(".claude/skills/only-here/SKILL.md", "---\nname: only-here\n---\n\nBody.")
+        // npx skills links each skill into ~/.claude/skills.
+        let link = root.appendingPathComponent("home/.claude/skills/bama")
+        try FileManager.default.createSymbolicLink(
+            at: link, withDestinationURL: root.appendingPathComponent("home/.agents/skills/bama")
+        )
+
+        let skills = ProjectSkills.loadGlobal(homeDirectory: home)
+        XCTAssertEqual(skills.map(\.name), ["bama", "only-here"])
+        XCTAssertTrue(skills[0].content.contains("Real copy."))
+    }
+
+    func testGlobalSkillsDoNotCountAgainstTheProjectCapOrTheOtherWayRound() throws {
+        for index in 0..<(ProjectSkills.maxSkills + 5) {
+            try writeGlobal(".agents/skills/g-\(index)/SKILL.md", "Body \(index).")
+        }
+        try writeSkill(".swiftopenwork/skills/mine/SKILL.md", "Body.")
+
+        XCTAssertEqual(ProjectSkills.loadGlobal(homeDirectory: home).count, ProjectSkills.maxSkills + 5)
+        XCTAssertEqual(ProjectSkills.load(workspacePath: root.path).map(\.name), ["Mine"])
+    }
+
+    func testAMissingHomeFolderLoadsNothing() {
+        XCTAssertTrue(ProjectSkills.loadGlobal(homeDirectory: home).isEmpty)
+        XCTAssertTrue(ProjectSkills.loadGlobal(homeDirectory: "").isEmpty)
+    }
+
+    func testGlobalSkillIsClippedLikeAnyOther() throws {
+        try writeGlobal(".agents/skills/huge/SKILL.md", String(repeating: "x", count: ProjectSkills.maxCharacters + 500))
+        XCTAssertEqual(ProjectSkills.loadGlobal(homeDirectory: home).first?.content.count, ProjectSkills.maxCharacters)
+    }
+
+    func testGlobalPromptBlockSendsTheModelToSkillLoad() throws {
+        try writeGlobal(".agents/skills/bama/SKILL.md", "---\nname: bama\ndescription: Router.\n---\n\nBody.")
+        let block = ProjectSkills.globalPromptBlock(ProjectSkills.loadGlobal(homeDirectory: home))
+        XCTAssertTrue(block.contains("- **bama**: Router."))
+        XCTAssertTrue(block.contains("skill_load"))
+        XCTAssertFalse(block.contains("file:"), "a home path may not be readable with file_read")
+        XCTAssertEqual(ProjectSkills.globalPromptBlock([]), "")
+    }
+
+    func testSkillLoadAndTheRunnerReadTheGlobalFolders() throws {
+        XCTAssertTrue(try SourceTree.read("ToolExecutionEngine.swift").contains("ProjectSkills.loadGlobal"))
+        XCTAssertTrue(try SourceTree.read("AgentRunner.swift").contains("ProjectSkills.globalPromptBlock"))
+    }
+
     // MARK: - Bounds
 
     func testLongSkillIsClipped() throws {

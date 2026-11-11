@@ -585,6 +585,14 @@ public final class PersistenceManager: Sendable {
             UserDefaults.standard.set(true, forKey: hindsightKey)
         }
 
+        // Skills installed in ~/.agents/skills (BAMA) go to the agents whose role uses them, once,
+        // so a skill the user later unticks on an agent is not put back every launch.
+        let globalSkillsKey = "agentGlobalSkills.v2"
+        if !UserDefaults.standard.bool(forKey: globalSkillsKey) {
+            if AgentRoleProfiles.addGlobalSkills(to: &items) { modified = true }
+            UserDefaults.standard.set(true, forKey: globalSkillsKey)
+        }
+
         // Sanitize any invalid or obsolete SF symbols loaded from user's disk cache
         for i in 0..<items.count {
             if items[i].avatar == "person.crop.circle.badge.sparkables" || items[i].avatar == "person.crop.circle.badge.sparkles" {

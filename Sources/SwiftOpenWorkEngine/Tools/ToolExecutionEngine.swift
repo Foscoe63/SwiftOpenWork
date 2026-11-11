@@ -2148,6 +2148,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let skills = PersistenceManager.shared.loadSkills().filter { $0.isEnabled && $0.isAllowed(by: currentAgent.allowedSkillIds) }
                 + ProjectSkills.load(workspacePath: workspace.folderPath).filter { $0.isEnabled && $0.isAllowed(by: currentAgent.allowedSkillIds) }
+                + ProjectSkills.loadGlobal().filter { $0.isEnabled && $0.isAllowed(by: currentAgent.allowedSkillIds) }
             guard !requested.isEmpty,
                   let skill = skills.first(where: { $0.name.lowercased() == requested })
                     ?? skills.first(where: { $0.name.lowercased().contains(requested) }) else {
