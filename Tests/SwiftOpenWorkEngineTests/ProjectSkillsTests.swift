@@ -168,8 +168,8 @@ final class ProjectSkillsTests: XCTestCase {
     }
 
     func testSkillLoadAndTheRunnerReadTheGlobalFolders() throws {
-        XCTAssertTrue(try SourceTree.read("ToolExecutionEngine.swift").contains("ProjectSkills.loadGlobal"))
         XCTAssertTrue(try SourceTree.read("AgentRunner.swift").contains("ProjectSkills.globalPromptBlock"))
+        XCTAssertTrue(try SourceTree.toolEngineSource().contains("ProjectSkills.loadGlobal"))
     }
 
     // MARK: - Bounds

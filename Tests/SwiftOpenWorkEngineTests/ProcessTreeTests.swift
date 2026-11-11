@@ -65,7 +65,7 @@ final class ProcessTreeTests: XCTestCase {
     }
 
     func testShellToolsNoLongerBlockOnWaitUntilExit() throws {
-        let source = try String(contentsOf: SourceTree.url("Engine/Tools/ToolExecutionEngine.swift"), encoding: .utf8)
+        let source = try SourceTree.toolEngineSource()
         XCTAssertFalse(source.contains("process.waitUntilExit()"), "shell and build tools must await exit so Stop can cancel them")
     }
 }
