@@ -121,6 +121,15 @@ final class AgentTurn {
     /// conversation, so a model that reads one file per step spends its round cap on exploring;
     /// see `batchingNudge`.
     var soloReadSteps = 0
+    /// How many rounds the turn may take now: `maxIterations`, plus one more allowance each time
+    /// `extendRoundLimitIfProgressing` lets a turn that is still getting somewhere carry on.
+    var roundLimit = 0
+    var roundExtensions = 0
+    /// Successful tool calls in the step that just ran. A step whose calls all failed is not progress.
+    var succeededCallsThisStep = 0
+    /// How many times a turn that hits its round cap while making progress is let through, so a
+    /// 25-round setting means at most 75 rounds before the person is asked.
+    nonisolated static let maxRoundExtensions = 2
     var batchingNudgeSent = false
 
     init(
@@ -244,7 +253,8 @@ final class AgentTurn {
         await MCPPromotedToolRegistry.shared.reset(owner: session.id)
         await buildSystemPrompt()
 
-        steps: while iteration < maxIterations {
+        roundLimit = maxIterations
+        steps: while iteration < roundLimit || extendRoundLimitIfProgressing() {
             switch await runStep() {
             case .nextStep: continue steps
             case .endTurn: break steps
@@ -1092,6 +1102,7 @@ mcpPromptSummary = ""
         // Notes for the model that arise while tools run. They wait until every result is in:
         // a message between a call's results breaks the call/result pairing providers require.
         var notesAfterResults: [ChatMessage] = []
+        succeededCallsThisStep = 0
         var prefetched = startLeadingReads(pendingCallsToExecute)
         defer { prefetched.values.forEach { $0.cancel() } }
         for queued in pendingCallsToExecute {
@@ -1203,6 +1214,7 @@ mcpPromptSummary = ""
         let outcome = await execute(
             callId: callId, toolName: toolName, argsJson: &argsJson, callInfo: &callInfo, prefetched: &prefetched
         )
+        if outcome.success { succeededCallsThisStep += 1 }
         let resultOutput = outcome.output
         let resultSuccess = outcome.success
         let resultError = outcome.error
@@ -1774,6 +1786,23 @@ mcpPromptSummary = ""
         }
     }
 
+    /// At the round cap: carry on for another allowance when the last step still got somewhere
+    /// (a call succeeded, MCP is not stuck) and no budget has stopped the turn. The token and
+    /// cost limits keep applying, so this cannot run away; it only spares the person pressing
+    /// Continue on a turn that was working.
+    func extendRoundLimitIfProgressing() -> Bool {
+        guard iteration >= roundLimit, !halted, !finishedNaturally,
+              roundExtensions < Self.maxRoundExtensions,
+              succeededCallsThisStep > 0, mcpDeadEnds < 3 else { return false }
+        roundExtensions += 1
+        roundLimit += maxIterations
+        accumulator.appendNotice(
+            "Reached \(iteration) rounds and still making progress; continuing "
+                + "(extension \(roundExtensions) of \(Self.maxRoundExtensions))."
+        )
+        return true
+    }
+
     /// After several steps in a row that each made a single read-only call, tell the model once
     /// to issue independent reads together. Smaller models rarely batch on their own, and a
     /// 50-round turn can turn out to be 30 rounds of one `grep` or `file_read` each.
@@ -1855,10 +1884,10 @@ mcpPromptSummary = ""
     // MARK: - Ending the turn
 
     private func finish() async {
-        if !halted && !finishedNaturally && iteration >= maxIterations {
+        if !halted && !finishedNaturally && iteration >= roundLimit {
             accumulator.setHalt(
                 reason: "round_cap",
-                text: "Reached the autonomous round cap (\(maxIterations)). Press Continue to keep going from here."
+                text: "Reached the autonomous round cap (\(roundLimit)). Press Continue to keep going from here."
             )
         }
 
