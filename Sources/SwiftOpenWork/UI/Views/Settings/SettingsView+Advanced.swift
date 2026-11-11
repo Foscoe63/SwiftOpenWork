@@ -308,8 +308,8 @@ extension SettingsView {
     var advancedPage: some View {
         VStack(spacing: 16) {
             SettingsCard(title: "Autonomous ReAct Loop & Hierarchy", description: "Multi-agent hierarchy limits and deep ReAct execution cycles", icon: "point.3.connected.trianglepath.dotted") {
-                SettingsRow(title: "Max Autonomous Iteration Loop (\(appState.settings.maxAutonomousIterations) turns)", subtitle: "Maximum iterative ReAct tool calls per agent turn (1 - 50)", icon: "arrow.triangle.2.circlepath") {
-                    Stepper("", value: $appState.settings.maxAutonomousIterations, in: 1...50)
+                SettingsRow(title: "Max Autonomous Iteration Loop (\(appState.settings.maxAutonomousIterations) turns)", subtitle: "Model rounds per agent turn before it stops and asks you to press Continue (1 - 200)", icon: "arrow.triangle.2.circlepath") {
+                    Stepper("", value: $appState.settings.maxAutonomousIterations, in: 1...200)
                 }
 
                 SettingsRow(title: "Sub-agent Step Budget (\(appState.settings.subAgentStepBudget) steps)", subtitle: "Rounds a delegated sub-agent gets before it must report back (1 - 50)", icon: "person.2.badge.gearshape") {

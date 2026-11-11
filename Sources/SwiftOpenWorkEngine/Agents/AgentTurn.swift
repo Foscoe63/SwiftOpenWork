@@ -117,6 +117,11 @@ final class AgentTurn {
     /// Successful file reads this turn, by call signature, for `unchangedReadNote`.
     var readLog: [String: AgentRunner.RecordedRead] = [:]
     var mcpDisabledThisTurn = false
+    /// Consecutive steps that made exactly one read-only call. Each step re-sends the whole
+    /// conversation, so a model that reads one file per step spends its round cap on exploring;
+    /// see `batchingNudge`.
+    var soloReadSteps = 0
+    var batchingNudgeSent = false
 
     init(
         session: Session,
@@ -1093,6 +1098,7 @@ mcpPromptSummary = ""
             let stop = await runCall(queued, prefetched: &prefetched, notesAfterResults: &notesAfterResults)
             if stop { return .endTurn }
         }
+        if let nudge = batchingNudge(for: pendingCallsToExecute) { notesAfterResults.append(nudge) }
         finishToolRound(notesAfterResults)
         return .nextStep
     }
@@ -1766,6 +1772,29 @@ mcpPromptSummary = ""
                 )
             }
         }
+    }
+
+    /// After several steps in a row that each made a single read-only call, tell the model once
+    /// to issue independent reads together. Smaller models rarely batch on their own, and a
+    /// 50-round turn can turn out to be 30 rounds of one `grep` or `file_read` each.
+    func batchingNudge(for calls: [PendingCall]) -> ChatMessage? {
+        guard calls.count == 1, AgentRunner.isParallelSafe(calls[0].tool) else {
+            soloReadSteps = 0
+            return nil
+        }
+        soloReadSteps += 1
+        guard soloReadSteps >= 4, !batchingNudgeSent else { return nil }
+        batchingNudgeSent = true
+        return ChatMessage(
+            sessionId: session.id,
+            role: .user,
+            content: """
+            [System]: Your last \(soloReadSteps) steps each made one read-only call. Every step \
+            re-sends the whole conversation and counts toward this turn's round cap. When you \
+            need several files or searches, issue them all in ONE response, and read the region \
+            you need in one call rather than in small slices.
+            """
+        )
     }
 
     /// After every result is in: notes held back, mail from other agents, MCP escalation.
