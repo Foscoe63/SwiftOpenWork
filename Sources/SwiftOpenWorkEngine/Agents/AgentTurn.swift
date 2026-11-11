@@ -130,7 +130,6 @@ final class AgentTurn {
     /// How many times a turn that hits its round cap while making progress is let through, so a
     /// 25-round setting means at most 75 rounds before the person is asked.
     nonisolated static let maxRoundExtensions = 2
-    var batchingNudgeSent = false
 
     init(
         session: Session,
@@ -642,7 +641,14 @@ mcpPromptSummary = ""
                - Swift: "the compiler is unable to type-check this expression in reasonable time"
                  means one expression is too complex. Break it into separate `let` values with
                  explicit types; do not restructure the code around it.
+            0b. Before a change that touches more than one file, write a plan of at most three lines:
+               the files you expect to change and why. Explore only what that plan needs; do not
+               search docs, changelogs or telemetry unless the task is about them. If the
+               project's build/test commands are listed above, use them — do not try other
+               runners to find out which works. Check AGENTS.md or a build-and-test skill first.
             1. Do not narrate ("I will check…" / "Let me…"). Call the tool immediately, then answer.
+               A file_read returns at least 200 lines and accepts `ranges` (["10-60","300-380"]):
+               read the whole region you need in one call, not in small slices.
                Every tool round re-sends the whole conversation, so rounds are the expensive part:
                when several calls do not depend on each other (reading five files, listing two
                folders, grep plus git_status), issue them all in ONE response instead of one per
@@ -1803,7 +1809,7 @@ mcpPromptSummary = ""
         return true
     }
 
-    /// After several steps in a row that each made a single read-only call, tell the model once
+    /// After three steps in a row that each made a single read-only call (and again at nine), tell the model
     /// to issue independent reads together. Smaller models rarely batch on their own, and a
     /// 50-round turn can turn out to be 30 rounds of one `grep` or `file_read` each.
     func batchingNudge(for calls: [PendingCall]) -> ChatMessage? {
@@ -1812,8 +1818,8 @@ mcpPromptSummary = ""
             return nil
         }
         soloReadSteps += 1
-        guard soloReadSteps >= 4, !batchingNudgeSent else { return nil }
-        batchingNudgeSent = true
+        // Early, and once more if it carries on: a weaker model ignores the first reminder.
+        guard soloReadSteps == 3 || soloReadSteps == 9 else { return nil }
         return ChatMessage(
             sessionId: session.id,
             role: .user,

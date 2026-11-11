@@ -34,6 +34,19 @@ extension ToolExecutionEngine {
         if let denial = sandboxDenial(for: fullPath, workspace: workspace, settings: settings, startTime: startTime) {
             return denial
         }
+        // Several windows of one file in a single call: `ranges: ["10-60", "200-260"]` or
+        // `[{"offset": 10, "limit": 50}]`. One round instead of one per slice.
+        let windows = Self.readRanges(from: dict["ranges"])
+        if windows.count > 1, FileManager.default.fileExists(atPath: (fullPath as NSString).expandingTildeInPath) {
+            var parts: [String] = []
+            for window in windows.prefix(Self.maxReadRanges) {
+                let part = readFile(path: fullPath, offset: window.offset, limit: window.limit, workspaceRoot: workspace.folderPath, startTime: startTime)
+                if !part.success { return part }
+                parts.append(part.output)
+            }
+            return ToolExecutionResult(success: true, output: parts.joined(separator: "\n\n"),
+                                       durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000)
+        }
         let offset = Self.intArgument(dict["offset"]) ?? Self.intArgument(dict["start_line"])
         let limit = Self.intArgument(dict["limit"]) ?? Self.intArgument(dict["max_lines"])
         // A missing path with exactly one likely target inside the workspace is a slip, not a
@@ -532,5 +545,26 @@ extension ToolExecutionEngine {
             success: true, output: "Wrote \(path) (\(format.rawValue), \(size) bytes).",
             durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
         )
+    }
+}
+
+extension ToolExecutionEngine {
+    static let maxReadRanges = 8
+
+    /// Line windows from a `ranges` argument: strings such as "10-60" or objects with offset and limit.
+    static func readRanges(from value: Any?) -> [(offset: Int, limit: Int)] {
+        guard let items = value as? [Any] else { return [] }
+        return items.compactMap { item in
+            if let dict = item as? [String: Any], let offset = intArgument(dict["offset"] ?? dict["start"] ?? dict["start_line"]) {
+                let limit = intArgument(dict["limit"]) ?? intArgument(dict["end"] ?? dict["end_line"]).map { $0 - offset + 1 } ?? minReadWindow
+                return (offset, max(1, limit))
+            }
+            if let text = item as? String {
+                let bounds = text.split(whereSeparator: { "-:–".contains($0) }).compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+                if bounds.count == 2, bounds[1] >= bounds[0] { return (bounds[0], bounds[1] - bounds[0] + 1) }
+                if bounds.count == 1 { return (bounds[0], minReadWindow) }
+            }
+            return nil
+        }
     }
 }

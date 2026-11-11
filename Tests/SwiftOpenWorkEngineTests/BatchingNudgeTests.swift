@@ -7,7 +7,7 @@ final class BatchingNudgeTests: XCTestCase {
     func testTheTurnCountsSoloReadStepsAndNudgesOnce() throws {
         let source = try SourceTree.read("AgentTurn.swift")
         XCTAssertTrue(source.contains("batchingNudge(for: pendingCallsToExecute)"))
-        XCTAssertTrue(source.contains("guard soloReadSteps >= 4, !batchingNudgeSent"))
+        XCTAssertTrue(source.contains("guard soloReadSteps == 3 || soloReadSteps == 9"))
         XCTAssertTrue(source.contains("[System]:"), "a [System] note is dropped from the saved transcript")
     }
 

@@ -855,6 +855,10 @@ public final class ToolExecutionEngine: @unchecked Sendable {
 
     /// Lines returned when the caller does not ask for a specific window.
     public static let defaultReadLineLimit = 600
+    /// The least a read returns when the file has that many lines left. Models ask for 40- or
+    /// 60-line slices and then come back for the next one, and every extra round re-sends the whole
+    /// conversation; a few more lines now cost far less than another round.
+    public static let minReadWindow = 200
     /// Individual lines longer than this are clipped; minified bundles otherwise blow the budget.
     public static let maxReadLineLength = 2_000
 
@@ -921,7 +925,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
         }
-        let count = max(1, limit ?? Self.defaultReadLineLimit)
+        let count = max(Self.minReadWindow, limit ?? Self.defaultReadLineLimit)
         let end = min(total, start + count - 1)
 
         let width = String(end).count

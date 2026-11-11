@@ -441,7 +441,7 @@ public enum ToolSchemaCatalog {
         "preview_logs": #"{"type":"object","properties":{"lines":{"type":"integer","description":"Server log lines to return, default 80."},"clear_console":{"type":"boolean","description":"Clear the browser console after reading it."}}}"#,
         "preview_stop": #"{"type":"object","properties":{}}"#,
 
-        "file_read": #"{"type":"object","properties":{"path":{"type":"string","description":"File path"},"offset":{"type":"integer","description":"First line (1-indexed, optional)"},"limit":{"type":"integer","description":"Max lines (optional)"}},"required":["path"]}"#,
+        "file_read": #"{"type":"object","properties":{"path":{"type":"string","description":"File path"},"offset":{"type":"integer","description":"First line (1-indexed, optional)"},"limit":{"type":"integer","description":"Max lines (optional). Reads return at least 200 lines when the file has them, so ask for the whole region you need in one call"},"ranges":{"type":"array","items":{"type":"string"},"description":"Several windows of this file in one call, e.g. [\"10-60\",\"200-260\"]"}},"required":["path"]}"#,
         "read_file": #"{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["path"]}"#,
         "file_write": #"{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string","description":"Full file content"}},"required":["path","content"]}"#,
         "write_file": #"{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}"#,

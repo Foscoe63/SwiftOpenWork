@@ -84,8 +84,10 @@ final class FileReadPaginationTests: XCTestCase {
         let name = try writeLargeFile()
         let result = await read(["path": name, "limit": 10])
 
-        XCTAssertTrue(result.output.contains("2990 more lines"))
-        XCTAssertTrue(result.output.contains("offset=11"), "must name the next offset explicitly")
+        // A window smaller than `minReadWindow` is widened to it: another round costs more than the lines.
+        let shown = ToolExecutionEngine.minReadWindow
+        XCTAssertTrue(result.output.contains("\(3_000 - shown) more lines"))
+        XCTAssertTrue(result.output.contains("offset=\(shown + 1)"), "must name the next offset explicitly")
     }
 
     func testWholeSmallFileHasNoContinuationNotice() async throws {
