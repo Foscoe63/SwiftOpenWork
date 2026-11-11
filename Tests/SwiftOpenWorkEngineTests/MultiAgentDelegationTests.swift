@@ -191,7 +191,7 @@ final class MultiAgentDelegationTests: XCTestCase {
 
     /// Keyword-triggered delegation is gone; it fanned out on "create a note".
     func testDelegationIsNotTriggeredByKeywords() throws {
-        let runner = try source("Sources/Engine/Agents/AgentRunner.swift")
+        let runner = try SourceTree.agentLoopSource()
         XCTAssertFalse(runner.contains(#"lastPrompt.lowercased().contains("create")"#))
         XCTAssertFalse(runner.contains("Analyze and plan for user request"))
     }

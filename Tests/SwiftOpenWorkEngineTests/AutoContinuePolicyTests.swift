@@ -138,7 +138,7 @@ final class UnfulfilledIntentTests: XCTestCase {
     }
 
     func testNudgeNoLongerNamesAFallbackTool() throws {
-        let source = try String(contentsOf: SourceTree.url("Engine/Agents/AgentRunner.swift"), encoding: .utf8)
+        let source = try SourceTree.agentLoopSource()
         XCTAssertFalse(source.contains(#"?? "mcp_call""#), "the nudge pointed models at a tool that may not exist")
     }
 }

@@ -168,8 +168,8 @@ final class ProjectSkillsTests: XCTestCase {
     }
 
     func testSkillLoadAndTheRunnerReadTheGlobalFolders() throws {
-        XCTAssertTrue(try SourceTree.read("AgentRunner.swift").contains("ProjectSkills.globalPromptBlock"))
         XCTAssertTrue(try SourceTree.toolEngineSource().contains("ProjectSkills.loadGlobal"))
+        XCTAssertTrue(try SourceTree.agentLoopSource().contains("ProjectSkills.globalPromptBlock"))
     }
 
     // MARK: - Bounds
@@ -248,7 +248,7 @@ final class ProjectSkillsTests: XCTestCase {
     // MARK: - Wiring
 
     func testAgentRunnerBuildsTheProjectSkillsBlock() throws {
-        let source = try SourceTree.read("AgentRunner.swift")
+        let source = try SourceTree.agentLoopSource()
         XCTAssertTrue(
             source.contains("ProjectSkills.promptBlock"),
             "project skills must reach the system prompt, not just the settings list"
