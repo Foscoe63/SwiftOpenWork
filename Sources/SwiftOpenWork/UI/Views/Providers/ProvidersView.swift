@@ -165,7 +165,7 @@ public struct ProvidersView: View {
                 // Local Endpoints (Ollama, LM Studio)
                 sectionHeader(title: "LOCAL DAEMONS & SERVERS", subtitle: "Ollama, LM Studio, and localhost inference endpoints")
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 340, maximum: 460), spacing: 14)], spacing: 14) {
-                    ForEach(appState.providers.filter { $0.type == .local && $0.kind != .omlx && $0.kind != .vmlx }) { provider in
+                    ForEach(appState.providers.filter { $0.type == .local }) { provider in
                         providerCard(provider: provider)
                     }
                 }
@@ -511,8 +511,12 @@ public struct ProvidersView: View {
                             let result = await SplashServerManager.shared.ensureRunning(modelId: modelId, baseUrl: provider.baseUrl, settings: appState.settings)
                             appState.showToast(result.success ? "\(provider.name): Connected!" : "\(provider.name): \(result.message)")
                         } else {
-                            let ok = (try? await ProviderRouter.shared.client(for: provider).testConnection(provider: provider)) ?? false
-                            appState.showToast(ok ? "\(provider.name): Connected!" : "\(provider.name): Connection Failed")
+                            do {
+                                let ok = try await ProviderRouter.shared.client(for: provider).testConnection(provider: provider)
+                                appState.showToast(ok ? "\(provider.name): Connected!" : "\(provider.name): Connection Failed")
+                            } catch {
+                                appState.showToast("\(provider.name): \(error.localizedDescription)")
+                            }
                         }
                     }
                 }
@@ -745,7 +749,7 @@ public struct ProviderEditModalView: View {
                     }
 
                     // API Key
-                    if draft.kind != .ollama && draft.kind != .omlx && draft.kind != .vmlx {
+                    if draft.kind != .omlx && draft.kind != .vmlx {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("API Key / Bearer Token")
                                 .font(.system(size: 11.5, weight: .semibold))

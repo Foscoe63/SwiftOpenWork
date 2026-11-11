@@ -141,7 +141,12 @@ public final class ProviderRouter: Sendable {
         // Other local OpenAI-compatible backends. LM Studio and llama.cpp each have their own
         // configured endpoint, so they go straight to it: the launcher below probes port 8000 first
         // and would rewrite the URL to whichever server answers.
-        let usesConfiguredEndpoint = [ProviderKind.lmstudio, .llamacpp].contains(activeProvider.kind)
+        // Any other local provider is also left alone when its configured endpoint already answers,
+        // so a custom host or port set in provider settings is honored; the launcher is the fallback.
+        var usesConfiguredEndpoint = [ProviderKind.lmstudio, .llamacpp].contains(activeProvider.kind)
+        if activeProvider.type == .local && !usesConfiguredEndpoint {
+            usesConfiguredEndpoint = await Self.endpointResponds(activeProvider.baseUrl)
+        }
         if activeProvider.type == .local && !usesConfiguredEndpoint {
             let res = await LocalInferenceRegistry.serverLauncher?.ensureServerRunning(modelId: model.id, settings: nil)
                 ?? (success: false, message: "No local server launcher is registered in this build.", activePort: 0)
@@ -206,5 +211,18 @@ public final class ProviderRouter: Sendable {
             ))
             throw error
         }
+    }
+
+    /// True when something accepts connections at the URL's host and port. Any HTTP status counts:
+    /// this asks "is a server there", not "is it healthy".
+    static func endpointResponds(_ baseUrl: String) async -> Bool {
+        guard var parts = URLComponents(string: baseUrl), parts.host != nil else { return false }
+        parts.path = "/"
+        parts.query = nil
+        guard let url = parts.url else { return false }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 1.0
+        guard let (_, resp) = try? await URLSession.shared.data(for: req) else { return false }
+        return resp is HTTPURLResponse
     }
 }

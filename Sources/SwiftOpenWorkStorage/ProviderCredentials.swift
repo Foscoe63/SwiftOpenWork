@@ -31,7 +31,8 @@ public enum ProviderCredentials {
 
     /// `provider` with its API key filled in, when it is a cloud provider whose key is not loaded.
     public static func hydrated(_ provider: ModelProvider) async -> ModelProvider {
-        guard provider.type == .cloud, provider.apiKey.isEmpty else { return provider }
+        // Local servers can carry a key too; the in-process engines never do.
+        guard provider.apiKey.isEmpty, provider.type == .cloud || (provider.kind != .omlx && provider.kind != .vmlx) else { return provider }
         var filled = provider
         if let cached = cache.value(for: provider.id) {
             filled.apiKey = cached
@@ -43,6 +44,11 @@ public enum ProviderCredentials {
         cache.store(secret, for: provider.id)
         filled.apiKey = secret
         return filled
+    }
+
+    /// The key last saved or read for this provider, or nil when none is cached.
+    public static func cachedKey(for providerId: String) -> String? {
+        cache.value(for: providerId)
     }
 
     /// Record a key the app has just saved, so the next request does not read it back.
