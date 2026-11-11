@@ -269,12 +269,28 @@ public enum ProjectSkills {
 
     /// The prompt block for skills installed in the home directory. They are loaded by name with
     /// `skill_load` — a path outside the workspace may not be readable with `file_read`.
+    public static let maxGlobalHintCharacters = 60
+    public static let maxGlobalListCharacters = 4_500
+
     public static func globalPromptBlock(_ skills: [Skill]) -> String {
         let enabled = skills.filter(\.isEnabled)
         guard !enabled.isEmpty else { return "" }
-        let lines = enabled.map { skill -> String in
-            let preview = skill.description.isEmpty ? String(skill.content.prefix(160)) : skill.description
-            return "- **\(skill.name)**: \(preview)"
+        // Every skill, every round: 87 installed skills with full descriptions were about 8K tokens
+        // on each step of each turn. A name and a short hint is enough to pick one; `skill_load`
+        // reads the rest.
+        var used = 0
+        var lines: [String] = []
+        for skill in enabled {
+            let source = skill.description.isEmpty ? skill.content : skill.description
+            let hint = String(source.trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\n", with: " ").prefix(maxGlobalHintCharacters))
+            let line = "- \(skill.name): \(hint)"
+            guard used + line.count <= maxGlobalListCharacters else { break }
+            used += line.count
+            lines.append(line)
+        }
+        if lines.count < enabled.count {
+            lines.append("- (+\(enabled.count - lines.count) more; `skill_load` with a name works for any installed skill)")
         }
         return """
 

@@ -676,7 +676,10 @@ public struct AgentEditModalView: View {
                                 get: { skill.isAllowed(by: draft.allowedSkillIds) && !(draft.allowedSkillIds ?? []).isEmpty },
                                 set: { on in
                                     var ids = draft.allowedSkillIds ?? []
-                                    ids.removeAll { $0 == skill.id || $0 == skill.name }
+                                    // An entry can be the id, the name, or a folder prefix such as "global:bama" for
+                                    // "global:bama/SKILL.md" (how `isAllowed` reads them). Removing only an exact
+                                    // match left the prefix entry behind, so the box stayed ticked.
+                                    ids.removeAll { $0 == skill.id || $0 == skill.name || skill.id.hasPrefix($0 + "/") }
                                     if on { ids.append(skill.id) }
                                     draft.allowedSkillIds = ids
                                 }

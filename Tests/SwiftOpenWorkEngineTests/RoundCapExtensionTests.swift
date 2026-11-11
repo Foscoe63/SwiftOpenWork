@@ -19,7 +19,7 @@ final class RoundCapExtensionTests: XCTestCase {
                           "succeededCallsThisStep > 0", "mcpDeadEnds < 3"] {
             XCTAssertTrue(source.contains(condition), condition)
         }
-        XCTAssertEqual(AgentTurn.maxRoundExtensions, 2)
+        XCTAssertEqual(AgentTurn.maxRoundExtensions, 0, "extensions are off: they tripled the rounds a turn could spend")
     }
 
     func testSuccessfulCallsAreCountedPerStep() throws {
