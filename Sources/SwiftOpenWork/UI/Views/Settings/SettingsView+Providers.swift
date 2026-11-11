@@ -183,10 +183,6 @@ private struct LocalProviderURLField: View {
     }
 }
 
-extension ProviderType: Identifiable {
-    public var id: String { rawValue }
-}
-
 /// API key editor for a provider. Saving writes to the Keychain, so edits are held in a draft and
 /// saved on Return or when focus leaves, not on every keystroke.
 private struct ProviderKeyField: View {

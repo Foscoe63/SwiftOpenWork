@@ -288,6 +288,21 @@ final class AgentTurn {
             sessionId: session.id, cwd: workspace.folderPath, prompt: lastPrompt)
     }
 
+    /// Tools the loop itself relies on, kept whatever the agent's list says.
+    nonisolated static let alwaysAvailableTools: Set<String> = [
+        "recall_output", "tool_describe", "skill_load", "mcp_describe", "mcp_resources", "exit_plan_mode",
+    ]
+
+    /// The tools an agent may be sent. An empty list means no restriction.
+    nonisolated static func restrictToAllowlist(_ tools: [Tool], allowed: [String]) -> [Tool] {
+        guard !allowed.isEmpty else { return tools }
+        let names = Set(allowed.map { AgentRunner.canonicalToolName($0) })
+        return tools.filter {
+            alwaysAvailableTools.contains($0.name) || allowed.contains($0.id)
+                || names.contains(AgentRunner.canonicalToolName($0.name))
+        }
+    }
+
     /// The built-in tools that are switched on, and the MCP tools this agent may use.
     private func loadTools() async {
         planModeActive = loadedSettings.planModeEnabled
@@ -301,6 +316,9 @@ final class AgentTurn {
         disabledToolNames = Set(allCatalogTools.filter { !$0.isEnabled }.map { AgentRunner.canonicalToolName($0.name) })
             .subtracting(allCatalogTools.filter(\.isEnabled).map { AgentRunner.canonicalToolName($0.name) })
         _ = ToolSchemaCatalog.ensureParityTools(in: &availableTools)
+        // The agent's own tool list. It was only applied to sub-agents and MCP tools, so a main
+        // agent with 27 boxes ticked was still sent every built-in tool the workspace had on.
+        availableTools = Self.restrictToAllowlist(availableTools, allowed: agent.allowedToolIds)
 
         // Casual / inventory turns must not wait on npx cold starts.
         casualChat = MCPClientManager.isCasualChatPrompt(lastPrompt)
@@ -1007,7 +1025,18 @@ mcpPromptSummary = ""
         shownCompletionTokens += snap.completionTokens > 0
             ? snap.completionTokens
             : TokenAccounting.estimate(accumulator.message.content + (accumulator.message.reasoning ?? ""))
-        accumulator.setBilled(prompt: shownPromptTokens, completion: shownCompletionTokens, lastPrompt: stepPrompt)
+        // What the composer's context warning reads: the size of this one request. A provider's
+        // figure more than twice what the request's own text can account for is a running or
+        // cached count, not the context, so the estimate stands in for it.
+        let estimatedContext = max(1, requestChars / 4)
+        let contextTokens = (snap.promptTokens > 0 && snap.promptTokens <= estimatedContext * 2)
+            ? snap.promptTokens : estimatedContext
+        AuditLog.shared.record(sessionId: session.id, event: "step_prompt", fields: [
+            "reported": snap.promptTokens,
+            "estimated": estimatedContext,
+            "shown_context": contextTokens
+        ])
+        accumulator.setBilled(prompt: shownPromptTokens, completion: shownCompletionTokens, lastPrompt: contextTokens)
         if turnPromptTokens + turnCompletionTokens > maxTurnTokens {
             accumulator.setHalt(
                 reason: "token_budget",

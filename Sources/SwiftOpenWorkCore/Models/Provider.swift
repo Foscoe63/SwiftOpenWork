@@ -46,7 +46,8 @@ public struct ModelInfo: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
-public enum ProviderType: String, Codable, CaseIterable, Sendable {
+public enum ProviderType: String, Codable, CaseIterable, Sendable, Identifiable {
+    public var id: String { rawValue }
     case local = "local"
     case cloud = "cloud"
 }
