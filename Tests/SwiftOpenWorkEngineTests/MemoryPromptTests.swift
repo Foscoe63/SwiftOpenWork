@@ -78,4 +78,39 @@ final class MemoryPromptTests: XCTestCase {
         XCTAssertTrue(source.contains("\"project\""))
         XCTAssertTrue(ToolSchemaCatalog.schemaJSON(for: "memory_store").contains("\"scope\""))
     }
+
+    // MARK: - Hindsight recall
+
+    func testARecallResultReachesThePromptAheadOfSavedFacts() {
+        let block = MemoryPrompt.promptBlock(items: [item("k", "v")], projectFile: nil, recalled: "User prefers bun over npm")
+        XCTAssertTrue(block.contains("Recalled from long-term memory"))
+        XCTAssertTrue(block.contains("User prefers bun over npm"))
+        XCTAssertLessThan(block.range(of: "bun over npm")!.lowerBound, block.range(of: "[k]")!.lowerBound)
+    }
+
+    func testAContinuePromptRecallsAgainstTheLastRealRequest() {
+        let earlier = ["Add LM Studio as a local provider to the desktop app please", "Continue from where you stopped."]
+        XCTAssertEqual(MemoryPrompt.recallQuery(prompt: "Continue from where you stopped. Do not repeat completed work.",
+                                                previousUserMessages: earlier),
+                       "Add LM Studio as a local provider to the desktop app please")
+        XCTAssertEqual(MemoryPrompt.recallQuery(prompt: "fix the build", previousUserMessages: []), "fix the build")
+        XCTAssertNil(MemoryPrompt.recallQuery(prompt: "  ", previousUserMessages: []))
+    }
+
+    func testFailedOrEmptyRecallsAreDropped() {
+        XCTAssertNil(MemoryPrompt.usableRecall(""))
+        XCTAssertNil(MemoryPrompt.usableRecall("Error: server not connected"))
+        XCTAssertNil(MemoryPrompt.usableRecall("No memories found"))
+        XCTAssertNil(MemoryPrompt.usableRecall("[]"))
+        XCTAssertEqual(MemoryPrompt.usableRecall("- uses SwiftUI"), "- uses SwiftUI")
+        XCTAssertEqual(MemoryPrompt.usableRecall(String(repeating: "x", count: 9_000))?.count, MemoryPrompt.maxRecalledCharacters)
+    }
+
+    func testTheTurnRecallsBeforeTheModelStartsAndNeverWaitsLong() throws {
+        let source = try SourceTree.read("AgentTurn.swift")
+        XCTAssertTrue(source.contains("await recallFromHindsight()"))
+        XCTAssertTrue(source.contains("MemoryPrompt.recallTimeoutSeconds"))
+        XCTAssertTrue(source.contains("agentAllowsMCP(toolId: recallTool"), "only an agent allowed to recall gets recalled memory")
+        XCTAssertLessThanOrEqual(MemoryPrompt.recallTimeoutSeconds, 5)
+    }
 }

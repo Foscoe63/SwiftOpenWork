@@ -15,6 +15,27 @@ public enum MemoryPrompt {
     public static let maxItems = 20
     public static let maxCharacters = 3_000
     public static let maxProjectFileCharacters = 4_000
+    public static let maxRecalledCharacters = 2_500
+    /// Recall must never hold a turn up: the model starts without it after this long.
+    public static let recallTimeoutSeconds = 4.0
+
+    /// The request to recall against. A bare "Continue" carries no topic, so it uses the last real request.
+    public static func recallQuery(prompt: String, previousUserMessages: [String]) -> String? {
+        var text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if AutoContinuePolicy.isContinuePrompt(text) {
+            text = previousUserMessages.last { !AutoContinuePolicy.isContinuePrompt($0) && $0.count > 40 }?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        return text.isEmpty ? nil : String(text.prefix(600))
+    }
+
+    /// What a recall returned, ready for the prompt; nil when it failed or found nothing.
+    public static func usableRecall(_ output: String) -> String? {
+        let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !text.hasPrefix("Error"), !text.lowercased().contains("no memories found"),
+              text != "[]", text != "{}" else { return nil }
+        return String(text.prefix(maxRecalledCharacters))
+    }
 
     /// Facts for this workspace, newest first, plus the ones saved before memories were scoped.
     public static func relevant(_ all: [MemoryItem], workspaceId: String) -> [MemoryItem] {
@@ -32,8 +53,11 @@ public enum MemoryPrompt {
     }
 
     /// Empty when there is nothing to remember, so callers can interpolate it unconditionally.
-    public static func promptBlock(items: [MemoryItem], projectFile: String?) -> String {
+    public static func promptBlock(items: [MemoryItem], projectFile: String?, recalled: String? = nil) -> String {
         var sections: [String] = []
+        if let recalled, !recalled.isEmpty {
+            sections.append("Recalled from long-term memory for this request:\n\(recalled)")
+        }
         if let projectFile, !projectFile.isEmpty {
             sections.append("From `\(projectFileRelativePath)` (this project's notes):\n\(projectFile)")
         }

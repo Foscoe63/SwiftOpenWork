@@ -663,10 +663,12 @@ mcpPromptSummary = ""
         }
         // What changes between turns goes after the cache boundary.
         // Saved facts change between turns (and mid-session), so they sit after the cache boundary.
+        let recalled = (inventoryPrompt || groupToolless || casualChat) ? nil : await recallFromHindsight()
         let memorySection = (inventoryPrompt || groupToolless) ? "" : MemoryPrompt.promptBlock(
             items: MemoryPrompt.relevant(PersistenceManager.shared.loadMemories(), workspaceId: workspace.id),
             projectFile: ProjectTrust.mayLoad(workspaceRoot: workspace.folderPath)
-                ? MemoryPrompt.projectFile(workspaceRoot: workspace.folderPath) : nil
+                ? MemoryPrompt.projectFile(workspaceRoot: workspace.folderPath) : nil,
+            recalled: recalled
         )
         let volatilePrompt = [workspaceSnapshot.map { WorkspaceContext.gitLine($0) } ?? "", memorySection, handoffSection]
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -1813,6 +1815,35 @@ mcpPromptSummary = ""
                 + "(extension \(roundExtensions) of \(Self.maxRoundExtensions))."
         )
         return true
+    }
+
+    /// Ask the Hindsight memory server what it knows about this request, before the model starts.
+    /// The model was left to call `recall` itself, and one that starts from nothing does not know
+    /// there is anything to recall. Skipped unless the server is on and this agent may use recall;
+    /// and bounded by a timeout, since memory must never be the reason a turn is slow.
+    func recallFromHindsight() async -> String? {
+        let recallTool = AgentRoleProfiles.hindsightTool("recall")
+        guard let server = loadedSettings.mcpServers.first(where: { $0.id == AgentRoleProfiles.hindsightServerId && $0.isEnabled }),
+              SubAgentExecutor.agentAllowsMCP(toolId: recallTool, toolName: recallTool, agent: agent, settings: loadedSettings),
+              let query = MemoryPrompt.recallQuery(prompt: lastPrompt, previousUserMessages: session.messages.filter { $0.role == .user }.map(\.content))
+        else { return nil }
+        let workspace = self.workspace
+        let output: String? = await withTaskGroup(of: String?.self) { group in
+            group.addTask {
+                await MCPClientManager.shared.dispatchToolCall(
+                    serverConfig: server, serverIdentifier: server.name, toolName: "recall",
+                    arguments: ["query": query, "max_tokens": 1200, "budget": "low"], workspace: workspace
+                )
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(MemoryPrompt.recallTimeoutSeconds))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+        return output.flatMap(MemoryPrompt.usableRecall)
     }
 
     /// After three steps in a row that each made a single read-only call (and again at nine), tell the model
