@@ -295,7 +295,9 @@ public final class AgentStreamAccumulator {
     public func setBilled(prompt: Int, completion: Int, lastPrompt: Int? = nil) {
         // The last call's prompt is what the composer's Prompt shows once the box is empty. A
         // provider that reports nothing left it at zero, so it takes the estimate.
-        if let lastPrompt, message.promptTokens <= 0 { message.promptTokens = lastPrompt }
+        // The caller has already reconciled the provider's figure with the request's own size, so
+        // it wins over whatever the stream reported.
+        if let lastPrompt { message.promptTokens = lastPrompt }
         message.billedPromptTokens = prompt
         message.billedCompletionTokens = completion
         onUpdate(message)

@@ -94,6 +94,7 @@ final class AgentTurn {
     var lastStepPrompt = 0
     // What the composer's Sent / Recv show: reported usage, or an estimate where none came.
     var shownPromptTokens = 0
+    var previousShownStepPrompt = 0
     var shownCompletionTokens = 0
     var turnCompletionTokens = 0
     var identicalToolCounts: [String: Int] = [:]
@@ -111,6 +112,12 @@ final class AgentTurn {
     var warnedMcpStall = false
     /// Consecutive failures per (tool, arguments) pair, for `identicalFailureLimit`.
     var repeatedFailures: [String: Int] = [:]
+    /// Calls in a row that failed or found nothing, whatever they were. The identical-call checks
+    /// miss a model that keeps trying *different* things that all come back empty (a glob, then a
+    /// grep, then `psql`, then `docker`), and every one of those rounds re-sends the conversation.
+    var unproductiveStreak = 0
+    nonisolated static let unproductiveNudgeAt = 4
+    nonisolated static let unproductiveHaltAt = 8
     /// Failures on a path that does not exist, by (tool, path) — arguments other than the path
     /// ignored — with the last error text so a block can repeat its "Did you mean" hint.
     var missingPathFailures: [String: (count: Int, hint: String)] = [:]
@@ -127,9 +134,10 @@ final class AgentTurn {
     var roundExtensions = 0
     /// Successful tool calls in the step that just ran. A step whose calls all failed is not progress.
     var succeededCallsThisStep = 0
-    /// How many times a turn that hits its round cap while making progress is let through, so a
+    /// Round-cap extensions are off: a 25-round cap silently became 75 rounds, each re-sending the whole
+    /// conversation, and that is where the tokens went. The person presses Continue instead. Was: a
     /// 25-round setting means at most 75 rounds before the person is asked.
-    nonisolated static let maxRoundExtensions = 2
+    nonisolated static let maxRoundExtensions = 0
 
     init(
         session: Session,
@@ -280,6 +288,21 @@ final class AgentTurn {
             sessionId: session.id, cwd: workspace.folderPath, prompt: lastPrompt)
     }
 
+    /// Tools the loop itself relies on, kept whatever the agent's list says.
+    nonisolated static let alwaysAvailableTools: Set<String> = [
+        "recall_output", "tool_describe", "skill_load", "mcp_describe", "mcp_resources", "exit_plan_mode",
+    ]
+
+    /// The tools an agent may be sent. An empty list means no restriction.
+    nonisolated static func restrictToAllowlist(_ tools: [Tool], allowed: [String]) -> [Tool] {
+        guard !allowed.isEmpty else { return tools }
+        let names = Set(allowed.map { AgentRunner.canonicalToolName($0) })
+        return tools.filter {
+            alwaysAvailableTools.contains($0.name) || allowed.contains($0.id)
+                || names.contains(AgentRunner.canonicalToolName($0.name))
+        }
+    }
+
     /// The built-in tools that are switched on, and the MCP tools this agent may use.
     private func loadTools() async {
         planModeActive = loadedSettings.planModeEnabled
@@ -293,6 +316,9 @@ final class AgentTurn {
         disabledToolNames = Set(allCatalogTools.filter { !$0.isEnabled }.map { AgentRunner.canonicalToolName($0.name) })
             .subtracting(allCatalogTools.filter(\.isEnabled).map { AgentRunner.canonicalToolName($0.name) })
         _ = ToolSchemaCatalog.ensureParityTools(in: &availableTools)
+        // The agent's own tool list. It was only applied to sub-agents and MCP tools, so a main
+        // agent with 27 boxes ticked was still sent every built-in tool the workspace had on.
+        availableTools = Self.restrictToAllowlist(availableTools, allowed: agent.allowedToolIds)
 
         // Casual / inventory turns must not wait on npx cold starts.
         casualChat = MCPClientManager.isCasualChatPrompt(lastPrompt)
@@ -478,7 +504,7 @@ mcpPromptSummary = ""
         if !enabledSkills.isEmpty && !inventoryPrompt {
             let skillLines = enabledSkills.map { skill -> String in
                 let body = skill.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                let preview = body.isEmpty ? skill.description : String(body.prefix(160))
+                let preview = body.isEmpty ? skill.description : String(body.prefix(80))
                 return "- **\(skill.name)**: \(preview)"
             }
             skillsSection = """
@@ -674,6 +700,22 @@ mcpPromptSummary = ""
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .joined(separator: "\n")
         systemPromptWithTools = PromptCache.join(stable: stablePrompt, volatile: volatilePrompt)
+
+        // What every round of this turn re-sends before the conversation starts, in characters
+        // (about four to a token). Written to the audit log so a heavy turn can be traced to a
+        // section instead of guessed at.
+        AuditLog.shared.record(sessionId: session.id, event: "prompt_breakdown", fields: [
+            "system_chars": systemPromptWithTools.count,
+            "agent_prompt_chars": agent.systemPrompt.count,
+            "workspace_chars": workspaceSection.count,
+            "instructions_chars": instructionsSection.count,
+            "skills_chars": skillsSection.count,
+            "mcp_summary_chars": mcpPromptSummary.count,
+            "team_chars": teamSection.count,
+            "memory_chars": memorySection.count,
+            "tool_count": availableTools.count,
+            "tool_schema_chars": availableTools.reduce(0) { $0 + $1.description.count + $1.parametersJsonSchema.count + $1.name.count },
+        ])
     }
 
     // MARK: - One step
@@ -971,11 +1013,30 @@ mcpPromptSummary = ""
             + messagesForRequest.reduce(0) { $0 + $1.content.count }
             + availableTools.reduce(0) { $0 + $1.description.count + $1.parametersJsonSchema.count }
         let stepPrompt = snap.promptTokens > 0 ? snap.promptTokens : max(1, requestChars / 4)
-        shownPromptTokens += stepPrompt
+        // The headline number follows the same rule as the budget: on a local engine with a
+        // prefix cache, a step's reported prompt re-counts everything already cached, so summing
+        // them showed 1,000,000 "tokens" for a turn that read ~150K once.
+        if CompactionSummarizer.isLocal(provider.kind), previousShownStepPrompt > 0, stepPrompt >= previousShownStepPrompt {
+            shownPromptTokens += stepPrompt - previousShownStepPrompt
+        } else {
+            shownPromptTokens += stepPrompt
+        }
+        previousShownStepPrompt = stepPrompt
         shownCompletionTokens += snap.completionTokens > 0
             ? snap.completionTokens
             : TokenAccounting.estimate(accumulator.message.content + (accumulator.message.reasoning ?? ""))
-        accumulator.setBilled(prompt: shownPromptTokens, completion: shownCompletionTokens, lastPrompt: stepPrompt)
+        // What the composer's context warning reads: the size of this one request. A provider's
+        // figure more than twice what the request's own text can account for is a running or
+        // cached count, not the context, so the estimate stands in for it.
+        let estimatedContext = max(1, requestChars / 4)
+        let contextTokens = (snap.promptTokens > 0 && snap.promptTokens <= estimatedContext * 2)
+            ? snap.promptTokens : estimatedContext
+        AuditLog.shared.record(sessionId: session.id, event: "step_prompt", fields: [
+            "reported": snap.promptTokens,
+            "estimated": estimatedContext,
+            "shown_context": contextTokens
+        ])
+        accumulator.setBilled(prompt: shownPromptTokens, completion: shownCompletionTokens, lastPrompt: contextTokens)
         if turnPromptTokens + turnCompletionTokens > maxTurnTokens {
             accumulator.setHalt(
                 reason: "token_budget",
@@ -1122,6 +1183,13 @@ mcpPromptSummary = ""
         for queued in pendingCallsToExecute {
             let stop = await runCall(queued, prefetched: &prefetched, notesAfterResults: &notesAfterResults)
             if stop { return .endTurn }
+        }
+        if halted { return .endTurn }
+        if unproductiveStreak == Self.unproductiveNudgeAt {
+            notesAfterResults.append(ChatMessage(
+                sessionId: session.id, role: .user,
+                content: "[System] The last \(unproductiveStreak) tool calls all failed or found nothing. Stop searching: say what is blocking you, or change approach. Do not install software or retry variations."
+            ))
         }
         if let nudge = batchingNudge(for: pendingCallsToExecute) { notesAfterResults.append(nudge) }
         finishToolRound(notesAfterResults)
@@ -1356,10 +1424,10 @@ mcpPromptSummary = ""
         let repeatCount = (identicalToolCounts[signature] ?? 0) + 1
         identicalToolCounts[signature] = repeatCount
 
-        if repeatCount >= 12 {
+        if repeatCount >= 6 {
             accumulator.setHalt(
                 reason: "stuck_breaker",
-                text: "Identical tool call repeated 12 times (\(toolName)). Press Continue to resume with a new approach."
+                text: "Identical tool call repeated 6 times (\(toolName)). Press Continue to resume with a new approach."
             )
             halted = true
             return nil
@@ -1690,6 +1758,36 @@ mcpPromptSummary = ""
         }
     }
 
+    /// A call that got nowhere: it failed, or a search came back empty.
+    nonisolated static func isUnproductive(toolName: String, success: Bool, output: String) -> Bool {
+        if !success { return true }
+        let name = AgentRunner.canonicalToolName(toolName)
+        guard ["glob", "grep", "find_symbol", "workspace_semantic_search", "find_references"].contains(name) else {
+            return false
+        }
+        let head = output.prefix(200).lowercased()
+        return head.contains("no files match") || head.contains("no matches") || head.contains("0 results")
+            || head.contains("not found")
+    }
+
+    /// Ends the turn after a run of calls that all got nowhere. Any call that returns something,
+    /// or an edit, resets it. The person is told why and can press Continue to try another way.
+    private func trackUnproductiveStreak(toolName: String, outcome: CallOutcome) {
+        let productive = !Self.isUnproductive(toolName: toolName, success: outcome.success, output: outcome.output)
+        if productive || AgentRunner.changesFiles(toolName) {
+            unproductiveStreak = 0
+            return
+        }
+        unproductiveStreak += 1
+        if unproductiveStreak >= Self.unproductiveHaltAt {
+            accumulator.setHalt(
+                reason: "stuck_breaker",
+                text: "The last \(unproductiveStreak) tool calls all failed or found nothing, so this turn was stopped to avoid spending more on a dead end. Tell me what to try, or press Continue."
+            )
+            halted = true
+        }
+    }
+
     /// Milestones (the cheap moment to compact) and MCP calls that retrying will not fix.
     private func noteProgress(toolName: String, outcome: CallOutcome) {
         let resultOutput = outcome.output
@@ -1702,6 +1800,8 @@ mcpPromptSummary = ""
         ) {
             reachedMilestoneThisIteration = true
         }
+
+        trackUnproductiveStreak(toolName: toolName, outcome: outcome)
 
         // Track MCP failures that repeating will not fix. A model that keeps re-sending a
         // broken call burns the whole step budget without noticing.

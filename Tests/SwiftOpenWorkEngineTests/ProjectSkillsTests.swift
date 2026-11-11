@@ -161,7 +161,7 @@ final class ProjectSkillsTests: XCTestCase {
     func testGlobalPromptBlockSendsTheModelToSkillLoad() throws {
         try writeGlobal(".agents/skills/bama/SKILL.md", "---\nname: bama\ndescription: Router.\n---\n\nBody.")
         let block = ProjectSkills.globalPromptBlock(ProjectSkills.loadGlobal(homeDirectory: home))
-        XCTAssertTrue(block.contains("- **bama**: Router."))
+        XCTAssertTrue(block.contains("- bama: Router."))
         XCTAssertTrue(block.contains("skill_load"))
         XCTAssertFalse(block.contains("file:"), "a home path may not be readable with file_read")
         XCTAssertEqual(ProjectSkills.globalPromptBlock([]), "")
