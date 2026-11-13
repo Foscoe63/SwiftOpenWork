@@ -1,0 +1,242 @@
+# Features
+
+The full reference for what SwiftOpenWork can do. The [README](../README.md) has the short version.
+
+[Autonomous agents](#autonomous-agents) · [Control, trust and review](#control-trust-and-review) · [Group chats](#group-chats) · [Code intelligence](#code-intelligence) · [Local models & providers](#local-apple-silicon-mlx--providers) · [Schedules](#schedules--automations) · [Loops](#loops) · [Editor and preview](#editor-and-live-preview) · [Workspace & UX](#workspace-skills--desktop-ux) · [MCP servers](#mcp-servers)
+
+## Autonomous agents
+
+| | Capability |
+|:---:|---|
+| 🔁 | Multi-turn ReAct with **native tool / function calling** (OpenAI, Anthropic, Ollama, in-process MLX) plus markdown / XML fallbacks |
+| 📁 | Filesystem — `file_read` (paginated, numbered), `file_write`, `edit_file`, `multi_edit` (several edits, all or nothing), `file_list`, `file_copy`, `file_move`, `file_delete` |
+| 🔎 | Code search — `grep` (regex → `path:line: text`), `glob` (`**/*.swift`), `find_symbol` (declarations only), `search_workspace` (BM25 index) |
+| 🧠 | **Code intelligence** (language servers) — `go_to_definition`, `find_references`, `symbol_info` (type, signature, docs), `code_diagnostics` (errors for one file in seconds), `document_symbols` (outline), `call_hierarchy` (callers / callees). Answers come from the compiler's index, so `find_references` lists uses of *that* declaration, not every word that matches |
+| ✏️ | Refactor — `rename_symbol` renames through the language server where one applies (only references to that declaration change) and falls back to whole-word replacement otherwise, saying which ran; `dry_run` shows the hit list first |
+| 🔨 | Build & test — `build_project`, `run_tests` — commands are inferred for SwiftPM **and Xcode** projects/workspaces (shared scheme discovery included); failures come back as `file:line: message`, and `run_tests(only_failing: true)` re-runs just the ones that failed |
+| 🌿 | Git — `git_status`, `git_diff`, `git_log`. Committing stays yours *on your checkout*; the agent may commit only inside a worktree of its own, where history is additive and cannot rewrite yours |
+| ↩️ | Undo — `changed_files`, `revert_changes` restore everything a turn touched. Each session keeps its own undo window, so a Loop, automation or Shortcut run cannot erase a chat's checkpoints or revert its edits |
+| 💻 | Shell — `terminal_command` / `run_command` |
+| 🌐 | Network — `fetch_url`, `web_search` |
+| 💬 | Interaction — `ask_user`, `exit_plan_mode`, `todo_write` |
+| 👁️ | **Perception** — `screenshot_window` (see any running app's window), `accessibility_tree` (read it as text — cheap, and works with text-only models), `run_app` (launch it and report what happened) |
+| 🌍 | **Live preview** — `preview_start` (detect and run the dev server, or serve a static site), `preview_check` (reload and report console errors, failed requests, visible text and a screenshot — for any preview tab), `preview_logs`, `preview_stop` |
+| 🌿 | Isolation — `worktree_create`, `worktree_list`, `worktree_remove`, `worktree_merge`, `git_commit` (confined to agent worktrees) |
+| 🔀 | Pull requests — `pr_status` (the branch's PR and CI checks; with `include_failed_logs`, the failing job's log) and `pr_create` (pushes the branch and opens the PR; always asks), through the `gh` you are signed in with |
+| 🧮 | Utilities — `calculator`, `get_current_date`, `document_extract` |
+| 📝 | Documents — `document_create` writes Word, PDF, RTF, HTML and Excel files from Markdown or CSV |
+| 📧 | Optional Google — `gmail_*`, `google_calendar_*` |
+
+- **Tool calls are repaired, not rejected.** One layer maps the tool names and argument shapes models actually write (aliases, string-encoded JSON, text-format calls) onto the real tools. Approvals, plan mode and sub-agent path checks judge the *resolved* call, so an alias cannot get around them
+- **File tools fail closed.** `file_write` without content does not wipe the file, `file_delete` cannot remove the workspace, move/copy check the source first, and `edit_file` / `multi_edit` tolerate whitespace drift and say where a miss stopped matching
+- A shell command that times out, or that you stop with **Stop**, has its whole process tree killed — a 10-minute build no longer outlives the button. `terminal_command` takes `timeout_seconds` and `run_in_background` (the command runs in the app terminal and the turn carries on)
+- **No sampling penalties on tool turns.** Repetition, presence and frequency penalties push a model away from tokens it just wrote, but an edit has to repeat them exactly (`old_string` copied from the file, indentation, closing tags). Requests that offer tools on the in-process MLX, Ollama and OpenAI-compatible paths send neutral penalties; plain chat keeps yours
+- Full JSON parameter schemas via `ToolSchemaCatalog` (critical for local-model tool use)
+- **Workspace context** in the system prompt — path, project type, layout, git branch and dirty count
+- **Per-repo instructions** — `SWIFTOPENWORK.md` / `AGENTS.md` / `CLAUDE.md` at the workspace root (`OPENWORK.md` from 1.1 is still read)
+- **Inline diffs on the tool card** — an edit shows `+N/−N` where it claims to have edited something, and the changed lines with context when you expand it. Stored with the transcript, so it is still there after a relaunch
+- **Turn-change review** — a footer appears when a turn touched files; per-file diffs (side-by-side or unified), revert one or all. A session-wide view lists everything the session touched, with git's diff
+- **Restore files to any point in the conversation** — right-click a message → *Restore Files to Before This Turn*. Checkpoints are sealed on disk per turn, survive quit/relaunch, and the sheet names every file it will rewrite or delete before it touches anything. The agent's own `revert_changes` stays scoped to the current turn: a person choosing a point in their own transcript is doing something different from an agent silently rewinding ten turns of work
+- **Live command output** — a build or test run streams into the tool card and the terminal panel while it runs, instead of showing nothing until it exits
+- **Menu bar monitor** (optional, off by default) — memory gauge, loaded models with unload, background runs. Inspector tabs can open in their own windows (Cmd-Opt-D), and local models show quantisation variants judged against free memory
+- **Fork a conversation** from any message — right-click it. The branch is the conversation only: files the discarded turns changed are still on disk, and the fork says which
+- **`/compact`** folds old tool results and digests the middle of the transcript on demand; the visible chat is untouched. Automatic compaction always keeps the request being worked on, and its threshold is your setting (default 64K tokens) capped at 70% of the model's window, so small local models compact before they overflow. With Claude Code as the agent, `/compact` (and the **Compact** button on the context warning) goes to Claude Code itself, which summarises its own conversation; other external agents manage their own context
+- Context compaction keeps a factual digest of what dropped turns did (files edited, commands run, failures), so a long session does not forget its own work. It fires at *milestones* — a green test run, a clean tree — as well as on token pressure, so it trades detail for room when history is most disposable
+- **Shortcuts & Siri** — "Ask SwiftOpenWork" and "Run Automation" App Intents run the same agent loop. Approvals are refused rather than awaited when nothing is on screen to grant them, and the result reports what it skipped
+- **Plan mode** (read-only tools + `exit_plan_mode`)
+- **Approval switch under the prompt box** — **Ask / Safe / Allow / Allow All**, for whichever agent is selected. *Ask* waits for you on every shell command; *Safe* runs read-only commands and blocks the rest; *Allow* runs shell commands freely while file edits, MCP writes and app launches still ask; *Allow All* asks about none of those. Reading secret files, leaving plan mode and the fetch-site policy keep asking even under Allow All. The same setting is Settings → Advanced → Safety Level
+- **Turn token budget** — a **Budget** menu beside the switch (250K / 500K / 1M / 2M / 5M / 10M / No limit), mirrored in Settings → Advanced (*Limit Turn Tokens*, any value from 100K). A turn that passes it halts with a Continue prompt; with the limit off it never does. For Claude Code the app reads its transcript every few seconds during the turn and cancels it when the cost-weighted total (cache reads at a tenth, output at five times) passes the budget; other external agents report nothing the app can read, so they are not metered
+- **OS-level shell sandbox** — `run_command` runs under macOS Seatbelt, so writes outside the workspace (and optionally non-loopback network) are refused by the kernel rather than by command-text checks. On by default (`workspaceWrites`); a single plain `xcodebuild` / `swift build|test|run|package` is exempt because macOS refuses a sandbox inside a sandbox
+- **Interactive commands** — `terminal_command` with `interactive: true` runs in a visible PTY terminal; `send_input` types text, presses keys or ends the session, and is gated like a command
+- **Fewer rounds per task** — the agent is nudged to batch independent reads into one step, the build/test commands found in the project (`Package.swift`, `project.yml`, `package.json`, …) are put in its prompt so it does not probe for runners, and it states its scope in three lines before editing. A turn that is still making progress when it reaches the round cap gets up to two extra windows automatically; the cap itself is now 1–200 (Settings → Advanced)
+- **Project memory** — before each turn the Hindsight MCP server (when connected) is recalled for the request and the hits go into the prompt; `memory_store` with `scope: "project"` writes to `.swiftopenwork/memory.md`, which is loaded every turn (only in trusted workspaces) and updated in place by key
+- **ai-memory** — agent lifecycle is forwarded to [ai-memory](https://github.com/akitaonrails/ai-memory) for automatic capture, and its handoff is injected into the system prompt
+- **Hybrid search** — `search_workspace` fuses BM25 with semantic vectors from a small on-device MLX encoder, downloaded only when you ask for it in Settings; BM25 alone is the fallback
+- Approval gates for destructive / MCP write actions. MCP read/write classification is **fail-closed**: a tool is a read only when a known server advertises it and it is absent from that server's write list, so unknown servers ask. Expect more prompts than a name-prefix heuristic would produce — that is the point
+- **Sub-agents** — the lead delegates with `agent_spawn`; several spawns in one step run at the same time (up to 4, one at a time on a local model), each in its own worktree, and the lead can ask for more steps (`max_steps`) or a reasoning level (`effort`). Sub-agents think as hard as the lead unless told otherwise. `agent_message` reaches a running agent at its next step, or waits for its next run in the same chat. `worktree_merge` brings a sub-agent's branch into your checkout, as uncommitted edits by default (`apply`) or as a merge commit on a clean checkout (`merge`), and always asks first. Spawns and messages also show in the Side Inspector
+- **Sub-agent isolation** — a sub-agent's shell writes, and `cd` or `git -C` outside its worktree, are refused at any approval level; its report leaves out your own pending edits and follows renames, and dependency caches are cloned into the worktree. Plan mode refuses non-read MCP calls, `agent_spawn` and `send_input`
+- **Anthropic prompt caching** — cache breakpoints on the tools, the system prompt and the last message, with volatile git status and the handoff placed behind the cache boundary, so a long Claude session pays for its prefix once. Failed tool results are sent with `is_error`
+- **Least-privilege agents** — every built-in agent gets Hindsight recall and retain by tool name (reflect only for lead, research, architect and security), never the whole server. New agents start from a minimal tool and skill baseline, and the agent editor can grant single MCP tools
+
+## Control, trust and review
+
+- **Permission rules** — `.swiftopenwork/permissions.json` (and `~/.swiftopenwork/permissions.json` for every project) allow, ask or deny individual calls by tool and pattern: `"allow": ["terminal_command(git status*)"]`, `"deny": ["file_*(**/.env*)", "terminal_command(rm -rf *)"]`. Deny beats ask beats allow. An allow never covers a chained command (`a; b`, `a && b`, pipes, redirects, `$(…)`), and never lifts the guards on secret files, plan mode or new sites; an ask rule survives *Allow All*. Enforced where every tool call passes, so sub-agents and parallel calls cannot route around a rule. The approval card offers **Always allow `git status *`** and writes the narrowest rule that covers the call (a chained line is remembered exactly)
+- **Hooks** — commands the app runs at fixed points, in Claude Code's file format (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`; exit 2 blocks and its stderr goes to the model; JSON on stdout can add context). A project's hooks are code that arrives with a checkout, so they do not run until you trust that exact file (Settings → Advanced → Permission Rules & Hooks); editing the file withdraws the trust
+- **Audit log** — one JSON line per event in `audit/<chat>.jsonl` under the app's data folder: each turn, and each tool call with who allowed it (automatic, approved, rejected, refused-unattended, denied by rule, blocked by hook), its outcome and duration. Secrets are scrubbed before they are written
+- **Interrupted turns resume** — a turn the app quit during comes back with a Continue button instead of a silent spinner, and its half-run tool calls are marked interrupted
+- **Steer** — a message typed while the agent is working is queued (several are joined); **Steer** stops the agent where it is and sends them now. What it already did stays
+- **Pull requests and CI** — `pr_status` (the branch's PR, its checks, and with `include_failed_logs` the failing job's log) and `pr_create` (pushes the branch and opens the PR; always asks), through the `gh` you are already signed in with. A chip above the composer shows the PR and CI state with **Fix CI**
+- **Review comments** — click a line number in the side-by-side diff to comment; **Send to agent** delivers the batch as one message, grouped by file
+- **Spend limit** — alongside the token budget, a dollar limit priced from the model's own rates (Settings → Advanced). Local models are free, so it never stops them
+- **Project trust** — a project's `AGENTS.md`, `CLAUDE.md` and skills are read only after you have seen what is there ("This project has AGENTS.md and 2 skills"). Trust covers the *sources*, not their wording, so a typo fix does not ask again but a new skill does. Projects already open when this arrived are acknowledged as they stand
+- **Documents** — `document_create` writes Word, PDF, RTF, HTML and Excel files from Markdown or CSV, with nothing to install
+- **External agents (ACP)** — run Claude Code, Codex, Gemini CLI, OpenCode, Goose or any Agent Client Protocol agent as a chat agent (Settings → Advanced → External Agents). They keep their own models and sign-ins; permission requests are answered by your rules and approval level, files they read or write go through the workspace boundary and undo checkpoints, and Stop sends `session/cancel`. Their own tools run in their process, so hooks and the shell sandbox cannot see those
+- **Keeping external agents cheap** — Claude Code through ACP makes a model call per tool step and re-sends its whole context each time, so it can use an allowance far faster than a chat. Per agent, in Settings → Advanced → External Agents:
+  - **Model** — every agent has a picker, filled from the models the agent reports once it has started a session. Claude Code defaults to **Sonnet** (its own default is Opus); the app sends `session/set_model` after the session starts, and an agent that does not support it just keeps its default
+  - **Lean** (Claude Code) — starts the session with only the project's settings, so your global MCP servers, skills, plugins and user-level `CLAUDE.md` are not re-sent on every step; also strict MCP config and no notebook tool. Turn it off for an agent that needs them
+  - Tighter Claude Code limits: it auto-compacts at 60% of its window, shell output is capped at 15,000 characters and MCP output at 10,000 tokens, and its non-essential background model calls are off. Anything set in the agent's own environment wins
+  - Auto-continue stops after 2 in a row for external agents (4 for the built-in loop)
+  - **Usage** is shown cost-weighted: cache reads count a tenth, cache writes 1.25×, output 5×. The composer's *Sent* and the Claude Code Usage card lead with that figure and show the raw total beside it
+  - A **context warning** appears above the composer once the last prompt passes 100K tokens (with *New chat* and, for Claude Code, *Compact*), and a note when a large chat has been idle past the ~5-minute prompt-cache lifetime, since the next message then pays to re-send all of it
+- **Local model API** — Settings → Advanced → Local Model API serves the model loaded here as an OpenAI (`/v1/chat/completions`) and Anthropic (`/v1/messages`) endpoint on `127.0.0.1`, so Claude Code, Codex, OpenCode or a script can use it without loading a second copy. A bearer key on every request, no browser access (`Origin` and non-loopback `Host` are refused), local models only unless you opt in
+- **Evals** — `Evals/` holds small coding tasks scored by a command; run them through the real agent loop against any OpenAI-compatible endpoint and compare two runs (see `Evals/README.md`)
+- **Recurring jobs can keep their conversation** — an automation can continue its last chat each run instead of starting fresh
+
+## Group chats
+
+Put two or more agents in one conversation: **Work with an agent → Start a group chat** on an empty chat, or the 👥 button beside **+** in the sidebar's session list. The chat belongs to the active workspace like any other, so the project's folder, `AGENTS.md`/rules and skills apply to the whole room, and it appears in that workspace's session list with a 👥 icon. Each reply carries its author's name and avatar, and each agent reads the others' replies as `[Name]: …`.
+
+Who speaks is decided by what you type:
+
+| You write | What happens |
+|---|---|
+| a plain message | everyone takes a turn, **one at a time, with tools**. Each is told to build on what teammates already did and skip what they covered, so they never edit at once and rarely repeat each other |
+| `@Coder, plan the stack` | only Coder acts. Name several (`@Coder … @Reviewer …`) and they act in the order you mention them |
+| `@others` / `@all` | the rest revise **their own** plans in light of it, without tools — they are not asked to do the named agent's job |
+| `!@Marketing` | Marketing sits this one out, wherever the `!@` appears |
+
+- **Handoffs.** When an agent you named `@mentions` a teammate in its reply ("@Reviewer please check the API shape"), that teammate acts next, with tools. Only agents you named can hand off, each agent speaks at most once per message, and a message allows three handoffs, so a chain cannot run away. `!@name` still holds. A teammate you had queued to re-plan is promoted to acting rather than speaking twice.
+- **Room option.** The roster bar's *others re-plan* switch does the `@others` step for you whenever you name one agent. Clicking a name in the bar inserts its `@mention`; typing `@` in the composer offers the room.
+- **Continue** (the button and auto-continue) goes to the agent that stopped, not to the whole room.
+- Every agent uses the chat's selected model and provider. The agent picker in the composer is replaced by *Group · N agents*.
+
+## Code intelligence
+
+The code-intelligence tools run real language servers, started on first use and kept running per project (stopped after ten idle minutes):
+
+| Language | Server | Project root it needs |
+|---|---|---|
+| Swift, C, Objective-C (packages) | `sourcekit-lsp` from Xcode | `Package.swift`, `compile_commands.json` or `buildServer.json` |
+| Swift / Objective-C (Xcode projects) | `sourcekit-lsp` + [`xcode-build-server`](https://github.com/SolaWing/xcode-build-server) | run `setup_xcode_language_server` once |
+| C / C++ | `clangd` | `compile_commands.json`, `compile_flags.txt` or `.clangd` |
+| TypeScript / JavaScript | `tsc --lsp` (TypeScript 7+) or `typescript-language-server` (TypeScript 5–6) | `tsconfig.json`, `jsconfig.json` or `package.json` |
+| Python | `basedpyright` or `pyright` | `pyproject.toml`, `setup.py`, `requirements.txt`, … |
+| Rust / Go | `rust-analyzer` / `gopls` | `Cargo.toml` / `go.mod` |
+
+- **No root, no answer.** Without a project root a server answers from the open file alone, which looks complete. The tools refuse instead, and say what is missing or how to install the server
+- **Never a partial index.** Index-backed answers wait for indexing to finish (`workspace/synchronize` for sourcekit-lsp); a timeout is an error, not a short list. The tool card shows indexing progress while it waits
+- **Errors come back with the edit** — after `file_write`, `edit_file` or `multi_edit`, a server that is already running for that file adds its verdict to the tool result ("sourcekit-lsp reports 1 error in …", or "no errors"), so a model that skips checking still sees the error it just made. It never starts a server or waits for an index: the check is capped at 4 seconds and reports errors only
+- **Kept in step with the disk** — edits from tools, the terminal or another editor reach the server through FSEvents; a crashed server is restarted and the answer says so
+- **Xcode projects** — `setup_xcode_language_server` (asks for approval) writes `buildServer.json` and builds the scheme once. xcode-build-server does not index, so answers state how old the last build's index is and which files changed since, and a compiler rename refuses while the index is stale. Keep `buildServer.json` out of git: it holds absolute paths
+- Renames check every edit lands on the old name before writing anything, and restore already-written files if a write fails
+- Clean chat UX: leaked model thinking moves to **Reasoning**, approvals sit **below** the answer, routine MCP status chips stay out of the way
+
+## Local Apple Silicon (MLX) & providers
+
+- **Local Models** tab (On Device / Catalog) for MLX discovery and selection
+- Built-in Apple Silicon path (`NativeMLXService` / `LocalMLXEngine`) with real `ToolSpec` + `streamDetails` tool calls
+- **The system prompt is in the context once.** `ChatSession` re-sends its `instructions` on every call, so a reused session used to append the whole system prompt — tool schemas, workspace context — again on every turn and every tool round. Measured on Ornith-1.5-35B, turn two of a chat prefilled 499 tokens to add a six-word message; it now prefills 14
+- **Shared fairly** — chat turns, automations, Shortcuts and parallel sub-agents take turns on the one in-process model, first come first served. A queued turn says what it is waiting for, and the chat header names any background run. Two conversations keep their own KV caches, so taking turns does not re-prefill both
+- **Honest numbers** — the context meter shows the real window in use for local models (cached prefix included), each reply shows its measured decode speed, and multimodal checkpoints report the context window they actually declare (262k for Ornith and Qwen3.6, not a 131k fallback). Unloading a model now actually frees its memory
+- **KV cache reuse** — a continued conversation is appended to the live `ChatSession` rather than re-prefilled. Measured on a 48B model, time-to-first-token goes from 1.5s at three messages and climbing ~0.67s per exchange, to a flat 0.9s. Any rewrite of earlier history (compaction, a fork) rebuilds instead, because a cache describing text no longer in the conversation would keep steering the model invisibly
+- Optional servers: oMLX, mlx_lm, Osaurus, Ollama, LM Studio, and [Splash](https://github.com/incoai/splash) — **managed automatically**, the same "no terminal" experience as the built-in MLX engine: SwiftOpenWork detects the `splash` binary, installs it with Homebrew on request, launches `splash serve` for the selected model and restarts it on a model change (it pins one model per process, so there is no in-place swap; needs an M3+ Mac with 36 GB+). LM Studio and llama.cpp each use their own configured URL, so they can run side by side with Splash
+- Cloud & remote: OpenAI-compatible, Anthropic (Claude 5 models use adaptive thinking; thinking blocks are kept across tool rounds), Groq, OpenRouter, DeepSeek, Mistral, Gemini, custom endpoints
+- **Retries and honest failures on every HTTP provider** — a 429/502/503/504/529 is retried with backoff (honouring `Retry-After`), while a malformed request or bad key fails immediately with the response body attached instead of a bare status code; a reply cut off by the max-token limit or a refusal says so inline rather than surfacing as a JSON-parsing error
+- Provider probing, model listing, Keychain-backed API keys
+- **Text-only conversions of multimodal checkpoints load.** A config can declare an image pathway while the converted weights have no vision tower (distilled and re-quantised Qwen3.5/3.8 MoE uploads ship this way). Vision is now chosen from the weights as well as the config, so such models load through the text path instead of failing and sitting out the retry cooldown, are not badged as image-capable, and a cooldown message now carries the original load error
+
+## Schedules & automations
+
+- Five triggers, all of which fire: **manual**, **scheduled**, **on app launch**, **on new
+  session**, and **on changes in a watched folder**
+- Schedules are read by `AutomationSchedule` — `Daily at 6:00 AM`, `Every 30 mins`,
+  `Weekly on Monday at 8am`, `Monthly on the 1st`, or a five-field cron expression
+  (`0 9 * * 1-5`). A string it cannot honour **never fires and says so on the card**, rather than
+  rendering a next-run time nothing will keep
+- A run that was missed while the app was closed fires **once** on the next launch, not once per
+  slot missed
+- Scheduled runs go through the same headless path Shortcuts uses: recorded as a real session you
+  can open and audit, and approvals are refused rather than awaited when nobody is watching
+- Create / edit / Run Now / History / Export / Pause / Resume / Delete
+- Watch folders with filesystem triggers and artifact synthesis
+
+## Loops
+
+A different shape of automation from the above: not one prompt on a schedule, but a **multi-step,
+self-verifying workflow** the agent runs against a workspace until it actually passes.
+
+- Each step is a work prompt, an optional shell command that checks the result, and an optional
+  check turn — a failed check retries the step (up to its own attempt limit) before the loop
+  advances
+- An optional **goal check** runs after the last step; failing it sends the loop back to pass 1,
+  up to a configured number of passes
+- Runs on a simple minutes interval, or on demand from the Loops sidebar — Run / Stop per loop,
+  with live per-step status and a link into the underlying session to read exactly what happened
+- Backed by the same headless execution path as Automations and Shortcuts, so tool use, approvals
+  and sandboxing behave identically — a loop is not a separate, less-audited way to run the agent
+- A loop interrupted by quitting the app is recovered as "did not finish" on next launch, not left
+  showing a spinner for a run that no longer exists
+
+## Editor and live preview
+
+- **Code editor** in the inspector (⇧⌘E) and in Artifacts & Files — tabs, syntax highlighting for 20+ languages (strings and comments are lexed properly, so a `//` inside a string stays a string), line numbers, current-line highlight, find (⌘F), go to line (⌘L), toggle comment (⌘/), indent and outdent (⌘] / ⌘[), auto-indent that opens `{}` pairs, and **Tab completion** from the file's own words, the workspace's declarations and the language's keywords. After a typing pause, **ghost-text** from the idle local model (never queued behind an agent turn, never swapping the resident checkpoint). **⌘-click** a name to jump to its declaration; ⇧⌘O opens any workspace file
+- **Files tab in the inspector** — the workspace's real file/folder tree (folders included, not just a flat file list), alongside Editor/Preview/Tools. New File, New Folder and Delete in its toolbar, and a click opens the file in the inspector's Editor tab. Create and delete resolve through the same workspace-boundary check the `file_write`/`file_delete` tools use, so nothing in the tree can create or delete outside the workspace root or remove the root itself
+- **Inline AI suggestions** — pause typing and the model proposes the rest of the line (or the block it opens) as grey ghost text; ⇥ accepts it as one undo step, esc or moving the cursor dismisses it, and typing what it says keeps the rest. Measured on Ornith-1.5-35B: about 0.8–1.1s per suggestion once the model is loaded. It never waits in line: when an agent turn or automation holds the local model, no suggestion is made. By default it uses your chat model only when that runs on this Mac; a cloud model is used only if you pick one (editor status bar or Settings)
+- **Built for an agent editing the same files.** A clean tab follows the agent's writes and says it reloaded. A tab with unsaved edits is never overwritten: a banner offers Compare, Take Disk Version or Keep Mine, and Save refuses until you choose. Line endings (LF/CRLF) and indentation are kept as the file had them. The composer warns when a file has unsaved edits, because the agent reads what is on disk
+- **Everything opens where you are** — build and test errors, `+N/−N` diffs on tool cards, and console errors from the preview open the file at the line
+- **Live preview** (⇧⌘P) — detects how to run the project (`package.json` dev script with npm/pnpm/yarn/bun, Django, Rails, Hugo, Jekyll, or a static `index.html`, which the app serves itself with no toolchain), starts it with your login shell's PATH so nvm and Homebrew Node are found, waits until it answers, and shows it. Address bar, back/forward, phone/tablet/laptop widths, reload on file change for static sites (dev servers keep their own hot reload)
+- **Several previews at once** — up to six tabs, each with its own page, history, console and viewport, shown one at a time, side by side or stacked (Preview menu, ⌥⌘T for a new tab). Starting a second server opens a new tab instead of replacing the first page; Duplicate Tab puts the same page beside itself to compare a phone and a desktop width
+- **Console that reaches you** — console output, uncaught exceptions, unhandled rejections, failed `fetch`/XHR requests and missing scripts are captured per page load, with a badge, links from stack traces into the editor, and **Ask Agent to Fix**. The server log sits beside it. Stopping a server stops every process it started, and quitting the app stops them all
+- **Point at what you mean** — the cursor button on the preview toolbar highlights whatever is under the pointer. Clicking picks the element instead of pressing it, and puts its selector, text, HTML and a cropped screenshot into the message box for you to say what to change. Esc cancels
+- **Screenshot to chat** — the camera button attaches a picture of the page exactly as it looks
+- **The agent sees the same page**: `preview_check` reloads, waits for the page to settle and returns what went wrong plus a screenshot, even when the pane is not on screen. Starting a server asks for approval like any shell command; checking a page does not
+
+## Workspace, skills & desktop UX
+
+- **A new chat suggests what fits the workspace** — ideas to build in an empty folder; for a web, Swift or Python project, *explain it*, *run it and check it* (the preview, a build and a screenshot, or a run with tests), *find and fix a bug* and *add tests*
+- **Command palette (⌘K)** — every command with its shortcut, workspace files, chats, agents and settings in one fuzzy-ranked list (initials work: `fip` → Find in Project), driven from the keyboard, recently run commands first. `>` narrows to commands, `@` jumps to a declared symbol, `:42` goes to a line in the open file
+- **Find in Project (⇧⌘F)** — above the editor: match case, whole word, regex, include/exclude globs; results grouped by file with the match highlighted, and clicking selects it in the editor. Open files are searched as shown, unsaved edits included. Replace All opens each file in the editor with the change unsaved and one undo step, so nothing reaches disk until you save
+- Workspace switcher on the chat header (synced with the sidebar), with **Open Existing Project...** to register a folder already on disk — reopening the same checkout switches to the workspace you already have rather than adding a second one — and **Remove Workspace**, which drops it from the app and leaves the folder untouched
+- Enabled **Skills** injected into the agent system prompt
+- **Project skills** — a repository can carry its own skills in `.swiftopenwork/skills/<name>/SKILL.md`, loaded only while that workspace is active and re-read from disk every turn, so they are edited with the code and reviewed in a pull request. Optional `name` / `description` / `enabled` front matter; Settings -> Skills & MCP lists what the active project carries and creates the folder. `.openwork/skills` and `.claude/skills` are read too
+- Extensions, prompt templates, slash commands (`/clear`, `/agent`, `/model`, …)
+- Local RAG (Accelerate), PDF/Vision extract, live canvas, diffs, terminal, voice STT/TTS
+- **Window state persistence** — frame, sidebar & inspector widths, open/closed inspector, navigation destination, settings tab, last workspace & session survive quit/relaunch
+- **Vibe coding loop** — sticky plan todos from `todo_write`, Plan mode chip / `/plan`, queue a follow-up while the agent is still generating (Stop keeps what you typed), live turn-change review, clickable `file:line` diagnostics, and a project Rules editor for `SWIFTOPENWORK.md`
+- **Composer input** — `@file` and `@folder` completion, `@path:line` to paste a focused, numbered excerpt around a line, `@path:first-last` for exactly those lines (what **Mention in Chat** sends for an editor selection), and drag-and-drop or paste of files and images straight into the box
+- **Start from a template** — a new workspace can start empty or as a static site, a React (Vite) app, a SwiftUI Mac app or a Python script, each with an `AGENTS.md` that tells the agent how to run and check that kind of project. A new or empty folder also gets a `.gitignore`, `git init` and a first commit, so diffs, worktrees and commits work from the start. A folder that already has files is left as it is
+- **Commit from the app** — *Changes this session* has **Commit…**: a checkbox per file and an editable message. Only the session's files are committed, and anything else you had staged stays staged. The agent still cannot commit on your checkout
+- **Lean tool output** — one tool result adds at most 24,000 characters to the transcript (head and tail kept), `file_read` returns at least 200 lines per call (it says how to continue) and takes `ranges` to read several slices in one call, and old tool results fold away once the transcript fills 30% of the model's window. Every later step re-sends whatever is still in the transcript, so these limits are most of what a long session costs
+- **Context meter** — the last turn's real prompt-token count against the model's window, shown beside the composer once it passes half full, amber and then red as compaction gets close. The provider's own number — and when that number is impossible (larger than the window, or far above what the transcript holds) the meter says so and shows a marked estimate instead
+- **Finished-turn notifications** — a chime plus a banner naming the session, only when the app is in the background and only for turns long enough to have walked away from. A turn that *failed* is announced however short it was
+
+## MCP servers
+
+SwiftOpenWork speaks the [Model Context Protocol](https://modelcontextprotocol.io) with a Radiant-inspired client that prefers **failing soft** over freezing chat.
+
+| | Behavior |
+|:---:|---|
+| 🔌 | Official MCP Swift SDK stdio client (`MCPSDKSession`) + hand-rolled pipe fallback |
+| 🏷️ | Live tools injected as `mcp__{serverId}__{toolName}` |
+| ⚡ | Cache-first discovery; background warm-up — chat is **not** blocked on every `npx` cold start |
+| ⏱️ | Real deadlines that kill hung connects (structured cancel alone is not enough) |
+| 🧭 | Server/tool routing refuses ambiguity — a name two enabled servers could answer is an error naming both, never a guess |
+| 🧱 | Failed calls come back classified, with a recovery hint. Transient failures retry once; a rejected token or protocol mismatch does not |
+| 🎚️ | Per-tool switches under each server, so you can enable a server without enabling everything on it |
+| 📋 | “What MCP servers are available?” answers from config + live status — **no tool thrash** |
+| 🩺 | Settings → Skills & MCP shows connected / error / tool counts; **Test** probes a server |
+| 🪶 | Past 12 tools a server's tools are listed by name only, and `mcp_describe` loads the full schema of the ones the model picks, so a large server does not eat the prompt. `mcp_resources` reads a server's resources and prompts; images a tool returns are saved and attached, embedded resource text is kept, and a `tools/list_changed` notice refreshes the list |
+| 🔒 | Stock servers ship **disabled** — enable only what you trust |
+| 🌍 | Remote MCP over **Streamable HTTP** — a real `initialize` handshake, session-id tracking, `text/event-stream` replies, and `isError` results surfaced as failures, not silent successes. Clearer 401 messaging and an optional bearer token (`MCP_TOKEN` / headers); a server that still only speaks the older SSE transport gets a message saying so instead of a bare 404/405 |
+
+### Dispatcher servers and catalog promotion
+
+Some servers — [MacUse.app](https://macuse.app) among them — advertise only two meta-tools,
+`get_tool_definitions` and `call_tool_by_name`, with the real work hidden behind them. Asking a
+model to hand-nest every call through a dispatcher is exactly what local models get wrong.
+
+So the catalog is **promoted**. When a listing comes back, its entries become directly callable
+tools with real schemas for the rest of the turn, and the model is told they are available:
+
+```
+macuse.get_tool_definitions   →  64 tools harvested, 13 of them mail_*
+macuse.mail_list_accounts     →  called directly, not wrapped
+```
+
+No sequence is hardcoded and no workflow is special-cased — the model picks the tool. Write
+actions still route through the same approval gate as anything else, classified by the *nested*
+target rather than the dispatcher's name, because `call_tool_by_name` is a read when it lists
+mailboxes and a write when it sends mail.
+
+> Tip: keep MacUse.app installed and grant Accessibility / Automation when you need write tools.
+> For mail reads, Mail.app can stay closed if MacUse uses its local DB path.
