@@ -51,9 +51,28 @@ public enum ContextCompactor {
             guard foldSet.contains(i) else { return m }
             var copy = m
             let preview = String(m.content.prefix(180)).replacingOccurrences(of: "\n", with: " ")
-            copy.content = "[Earlier tool result compacted] \(preview)…"
+            copy.content = "[Earlier tool result compacted] \(preview)…" + declarationOutline(of: m.content)
             return copy
         }
+    }
+
+    /// For a folded file read, the names it declares, so the model can ask for the right lines
+    /// instead of reading the whole file again. Empty for anything that is not a numbered file read.
+    static func declarationOutline(of content: String, limit: Int = 14) -> String {
+        guard let firstLineEnd = content.firstIndex(of: "\n"),
+              content[..<firstLineEnd].contains(" lines") else { return "" }
+        var found: [String] = []
+        for line in content[firstLineEnd...].split(separator: "\n") where found.count < limit {
+            guard let tab = line.firstIndex(of: "\t"), Int(line[..<tab].trimmingCharacters(in: .whitespaces)) != nil else { continue }
+            let number = line[..<tab].trimmingCharacters(in: .whitespaces)
+            let code = line[line.index(after: tab)...]
+            let trimmed = code.trimmingCharacters(in: .whitespaces)
+            let words = trimmed.split(separator: " ")
+            let keywords: Set<String> = ["func", "struct", "class", "enum", "protocol", "extension", "actor", "def", "function", "interface", "type"]
+            guard let kw = words.firstIndex(where: { keywords.contains(String($0)) }), kw <= 3 else { continue }
+            found.append("\(number):\(trimmed.prefix(60))")
+        }
+        return found.isEmpty ? "" : " Declarations: " + found.joined(separator: "; ") + ". Re-read only the lines you need (offset/limit)."
     }
 
     /// Fraction of the context window the transcript must fill before old tool results are

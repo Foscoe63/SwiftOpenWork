@@ -1133,9 +1133,35 @@ public final class AgentRunner {
               modificationDate(path) == earlier.modified,
               let result = transcript.last(where: { $0.role == .tool && $0.id == earlier.callId }),
               !result.content.hasPrefix("[Earlier tool result compacted]") else { return nil }
-        return "Unchanged since you read it at step \(earlier.step) of this turn — the full result of that read is "
+        let when = earlier.step < 0 ? "earlier in this conversation" : "at step \(earlier.step) of this turn"
+        return "Unchanged since you read it \(when) — the full result of that read is "
             + "above and is still current. Use it instead of reading the file again; to see other lines, "
             + "pass a different offset/limit."
+    }
+
+    /// Reads from earlier turns whose full result is still in `transcript` and whose file has not
+    /// been modified since, so a resumed turn does not read them again. `step` is -1 for these.
+    public nonisolated static func seedReadLog(
+        transcript: [ChatMessage],
+        workspaceRoot: String
+    ) -> [String: RecordedRead] {
+        var results: [String: ChatMessage] = [:]
+        for m in transcript where m.role == .tool { results[m.id] = m }
+        var log: [String: RecordedRead] = [:]
+        for m in transcript where m.role == .assistant {
+            for call in m.toolCalls where canonicalToolName(call.toolName) == "file_read" {
+                guard let result = results[call.id],
+                      !result.content.hasPrefix("[Earlier tool result compacted]"),
+                      !result.content.hasPrefix("Unchanged since"),
+                      !result.content.hasPrefix("Error"),
+                      let path = readTarget(argumentsJson: call.argumentsJson, workspaceRoot: workspaceRoot),
+                      let modified = modificationDate(path),
+                      modified <= call.timestamp else { continue }
+                log[callSignature(call.toolName, call.argumentsJson)] = RecordedRead(
+                    callId: call.id, modified: modified, step: -1)
+            }
+        }
+        return log
     }
 
     /// The absolute path a `file_read` call targets.
