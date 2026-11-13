@@ -196,15 +196,30 @@ extension ToolExecutionEngine {
         let startTime = call.startTime
         let requested = (dict["name"] as? String ?? dict["skill"] as? String ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let skills = PersistenceManager.shared.loadSkills().filter { $0.isEnabled && $0.isAllowed(by: currentAgent.allowedSkillIds) }
-            + ProjectSkills.load(workspacePath: workspace.folderPath).filter { $0.isEnabled && $0.isAllowed(by: currentAgent.allowedSkillIds) }
-            + ProjectSkills.loadGlobal().filter { $0.isEnabled && $0.isAllowed(by: currentAgent.allowedSkillIds) }
-        guard !requested.isEmpty,
-              let skill = skills.first(where: { $0.name.lowercased() == requested })
-                ?? skills.first(where: { $0.name.lowercased().contains(requested) }) else {
+        let everySkill = PersistenceManager.shared.loadSkills()
+            + ProjectSkills.load(workspacePath: workspace.folderPath)
+            + ProjectSkills.loadGlobal()
+        let skills = everySkill.filter { $0.isEnabled && $0.isAllowed(by: currentAgent.allowedSkillIds) }
+        // `_new-mac-app` and `new-mac-app` are the same skill to anyone typing a name.
+        func normalized(_ name: String) -> String {
+            name.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "_- "))
+        }
+        let key = normalized(requested)
+        guard !key.isEmpty,
+              let skill = skills.first(where: { normalized($0.name) == key })
+                ?? skills.first(where: { normalized($0.name).contains(key) }) else {
+            // A skill that exists but is switched off, or not granted to this agent, is a
+            // different failure from a typo. Said plainly, the model stops hunting for its
+            // SKILL.md through the shell (one session spent ten rounds doing exactly that).
+            let blocked = !key.isEmpty && everySkill.contains { normalized($0.name) == key }
+            let message = blocked
+                ? "Skill '\(requested)' is installed but not enabled for this agent, so it cannot be loaded. "
+                    + "Do not look for its files with the shell. Carry on without it, or tell the user to enable it. "
+                    + "Available: \(skills.map(\.name).sorted().joined(separator: ", "))."
+                : "No skill named '\(requested)'. Available: \(skills.map(\.name).sorted().joined(separator: ", "))."
             return ToolExecutionResult(
                 success: false, output: "",
-                error: "No skill named '\(requested)'. Available: \(skills.map(\.name).sorted().joined(separator: ", ")).",
+                error: message,
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
         }

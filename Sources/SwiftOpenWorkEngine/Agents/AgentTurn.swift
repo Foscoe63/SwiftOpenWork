@@ -123,6 +123,9 @@ final class AgentTurn {
     var missingPathFailures: [String: (count: Int, hint: String)] = [:]
     /// Successful file reads this turn, by call signature, for `unchangedReadNote`.
     var readLog: [String: AgentRunner.RecordedRead] = [:]
+    /// Empty model replies retried inside this turn, and how many are allowed before it halts.
+    var emptyStepRetries = 0
+    static let maxEmptyStepRetries = 3
     var mcpDisabledThisTurn = false
     /// Consecutive steps that made exactly one read-only call. Each step re-sends the whole
     /// conversation, so a model that reads one file per step spends its round cap on exploring;
@@ -260,6 +263,7 @@ final class AgentTurn {
         await MCPPromotedToolRegistry.shared.reset(owner: session.id)
         await buildSystemPrompt()
 
+        readLog = AgentRunner.seedReadLog(transcript: workingMessages, workspaceRoot: workspace.folderPath)
         roundLimit = maxIterations
         steps: while iteration < roundLimit || extendRoundLimitIfProgressing() {
             switch await runStep() {
@@ -1101,8 +1105,12 @@ mcpPromptSummary = ""
         let newlyGeneratedDelta = String(accumulator.fullText.dropFirst(turnTextBefore.count)).trimmingCharacters(in: .whitespacesAndNewlines)
         if newlyGeneratedDelta.isEmpty && nativeEmittedToolCalls.isEmpty {
             // Empty model turn — do not silently finalize an blank streaming bubble.
-            if iteration < 2 {
-                accumulator.appendNotice("Model returned no tokens; retrying…")
+            // Retry inside the turn: an automatic Continue re-sends the whole transcript as a
+            // new turn, so a stall (common right after a tool result on a local model) costs far
+            // more than asking again here.
+            if emptyStepRetries < Self.maxEmptyStepRetries {
+                emptyStepRetries += 1
+                accumulator.appendNotice("Model returned no tokens; retrying (\(emptyStepRetries)/\(Self.maxEmptyStepRetries))…")
                 return .nextStep
             }
             accumulator.setHalt(
