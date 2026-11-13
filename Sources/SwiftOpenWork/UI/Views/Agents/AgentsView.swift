@@ -187,7 +187,7 @@ public struct AgentsView: View {
 
                 Menu {
                     Button("Set as Active Agent") {
-                        appState.selectedAgentId = agent.id
+                        appState.setActiveAgent(agent.id)
                         appState.showToast("\(agent.name) is now active")
                     }
                     Button("Start New Chat with Agent") {

@@ -751,7 +751,7 @@ public struct ComposerView: View {
                 Menu {
                     ForEach(appState.agents) { ag in
                         Button {
-                            appState.selectedAgentId = ag.id
+                            appState.setActiveAgent(ag.id)
                         } label: {
                             HStack {
                                 Image(systemName: ag.avatar)
