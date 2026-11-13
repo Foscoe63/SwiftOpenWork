@@ -581,6 +581,12 @@ public enum SubAgentExecutor {
                             )
                         }
                     }
+                    // Same rule as the lead's breaker: `build_project {}` after an edit is not the
+                    // same call as before it, so a successful edit ends the sameness. Without this
+                    // an edit-and-rebuild loop was stopped at its fifth build.
+                    if Self.edit(resetsRepeatCountsFor: call.toolName, succeeded: result.success) {
+                        identicalCalls.removeAll()
+                    }
                     messages.append(ChatMessage(
                         id: call.id,
                         role: .tool,
@@ -670,6 +676,11 @@ public enum SubAgentExecutor {
             if let value = dict[key] as? String, !value.isEmpty { return value }
         }
         return nil
+    }
+
+    /// Whether a finished call makes earlier identical calls new again: a successful edit.
+    static func edit(resetsRepeatCountsFor toolName: String, succeeded: Bool) -> Bool {
+        succeeded && AgentRunner.changesFiles(toolName)
     }
 
     /// Whether the run failed on its first model call, before any tool ran — the model was never

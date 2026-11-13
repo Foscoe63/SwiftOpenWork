@@ -716,6 +716,20 @@ public final class AppState: ObservableObject {
         return outcome.session
     }
 
+    /// The user's explicit pick of the active agent. Recorded on the current session too, because
+    /// `selectSession` and launch restore `selectedAgentId` from the session — without this a pick
+    /// was undone the next time the session was reopened.
+    public func setActiveAgent(_ agentId: String) {
+        guard agents.contains(where: { $0.id == agentId }) else { return }
+        selectedAgentId = agentId
+        if var session = currentSession, !session.isGroup, session.agentId != agentId,
+           let idx = sessions.firstIndex(where: { $0.id == session.id }) {
+            session.agentId = agentId
+            sessions[idx] = session
+            persistence.saveSessions(sessions)
+        }
+    }
+
     public func selectSession(_ session: Session) {
         currentSessionId = session.id
         refreshRestorePoints()
@@ -1696,7 +1710,7 @@ public final class AppState: ObservableObject {
             if parts.count > 1 {
                 let query = parts.dropFirst().joined(separator: " ").lowercased()
                 if let found = agents.first(where: { $0.name.lowercased().contains(query) || $0.id.lowercased().contains(query) }) {
-                    selectedAgentId = found.id
+                    setActiveAgent(found.id)
                     showToast("Switched agent to \(found.name)")
                     return true
                 }

@@ -153,7 +153,14 @@ extension ToolExecutionEngine {
         task.durationMs = outcome.durationMs
         if !outcome.succeeded { task.errorMessage = outcome.stoppedBecause }
 
-        let report = choiceNote.map { "\($0)\n\n\(outcome.report)" } ?? outcome.report
+        // A request above the cap was cut down without a word, and the lead retried the same
+        // oversized task asking for more. Say what it got and what to do instead.
+        var notes = [choiceNote].compactMap { $0 }
+        if let asked = Self.intArgument(dict["max_steps"]), asked > budget.steps {
+            notes.append("You asked for \(asked) steps; the limit is \(budget.steps), so that is what it got. "
+                + "If the work did not fit, split it into smaller agent_spawn calls instead of asking for more.")
+        }
+        let report = notes.isEmpty ? outcome.report : notes.joined(separator: "\n") + "\n\n" + outcome.report
         return ToolExecutionResult(
             success: outcome.succeeded,
             output: report,
