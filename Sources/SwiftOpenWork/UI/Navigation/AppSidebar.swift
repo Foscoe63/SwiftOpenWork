@@ -24,6 +24,7 @@ public struct AppSidebar: View {
                     navButton(for: .chat, count: appState.sessions.filter { !$0.isArchived }.count)
                     navButton(for: .localModels, count: appState.localMLXModels.filter { $0.isDownloaded }.count)
                     navButton(for: .agents, count: appState.agents.count)
+                    navButton(for: .team, count: appState.teamSections.filter { !$0.key.isEmpty }.count)
                     navButton(for: .providers, count: appState.providers.filter { $0.isEnabled }.count)
                     navButton(for: .automations, count: appState.automations.filter { $0.isEnabled }.count)
                     navButton(for: .loops, count: appState.loops.filter { $0.state == .running }.count)

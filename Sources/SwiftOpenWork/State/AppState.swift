@@ -11,6 +11,7 @@ public enum NavigationDestination: String, CaseIterable, Identifiable {
     case chat = "chat"
     case localModels = "localModels"
     case agents = "agents"
+    case team = "team"
     case providers = "providers"
     case automations = "automations"
     case loops = "loops"
@@ -28,6 +29,7 @@ public enum NavigationDestination: String, CaseIterable, Identifiable {
         case .chat: return "Chat & Sessions"
         case .localModels: return "Local Models"
         case .agents: return "AI Agents"
+        case .team: return "Team Map"
         case .providers: return "Model Providers"
         case .automations: return "Automations"
         case .loops: return "Loops"
@@ -45,6 +47,7 @@ public enum NavigationDestination: String, CaseIterable, Identifiable {
         case .chat: return "bubble.left.and.bubble.right.fill"
         case .localModels: return "cube.fill"
         case .agents: return "person.3.sequence.fill"
+        case .team: return "rectangle.3.group.fill"
         case .providers: return "server.rack"
         case .automations: return "bolt.badge.clock.fill"
         case .loops: return "repeat"
@@ -181,6 +184,8 @@ public final class AppState: ObservableObject {
         didSet { WindowLayoutStore.sessionId = currentSessionId }
     }
     @Published public var agents: [Agent] = []
+    /// Departments, who sits in each, and what each shares. See `AppState+Team.swift`.
+    @Published public var teamMap = TeamMapState()
     @Published public var providers: [ModelProvider] = []
     @Published public var tools: [Tool] = []
     @Published public var skills: [Skill] = []
@@ -262,6 +267,8 @@ public final class AppState: ObservableObject {
     @Published public var isPullingModel: Bool = false
     private var currentExecutionTask: Task<Void, Never>? = nil
     private var mlxLoadedObserver: MLXLoadedModelsObserver?
+    /// An agent's team-note tool call changes the Team map file from its own thread; this picks it up.
+    private var teamMapObserver: NSObjectProtocol?
 
     private let persistence = PersistenceManager.shared
 
@@ -281,6 +288,9 @@ public final class AppState: ObservableObject {
             self?.refreshLoadedMLXModels()
         }
         refreshLoadedMLXModels()
+        teamMapObserver = NotificationCenter.default.addObserver(forName: .teamMapChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reloadTeamMap() }
+        }
     }
 
     deinit {
@@ -301,6 +311,7 @@ public final class AppState: ObservableObject {
         // gap to be filled.
         self.providers = persistence.loadProviders()
         self.agents = persistence.loadAgents()
+        self.teamMap = persistence.loadTeamMap()
         self.sessions = persistence.loadSessions()
         self.tools = persistence.loadTools()
         self.skills = persistence.loadSkills()
@@ -1219,6 +1230,7 @@ public final class AppState: ObservableObject {
                let step = plan.stager?.step(first.speaker, requestedBy: first.requestedBy, notice: plan.notice, startsTurn: true) {
                 upcoming = (step, first.speaker)
             }
+            var directed = plan.queue
             var stepIndex = 0
             while let current = upcoming {
                 let step = current.step
@@ -1289,9 +1301,17 @@ public final class AppState: ObservableObject {
                               let sIdx = self.sessions.firstIndex(where: { $0.id == session.id }) else { return }
                         self.sessions[sIdx].modelContext = snapshot
                     },
-                    group: step.group
+                    group: step.group,
+                    routingNotice: step.notice
                 )
 
+                // An agent the message's tags named is next, after the one before it finished.
+                if current.speaker == nil {
+                    guard !Task.isCancelled, !directed.isEmpty else { break }
+                    stepIndex += 1
+                    upcoming = (directed.removeFirst(), nil)
+                    continue
+                }
                 // Did this agent ask a teammate to take something on?
                 guard let speaker = current.speaker, !Task.isCancelled else { break }
                 if let reply = self?.sessions.first(where: { $0.id == session.id })?.messages
@@ -1350,6 +1370,8 @@ public final class AppState: ObservableObject {
         /// reasoning regardless of the agent's own setting; on guarantees some, even if the agent
         /// defaults to off.
         var reasoning: ReasoningEffort
+        /// Says on the bubble that a tag (a department, everyone) chose this agent.
+        var notice: String? = nil
     }
 
     private func reasoningOverride(for agent: Agent) -> ReasoningEffort {
@@ -1389,6 +1411,8 @@ public final class AppState: ObservableObject {
         var relay: GroupChat.Relay?
         /// Says who is acting, on the first speaker's bubble.
         var notice: String?
+        /// Further agents a message's tags named, who answer after `solo`, one at a time.
+        var queue: [TurnStep] = []
     }
 
     /// `userText` is what the user typed, not the file-enriched version the model sees, so a
@@ -1396,6 +1420,12 @@ public final class AppState: ObservableObject {
     func turnPlan(for session: Session, userText: String) -> TurnPlan {
         let room = participants(of: session)
         guard session.isGroup, room.count >= 2 else {
+            // `@Department`, `@agent` and `@everyone` pick who answers; with no tag it is the chat's agent.
+            let tagged = taggedSteps(for: userText, reasoning: { reasoningOverride(for: $0) })
+            for name in tagged.emptyTags { showToast("\(name) has no agents yet.") }
+            if let first = tagged.steps.first {
+                return TurnPlan(solo: first, queue: Array(tagged.steps.dropFirst()))
+            }
             let solo = currentAgent
             return TurnPlan(solo: TurnStep(agent: solo, group: nil, reasoning: reasoningOverride(for: solo)))
         }
@@ -2048,6 +2078,7 @@ public final class AppState: ObservableObject {
     public func deleteAgent(_ agent: Agent) {
         agents.removeAll(where: { $0.id == agent.id })
         persistence.saveAgents(agents)
+        forgetAgentInTeamMap(agent.id)
     }
 
     // MARK: - Skills

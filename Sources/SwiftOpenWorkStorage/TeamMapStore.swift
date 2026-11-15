@@ -95,7 +95,7 @@ public final class TeamMapStore: @unchecked Sendable {
     /// tool call (which run on different threads) cannot overwrite each other with a stale copy. Nothing is
     /// written when `change` throws. Returns what `change` returned and the map as saved.
     @discardableResult
-    public func update<T>(_ change: (inout TeamMapState) throws -> T) throws -> (result: T, state: TeamMapState) {
+    public func update<T>(_ change: (inout TeamMapState) throws -> T) rethrows -> (result: T, state: TeamMapState) {
         lock.lock(); defer { lock.unlock() }
         var state: TeamMapState
         switch loadLocked() {

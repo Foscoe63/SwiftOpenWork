@@ -174,6 +174,8 @@ public struct MainView: View {
             LocalModelsView(appState: appState)
         case .agents:
             AgentsView(appState: appState)
+        case .team:
+            TeamMapView(appState: appState)
         case .providers:
             ProvidersView(appState: appState)
         case .automations:
