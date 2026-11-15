@@ -96,16 +96,21 @@ public final class TeamMapStore: @unchecked Sendable {
     /// written when `change` throws. Returns what `change` returned and the map as saved.
     @discardableResult
     public func update<T>(_ change: (inout TeamMapState) throws -> T) rethrows -> (result: T, state: TeamMapState) {
-        lock.lock(); defer { lock.unlock() }
-        var state: TeamMapState
-        switch loadLocked() {
-        case .state(let s): state = s
-        case .missing, .unreadable: state = TeamMapState()
+        let outcome: (result: T, state: TeamMapState)
+        do {
+            lock.lock(); defer { lock.unlock() }
+            var state: TeamMapState
+            switch loadLocked() {
+            case .state(let s): state = s
+            case .missing, .unreadable: state = TeamMapState()
+            }
+            let result = try change(&state)
+            saveLocked(state)
+            outcome = (result, state)
         }
-        let result = try change(&state)
-        saveLocked(state)
+        // After the lock is released: an observer reloads the map, which takes the lock again.
         NotificationCenter.default.post(name: .teamMapChanged, object: nil)
-        return (result, state)
+        return outcome
     }
 
     /// Writes the map. Refuses (returns false) when the file already there is unreadable and could not be
