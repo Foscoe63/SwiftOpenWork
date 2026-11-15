@@ -266,10 +266,26 @@ public enum TeamMapLogic {
 
     // MARK: Layout
 
+    /// A long lane wraps into columns (six to a column, at most four) so a big department stays a panel, not a strip.
+    public static func gridColumns(_ count: Int) -> Int { max(1, min(4, (count + 5) / 6)) }
+
+    private static func memberColumns(_ section: TeamMapSection) -> Int {
+        gridColumns(section.hierarchy ? section.members.count : section.leads.count + section.members.count)
+    }
+
     public static func size(of section: TeamMapSection) -> (width: Double, height: Double) {
-        let rows = section.hierarchy ? max(section.leads.count, section.members.count) : max(1, section.count)
-        return (cardWidth * (section.hierarchy ? 2 : 1) + padding * 2 + (section.hierarchy ? 40 : 0),
-                headerHeight + padding + Double(rows) * (cardHeight + gap) - gap)
+        let mc = memberColumns(section)
+        let membersWidth = Double(mc) * cardWidth + Double(mc - 1) * gap
+        let rows: Int
+        let width: Double
+        if section.hierarchy {
+            rows = max(section.leads.count, (section.members.count + mc - 1) / mc)
+            width = cardWidth + 40 + membersWidth + padding * 2
+        } else {
+            rows = max(1, (section.count + mc - 1) / mc)
+            width = membersWidth + padding * 2
+        }
+        return (width, headerHeight + padding + Double(rows) * (cardHeight + gap) - gap)
     }
 
     /// Two columns by default; a dragged panel keeps the position the person gave it.
@@ -311,13 +327,18 @@ public enum TeamMapLogic {
     public static func cardOrigins(_ section: TeamMapSection, in tile: TeamMapTile) -> [String: CanvasPoint] {
         var result: [String: CanvasPoint] = [:]
         let laneX = tile.x + padding
-        for (i, agent) in section.leads.enumerated() {
-            result[agent.id] = CanvasPoint(x: laneX, y: tile.y + headerHeight + Double(i) * (cardHeight + gap))
+        let top = tile.y + headerHeight
+        let mc = memberColumns(section)
+        func spot(_ i: Int, x0: Double) -> CanvasPoint {
+            CanvasPoint(x: x0 + Double(i % mc) * (cardWidth + gap), y: top + Double(i / mc) * (cardHeight + gap))
         }
-        let memberX = section.hierarchy ? laneX + cardWidth + 40 : laneX
-        let offset = section.hierarchy ? 0 : section.leads.count
-        for (i, agent) in section.members.enumerated() {
-            result[agent.id] = CanvasPoint(x: memberX, y: tile.y + headerHeight + Double(i + offset) * (cardHeight + gap))
+        if section.hierarchy {
+            for (i, agent) in section.leads.enumerated() {
+                result[agent.id] = CanvasPoint(x: laneX, y: top + Double(i) * (cardHeight + gap))
+            }
+            for (i, agent) in section.members.enumerated() { result[agent.id] = spot(i, x0: laneX + cardWidth + 40) }
+        } else {
+            for (i, agent) in (section.leads + section.members).enumerated() { result[agent.id] = spot(i, x0: laneX) }
         }
         return result
     }

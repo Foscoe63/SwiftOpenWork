@@ -113,6 +113,24 @@ struct TeamMapTests {
         #expect(TeamMapLogic.targets(text: "@Desk hi", agents: [a], state: s).tags == [.department("Desk")])
     }
 
+    // MARK: Layout
+
+    @Test func aLongLaneWrapsIntoColumnsAndEveryCardFitsInsideItsPanel() {
+        let many = (0..<21).map { agent("A\($0)") }
+        let section = TeamMapLogic.sections(agents: many, state: TeamMapState())[0]
+        #expect(TeamMapLogic.gridColumns(1) == 1 && TeamMapLogic.gridColumns(6) == 1 && TeamMapLogic.gridColumns(7) == 2)
+        #expect(TeamMapLogic.gridColumns(21) == 4 && TeamMapLogic.gridColumns(500) == 4)
+        let size = TeamMapLogic.size(of: section)
+        let tile = TeamMapTile(key: "", x: 40, y: 40, width: size.width, height: size.height)
+        let origins = TeamMapLogic.cardOrigins(section, in: tile)
+        #expect(origins.count == 21 && Set(origins.values.map { "\($0.x),\($0.y)" }).count == 21, "no two cards share a spot")
+        for o in origins.values {
+            #expect(o.x >= tile.x && o.x + TeamMapLogic.cardWidth <= tile.x + tile.width)
+            #expect(o.y >= tile.y && o.y + TeamMapLogic.cardHeight <= tile.y + tile.height)
+        }
+        #expect(size.height < Double(21) * (TeamMapLogic.cardHeight + TeamMapLogic.gap) / 2, "shorter than one long column")
+    }
+
     // MARK: Authority
 
     @Test func aLeadAnswersForItsOwnDepartmentAndTheOnesItWasGiven() {
