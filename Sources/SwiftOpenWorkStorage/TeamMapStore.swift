@@ -11,6 +11,11 @@ import SwiftOpenWorkCore
 ///   name that carries the time, and is never touched again. The map then starts empty.
 /// - **Every save that would replace a different file first copies that file to `team_map.previous.json`**,
 ///   so one bad save (a bug, a crash mid-edit) is a step back, not a loss.
+extension Notification.Name {
+    /// Posted after the Team map file changed, so a running app reloads it (an agent's tool call can change it).
+    public static let teamMapChanged = Notification.Name("SwiftOpenWork.teamMapChanged")
+}
+
 public final class TeamMapStore: @unchecked Sendable {
     public static let filename = "team_map.json"
     public static let previousFilename = "team_map.previous.json"
@@ -86,11 +91,33 @@ public final class TeamMapStore: @unchecked Sendable {
         }
     }
 
+    /// Reads the map, applies `change` and writes the result, all under one lock, so the app and an agent's
+    /// tool call (which run on different threads) cannot overwrite each other with a stale copy. Nothing is
+    /// written when `change` throws. Returns what `change` returned and the map as saved.
+    @discardableResult
+    public func update<T>(_ change: (inout TeamMapState) throws -> T) throws -> (result: T, state: TeamMapState) {
+        lock.lock(); defer { lock.unlock() }
+        var state: TeamMapState
+        switch loadLocked() {
+        case .state(let s): state = s
+        case .missing, .unreadable: state = TeamMapState()
+        }
+        let result = try change(&state)
+        saveLocked(state)
+        NotificationCenter.default.post(name: .teamMapChanged, object: nil)
+        return (result, state)
+    }
+
     /// Writes the map. Refuses (returns false) when the file already there is unreadable and could not be
     /// copied aside: that file is the only copy of someone's data and is left exactly as it is.
     @discardableResult
     public func save(_ state: TeamMapState) -> Bool {
         lock.lock(); defer { lock.unlock() }
+        return saveLocked(state)
+    }
+
+    @discardableResult
+    private func saveLocked(_ state: TeamMapState) -> Bool {
         let url = fileURL
         let fm = FileManager.default
         guard let data = try? encoder.encode(state) else { return false }

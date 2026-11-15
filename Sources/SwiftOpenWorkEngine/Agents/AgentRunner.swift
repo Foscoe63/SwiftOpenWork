@@ -898,7 +898,8 @@ public final class AgentRunner {
         onInterAgentMessage: @escaping (AgentMessage) -> Void,
         onSessionTodosUpdated: (([SessionTodoItem]) -> Void)? = nil,
         onModelContextUpdated: ((ModelContextSnapshot) -> Void)? = nil,
-        group: GroupChat.Turn? = nil
+        group: GroupChat.Turn? = nil,
+        routingNotice: String? = nil
     ) async {
         // An agent that is another program (Claude Code, Codex, Gemini CLI…) runs over ACP; the
         // model, provider and tool loop below are its own business.
@@ -915,7 +916,7 @@ public final class AgentRunner {
             onMessageUpdated: onMessageUpdated, onSubAgentTaskCreated: onSubAgentTaskCreated,
             onSubAgentTaskUpdated: onSubAgentTaskUpdated, onInterAgentMessage: onInterAgentMessage,
             onSessionTodosUpdated: onSessionTodosUpdated, onModelContextUpdated: onModelContextUpdated,
-            group: group
+            group: group, routingNotice: routingNotice
         ).run()
     }
 
@@ -963,12 +964,13 @@ public final class AgentRunner {
         agent: Agent,
         allAgents: [Agent],
         provider: ModelProvider,
+        departmentTeam: [Agent]? = nil,
         budget: (steps: Int, minutes: Int)? = nil
     ) -> String {
         let team = agent.subAgentIds.compactMap { id in allAgents.first { $0.id == id } }
-        let members = team.isEmpty
-            ? allAgents.filter { $0.id != agent.id }
-            : team
+        // A lead of a department delegates to that department; its own list is the fallback.
+        let members = departmentTeam
+            ?? (team.isEmpty ? allAgents.filter { $0.id != agent.id } : team)
         guard !members.isEmpty else { return "" }
         let lines = members.map { member -> String in
             let about = member.description.trimmingCharacters(in: .whitespacesAndNewlines)

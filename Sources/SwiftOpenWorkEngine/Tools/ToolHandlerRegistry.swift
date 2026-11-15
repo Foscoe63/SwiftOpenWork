@@ -41,6 +41,7 @@ enum ToolHandlerRegistry {
         + ToolExecutionEngine.sessionToolHandlers
         + ToolExecutionEngine.perceptionToolHandlers
         + ToolExecutionEngine.agentToolHandlers
+        + ToolExecutionEngine.teamToolHandlers
         + ToolExecutionEngine.mcpToolHandlers
 
     static let handlers: [String: ToolHandler] = {

@@ -76,6 +76,11 @@ final class AgentTurn {
     var canDelegate = false
     var deferredBuiltIns: [Tool] = []
     var teamSection = ""
+    /// The department's shared instructions and notes, who leads it, and (for a lead) its team. See `TeamMapLogic`.
+    var departmentSection = ""
+    var teamState = TeamMapState()
+    /// Says on the first bubble who the message was routed to, when a tag chose the agent.
+    let routingNotice: String?
     var instructionsSection = ""
     var workspaceSnapshot: WorkspaceContext.Snapshot?
     var workspaceSection = ""
@@ -156,7 +161,8 @@ final class AgentTurn {
         onInterAgentMessage: @escaping (AgentMessage) -> Void,
         onSessionTodosUpdated: (([SessionTodoItem]) -> Void)?,
         onModelContextUpdated: ((ModelContextSnapshot) -> Void)?,
-        group: GroupChat.Turn?
+        group: GroupChat.Turn?,
+        routingNotice: String? = nil
     ) {
         // In a group chat this is one speaker's turn. The speaker is told who else is in the room
         // and how it was addressed; the bubble below is still stamped with the original agent.
@@ -178,7 +184,7 @@ final class AgentTurn {
         // this turn when set; nil (no override) preserves the agent's own setting.
         let effectiveReasoningEffort = reasoningOverride ?? agent.reasoningEffort
         let assistantMsgId = UUID().uuidString
-        let assistantMsg = ChatMessage(
+        let initialMsg = ChatMessage(
             id: assistantMsgId,
             sessionId: session.id,
             role: .assistant,
@@ -192,7 +198,14 @@ final class AgentTurn {
             timestamp: Date(),
             isStreaming: true
         )
+        let loadedTeam = PersistenceManager.shared.loadTeamMap()
+        var stamped = initialMsg
+        stamped.department = loadedTeam.department(of: baseAgent.id)
+        let assistantMsg = stamped
 
+        self.teamState = loadedTeam
+        self.routingNotice = routingNotice
+        self.departmentSection = TeamMapLogic.promptSection(for: baseAgent, agents: allAgents, state: loadedTeam)
         self.session = session
         self.baseAgent = baseAgent
         self.provider = provider
@@ -295,6 +308,7 @@ final class AgentTurn {
     /// Tools the loop itself relies on, kept whatever the agent's list says.
     nonisolated static let alwaysAvailableTools: Set<String> = [
         "recall_output", "tool_describe", "skill_load", "mcp_describe", "mcp_resources", "exit_plan_mode",
+        "propose_team_memory", "search_team_memory",
     ]
 
     /// The tools an agent may be sent. An empty list means no restriction.
@@ -471,11 +485,15 @@ mcpPromptSummary = ""
                 || (tool.name == "skill_load" && !skillsOffered)
                 || (tool.name == "agent_spawn" && !canDelegate)
                 || (tool.name == "agent_message" && !agent.canCommunicateWithOthers)
+                // Team notes belong to a department; an agent in General has none to propose to.
+                || ((tool.name == "propose_team_memory" || tool.name == "search_team_memory")
+                    && (inventoryPrompt || teamState.department(of: baseAgent.id).isEmpty))
         }
         teamSection = (inventoryPrompt || !canDelegate)
             ? ""
             : AgentRunner.teamPromptSection(
                 agent: agent, allAgents: allAgents, provider: provider,
+                departmentTeam: TeamMapLogic.departmentTeam(for: baseAgent, agents: allAgents, state: teamState),
                 budget: (steps: max(1, loadedSettings.subAgentStepBudget), minutes: max(1, loadedSettings.subAgentTimeoutMinutes))
             )
     }
@@ -487,6 +505,7 @@ mcpPromptSummary = ""
             await FileCheckpointStore.shared.beginTurn(label: session.id, session: session.id)
         }
         if let notice = group?.notice { accumulator.appendNotice(notice) }
+        if let notice = routingNotice { accumulator.appendNotice(notice) }
 
         // Standing rules that live in the repository itself.
         // Only once the person has seen what the project carries; see `ProjectTrust`.
@@ -629,6 +648,7 @@ mcpPromptSummary = ""
             \(agent.systemPrompt)
             \(workspaceSection)
             \(instructionsSection)
+            \(departmentSection)
 
             Reply in prose only, without tool calls. Do not comment on tools or say that you cannot run them.
             """
@@ -637,6 +657,7 @@ mcpPromptSummary = ""
             \(agent.systemPrompt)
             \(workspaceSection)
             \(instructionsSection)
+            \(departmentSection)
 
             You are an advanced, fully autonomous coding, systems, and research agent.
             Built-in tools (prefer native function/tool calling): \(builtInToolList)
