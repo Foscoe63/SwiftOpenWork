@@ -116,13 +116,13 @@ struct TeamMapView: View {
             }
             Spacer()
             Button { showUsage.toggle() } label: { Image(systemName: "chart.bar").font(.system(size: 14)) }
-                .buttonStyle(.plain).foregroundColor(p.muted).padding(8)
+                .buttonStyle(.hitTestable).foregroundColor(p.muted).padding(8)
                 .accessibilityLabel("Usage by department")
                 .popover(isPresented: $showUsage, arrowEdge: .bottom) { usageList }
             Button { sheetError = ""; creating = true } label: {
                 Label("New department", systemImage: "plus").font(.system(size: 12, weight: .medium))
             }
-            .buttonStyle(.plain).foregroundColor(p.text)
+            .buttonStyle(.hitTestable).foregroundColor(p.text)
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background(RoundedRectangle(cornerRadius: 9).stroke(p.border))
         }
@@ -247,7 +247,7 @@ struct TeamMapView: View {
             Button { setScale(view.scale * 1.2, around: CGPoint(x: size.width / 2, y: size.height / 2)) } label: { Image(systemName: "plus") }
                 .accessibilityLabel("Zoom in")
         }
-        .buttonStyle(.plain).foregroundColor(p.muted).padding(6)
+        .buttonStyle(.hitTestable).foregroundColor(p.muted).padding(6)
         .background(RoundedRectangle(cornerRadius: 10).fill(p.card))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(p.border))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -360,7 +360,7 @@ struct TeamMapView: View {
             Rectangle().fill(p.border).frame(height: 1)
             HStack(spacing: 4) {
                 Button { appState.createNewSession(agentId: agent.id) } label: { Image(systemName: "bubble.left").font(.system(size: 12)).frame(width: 30, height: 30) }
-                    .buttonStyle(.plain).foregroundColor(p.muted).help("Open a chat with \(agent.name)")
+                    .buttonStyle(.hitTestable).foregroundColor(p.muted).help("Open a chat with \(agent.name)")
                     .accessibilityLabel("Open chat with \(agent.name)")
                 Spacer(minLength: 0)
                 cardMenu(agent, dept: dept)
@@ -450,7 +450,7 @@ struct TeamMapView: View {
                     ForEach(mentionChoices(m), id: \.self) { name in
                         Button { insertMention(name) } label: {
                             Text("@\(name)").font(.system(size: 13)).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 6)
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(.hitTestable)
                     }
                 }
                 .background(RoundedRectangle(cornerRadius: 10).fill(p.card))
@@ -467,7 +467,7 @@ struct TeamMapView: View {
                         .frame(width: 32, height: 32)
                         .background(Circle().fill(canSend ? p.accent : p.muted.opacity(0.4)))
                 }
-                .buttonStyle(.plain).disabled(!canSend).accessibilityLabel("Send")
+                .buttonStyle(.hitTestable).disabled(!canSend).accessibilityLabel("Send")
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
             .background(RoundedRectangle(cornerRadius: 16).fill(p.card))
@@ -604,7 +604,7 @@ struct NewDepartmentSheet: View {
             .padding(8).contentShape(Rectangle())
             .background(RoundedRectangle(cornerRadius: 8).fill(templateId == id ? p.accent.opacity(0.10) : Color.clear))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hitTestable)
         .accessibilityLabel(title)
     }
 

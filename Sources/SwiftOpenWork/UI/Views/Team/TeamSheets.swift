@@ -138,7 +138,7 @@ struct DepartmentMemorySheet: View {
                 Text("\(label) shared memory").font(.system(size: 18, weight: .semibold)).foregroundColor(p.text)
                 Spacer()
                 Button { openForm(nil) } label: { Label("Add a note", systemImage: "plus").font(.system(size: 12, weight: .medium)) }
-                    .buttonStyle(.plain).foregroundColor(p.text)
+                    .buttonStyle(.hitTestable).foregroundColor(p.text)
             }
             Text("People, places, decisions and terms every agent in this department shares. Agents suggest notes; nothing is shared until you accept it.")
                 .font(.system(size: 12.5)).foregroundColor(p.muted).fixedSize(horizontal: false, vertical: true)
@@ -214,7 +214,7 @@ struct DepartmentMemorySheet: View {
                     Button("Delete", role: .destructive) { run { try appState.removeDepartmentFact(department, id: fact.id, expectedRevision: fact.revision) } }
                 }
             }
-            .buttonStyle(.plain).font(.system(size: 12)).foregroundColor(p.muted)
+            .buttonStyle(.hitTestable).font(.system(size: 12)).foregroundColor(p.muted)
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 10).fill(isProposal ? p.accent.opacity(0.10) : p.card))
@@ -345,14 +345,14 @@ struct TeamNoteCard: View {
                 }.buttonStyle(.borderedProminent).controlSize(.small)
                 Button("Reject") {
                     run { try appState.resolveDepartmentFact(department, id: fact.id, accept: false, expectedRevision: fact.revision) }
-                }.buttonStyle(.plain).font(.system(size: 12.5)).foregroundColor(p.muted)
+                }.buttonStyle(.hitTestable).font(.system(size: 12.5)).foregroundColor(p.muted)
                 if !fact.replaces.isEmpty {
                     Text("Replaces the note with the same key.").font(.system(size: 11.5)).foregroundColor(p.muted)
                 }
             }
         case .accepted where DepartmentMemory.canUndo(fact):
             Button("Undo") { run { try appState.undoDepartmentFactAccept(department, id: fact.id) } }
-                .buttonStyle(.plain).font(.system(size: 12.5)).foregroundColor(p.muted)
+                .buttonStyle(.hitTestable).font(.system(size: 12.5)).foregroundColor(p.muted)
         default:
             EmptyView()
         }
