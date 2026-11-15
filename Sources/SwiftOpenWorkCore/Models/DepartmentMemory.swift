@@ -384,3 +384,19 @@ public enum SecretMask {
         return out
     }
 }
+
+/// The line `propose_team_memory` puts at the end of its result so a chat card can find the note it filed.
+public enum TeamNoteMarker {
+    public static func make(department: String, id: String) -> String {
+        "[team-note dept=\(department.replacingOccurrences(of: "]", with: "")) id=\(id)]"
+    }
+
+    public static func parse(_ output: String) -> (department: String, id: String)? {
+        guard let start = output.range(of: "[team-note dept="),
+              let end = output[start.upperBound...].firstIndex(of: "]") else { return nil }
+        let body = output[start.upperBound..<end]
+        guard let split = body.range(of: " id=", options: .backwards) else { return nil }
+        let id = String(body[split.upperBound...])
+        return id.isEmpty ? nil : (String(body[..<split.lowerBound]), id)
+    }
+}

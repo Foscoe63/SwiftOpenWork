@@ -40,7 +40,24 @@ public struct ToolCallCardView: View {
         return DiagnosticLinkParser.links(in: output)
     }
 
+    /// The note a `propose_team_memory` call filed, when the result carries its marker.
+    private var proposedNote: (department: String, id: String)? {
+        guard ToolCallRepair.canonicalName(toolCall.toolName) == "propose_team_memory",
+              let output = toolCall.resultOutput else { return nil }
+        return TeamNoteMarker.parse(output)
+    }
+
     public var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            cardBody
+            // Accept or reject the note right where the agent proposed it.
+            if let note = proposedNote, let appState {
+                TeamNoteCard(appState: appState, department: note.department, factId: note.id)
+            }
+        }
+    }
+
+    private var cardBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {

@@ -11,11 +11,6 @@ extension ToolExecutionEngine {
         ToolRegistration(["search_team_memory"]) { await $0.searchTeamMemoryTool($1) },
     ]
 
-    /// The line a chat card reads to find the note it shows. Kept out of the sentence the model reads.
-    static func teamNoteMarker(department: String, id: String) -> String {
-        "[team-note dept=\(department.replacingOccurrences(of: "]", with: "")) id=\(id)]"
-    }
-
     func proposeTeamMemoryTool(_ call: sending ToolCall) async -> ToolExecutionResult {
         let dict = call.dict
         let agent = call.currentAgent
@@ -44,7 +39,7 @@ extension ToolExecutionEngine {
             let label = dept.isEmpty ? "General" : dept
             return done(true, """
             Proposed "\(fact.name)" for the "\(label)" department's team memory. The person reviews it; until they accept it, it is not in anyone's prompt. Do not wait for it or propose it again.
-            \(Self.teamNoteMarker(department: dept, id: fact.id))
+            \(TeamNoteMarker.make(department: dept, id: fact.id))
             """)
         } catch {
             return done(false, error.localizedDescription)
