@@ -457,6 +457,13 @@ public struct AgentEditModalView: View {
         self.onCancel = onCancel
     }
 
+    /// A skill can be in both the saved list and the global skills folder (for example one imported
+    /// from `~/.claude/skills`), which listed it twice. Keep the first of each name.
+    private static func uniqueSkills(_ skills: [Skill]) -> [Skill] {
+        var seen = Set<String>()
+        return skills.filter { seen.insert($0.name.lowercased()).inserted }
+    }
+
     /// Individual tools of each running MCP server. The server row above admits all of a server's
     /// tools; these admit one at a time, which is what a memory server such as Hindsight needs —
     /// an agent wants `recall` and `retain`, not `delete_bank`. Entries use the namespaced name
@@ -671,7 +678,7 @@ public struct AgentEditModalView: View {
                              : "Only the skills ticked below are shown to this agent.")
                             .font(.system(size: 10.5))
                             .foregroundColor(.secondary)
-                        ForEach(appState.skills + ProjectSkills.loadGlobal()) { skill in
+                        ForEach(Self.uniqueSkills(appState.skills + ProjectSkills.loadGlobal())) { skill in
                             Toggle(skill.name, isOn: Binding(
                                 get: { skill.isAllowed(by: draft.allowedSkillIds) && !(draft.allowedSkillIds ?? []).isEmpty },
                                 set: { on in
