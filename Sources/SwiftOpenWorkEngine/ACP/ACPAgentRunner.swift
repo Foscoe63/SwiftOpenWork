@@ -158,11 +158,29 @@ actor ACPSessionPool {
         }
     }
 
-    func setBusy(_ isBusy: Bool, for key: String) {
-        if isBusy { busy.insert(key) } else {
-            busy.remove(key)
-            entries[key]?.lastUsed = Date()
-        }
+    /// Each turn on a chat's agent takes a token. A turn that was cancelled and replaced by the
+    /// next message still has cleanup to run (a grace-period kill, removal after a failure), and
+    /// that cleanup must not touch the connection once a newer turn is using it: the old turn's
+    /// 10-second kill was ending the agent in the middle of the `/compact` that replaced it.
+    private var turnTokens: [String: Int] = [:]
+
+    func beginTurn(for key: String) -> Int {
+        let token = (turnTokens[key] ?? 0) + 1
+        turnTokens[key] = token
+        busy.insert(key)
+        return token
+    }
+
+    func endTurn(for key: String, token: Int) {
+        guard turnTokens[key] == token else { return }
+        busy.remove(key)
+        entries[key]?.lastUsed = Date()
+    }
+
+    /// Stop the agent only if no newer turn has started on it since `token`'s turn.
+    func removeIfCurrent(_ key: String, token: Int) {
+        guard (turnTokens[key] ?? 0) == token else { return }
+        remove(key)
     }
 
     /// The agent's own id for a chat's conversation, kept across app launches so it can be resumed.
@@ -259,8 +277,8 @@ public enum ACPAgentRunner {
             return
         }
 
-        await ACPSessionPool.shared.setBusy(true, for: key)
-        defer { Task { await ACPSessionPool.shared.setBusy(false, for: key) } }
+        let turnToken = await ACPSessionPool.shared.beginTurn(for: key)
+        defer { Task { await ACPSessionPool.shared.endTurn(for: key, token: turnToken) } }
         let state = TurnState(accumulator: accumulator, workspace: workspace, sessionId: session.id, agentName: agent.name, onTodos: onSessionTodosUpdated)
         let sessionId = entry.sessionId
         let connection = entry.connection
@@ -335,12 +353,12 @@ public enum ACPAgentRunner {
             Task {
                 try? await Task.sleep(nanoseconds: 10 * 1_000_000_000)
                 events.finish(.success("cancelled"))
-                await ACPSessionPool.shared.remove(key)
+                await ACPSessionPool.shared.removeIfCurrent(key, token: turnToken)
             }
         }
         let stopReason = outcome.stopReason
         let failure = outcome.failure
-        if failure != nil { await ACPSessionPool.shared.remove(key) }
+        if failure != nil { await ACPSessionPool.shared.removeIfCurrent(key, token: turnToken) }
         if failure != nil && !Task.isCancelled { /* keep the saved id so the next turn can resume it */ }
 
         state.finishOpenToolCalls(cancelled: Task.isCancelled || stopReason == "cancelled")
