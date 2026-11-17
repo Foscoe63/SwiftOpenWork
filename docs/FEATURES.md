@@ -100,6 +100,16 @@ Who speaks is decided by what you type:
 - **Continue** (the button and auto-continue) goes to the agent that stopped, not to the whole room.
 - Every agent uses the chat's selected model and provider. The agent picker in the composer is replaced by *Group · N agents*.
 
+## Team map and departments
+
+The **Team map** lays your agents out as departments on a canvas: one panel per department, with its lead first and the other agents beside it. Agents that belong to no department sit in **General**. Drag a panel to place it, drag a card to reorder it or to move the agent to another department.
+
+- **Make a department** from a starting line-up (for example a *Software team*: a lead who plans and reviews, a researcher and a coder) or empty. A line-up creates the agents, named `<Department> <Role>`, and gives the department its shared instructions.
+- **Lead.** Mark an agent as the department's lead (*Make lead*); a message tagged to the department reaches it, and a lead can delegate to the department's members. *Also in charge of…* extends a lead over other departments.
+- **Shared instructions** — a brief every agent in the department sees at the start of each turn. Only you write it; no agent tool touches it.
+- **Shared memory** — notes for the whole department. Agents may *propose* a note; it counts only once you accept it, and the panel shows how many are waiting for review.
+- **Each agent keeps its own config.** The department does not set a model for its agents. Open **AI Agents**: it has one tab per department (and General) so a department's agents are together, and each agent's editor sets its own provider, model, temperature, reasoning effort, tools and skills. Those values override the global settings for that agent; an agent left on *Inherit from chat* uses the chat's model. Every section of the editor starts collapsed.
+
 ## Code intelligence
 
 The code-intelligence tools run real language servers, started on first use and kept running per project (stopped after ten idle minutes):

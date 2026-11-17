@@ -58,6 +58,7 @@ The short version. The full reference is in **[docs/FEATURES.md](docs/FEATURES.m
 - **Autonomous agents** — a multi-turn tool loop with native function calling (OpenAI, Anthropic, Ollama, in-process MLX): files, search, shell, build and test, git, web, documents, screenshots and live preview, with tool calls repaired rather than rejected
 - **Code intelligence** — go to definition, find references, diagnostics and rename through real language servers (Swift, C/C++, TypeScript, Python, Rust, Go)
 - **Sub-agents and group chats** — the lead delegates to sub-agents in their own worktrees; several agents can share one conversation
+- **Team map and departments** — group agents into departments with a lead, shared instructions and reviewed shared notes; each agent keeps its own model and tool settings, shown one tab per department in AI Agents. See [Team map](docs/FEATURES.md#team-map-and-departments)
 - **Control and review** — Ask / Safe / Allow / Allow All approvals, permission rules, hooks, an OS-level shell sandbox, token and spend budgets, inline diffs, per-turn undo and an audit log
 - **Local first** — built-in Apple Silicon MLX engine with KV-cache reuse, plus Ollama, LM Studio, Splash, oMLX and any OpenAI-compatible or cloud provider. It can also serve the loaded model to other tools
 - **External agents** — run Claude Code, Codex, Gemini CLI, OpenCode or Goose as chat agents over ACP
@@ -92,7 +93,16 @@ xcodegen generate       # only when Sources/ changed
 open SwiftOpenWork.xcodeproj
 ```
 
-Select the **SwiftOpenWork** scheme and Run. Or from the command line, which points SwiftPM at the Xcode toolchain without changing anything global:
+Select the **SwiftOpenWork** scheme and Run. The first build asks you to trust the package macros and build-tool plugins (`MLXHuggingFaceMacros`, SwiftTerm's build-info plugin); approve them in Xcode. Keep `Package.resolved` as committed: letting Xcode re-resolve can pull a SwiftTerm newer than the pinned 1.20.0, which does not compile with Xcode 27. A command-line build that keeps the pins:
+
+```bash
+xcodebuild -project SwiftOpenWork.xcodeproj -scheme SwiftOpenWork -configuration Release \
+  -onlyUsePackageVersionsFromResolvedFile -skipPackagePluginValidation build
+```
+
+`-skipPackagePluginValidation` runs package plugins without the trust prompt, so use it only for dependencies you trust.
+
+Or run SwiftPM from the command line, which points SwiftPM at the Xcode toolchain without changing anything global:
 
 ```bash
 Scripts/swift.sh build
