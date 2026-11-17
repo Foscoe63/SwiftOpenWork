@@ -9,7 +9,9 @@ public struct SettingsCard<Content: View>: View {
     let content: Content
     @State private var isCollapsed: Bool
 
-    /// Pass `collapseKey` to make the card collapsible; the state is remembered per key.
+    /// Every card with a title is collapsible; the state is remembered per key. Pass `collapseKey` to
+    /// choose the key, otherwise it comes from the title with any trailing "(count)" dropped so a
+    /// changing count does not reset it.
     public init(
         title: String? = nil,
         description: String? = nil,
@@ -20,9 +22,12 @@ public struct SettingsCard<Content: View>: View {
         self.title = title
         self.description = description
         self.icon = icon
-        self.collapseKey = collapseKey
+        let key = collapseKey ?? title.map {
+            "title." + $0.replacingOccurrences(of: #"\s*\(\d+\)\s*$"#, with: "", options: .regularExpression).lowercased()
+        }
+        self.collapseKey = key
         self.content = content()
-        let stored = collapseKey.map { UserDefaults.standard.bool(forKey: "settings.collapsed.\($0)") } ?? false
+        let stored = key.map { UserDefaults.standard.bool(forKey: "settings.collapsed.\($0)") } ?? false
         _isCollapsed = State(initialValue: stored)
     }
 
