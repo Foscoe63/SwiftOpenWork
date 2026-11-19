@@ -310,7 +310,11 @@ public final class AppState: ObservableObject {
         // sweeps the mounted volumes for library folders already, so an empty field is not a
         // gap to be filled.
         self.providers = persistence.loadProviders()
-        self.agents = persistence.loadAgents()
+        var loadedAgents = persistence.loadAgents()
+        // Claude Code (CLI), Claude Code (Desktop) and OpenCode exist on every Mac; each Mac signs
+        // in to them from Settings → Agent Sign-ins.
+        if AgentSignInProfile.seedMissing(into: &loadedAgents) { persistence.saveAgents(loadedAgents) }
+        self.agents = loadedAgents
         self.teamMap = persistence.loadTeamMap()
         self.sessions = persistence.loadSessions()
         self.tools = persistence.loadTools()

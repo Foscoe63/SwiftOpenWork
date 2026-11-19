@@ -105,6 +105,8 @@ public struct SettingsView: View {
                             advancedPage
                         case "ai":
                             aiProvidersPage
+                        case "agentSignIns":
+                            AgentSignInsCard(appState: appState)
                         case "appearance":
                             appearancePage
                         case "environment":
@@ -329,6 +331,7 @@ public struct SettingsView: View {
                     sidebarGroup(title: "GLOBAL") {
                         sidebarItem(id: "general", title: "General", icon: "gearshape")
                         sidebarItem(id: "ai", title: "AI Providers", icon: "bolt.fill")
+                        sidebarItem(id: "agentSignIns", title: "Agent Sign-ins", icon: "person.badge.key")
                         sidebarItem(id: "appearance", title: "Appearance", icon: "paintbrush")
                         sidebarItem(id: "environment", title: "Environment Variables", icon: "terminal")
                         sidebarItem(id: "updates", title: "Updates", icon: "arrow.triangle.2.circlepath")
@@ -464,6 +467,7 @@ public struct SettingsView: View {
         case "extensions": return "Extensions & Plugins"
         case "advanced": return "Advanced Multi-Agent Settings"
         case "ai": return "AI Model Providers"
+        case "agentSignIns": return "Agent Sign-ins"
         case "appearance": return "Appearance & Styling"
         case "environment": return "Environment Variables"
         case "updates": return "Updates & Diagnostics"
@@ -486,6 +490,7 @@ public struct SettingsView: View {
         case "extensions": return "Install, manage, configure, or remove custom plugins and MCP extensions"
         case "advanced": return "Sub-agent orchestration depth and collaboration room"
         case "ai": return "Configure local Ollama, LM Studio, and cloud API endpoints"
+        case "agentSignIns": return "Sign in to Claude Code (CLI and Desktop) and OpenCode on this Mac"
         case "appearance": return "Themes, accent colors, font sizes, and window transparency"
         case "environment": return "Key-value environment variables passed to tools"
         case "updates": return "Application version and release update checking"
