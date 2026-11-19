@@ -51,7 +51,6 @@
 		30D83D546FC4147DD9DD1BB2 /* SkillsAndMcpModals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EA0EFA21CC01B31CF68136B /* SkillsAndMcpModals.swift */; };
 		31E757EB67A14D18489B99A4 /* TokenBarAndToolDeferralTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DE1F79F62EB0383A096504F /* TokenBarAndToolDeferralTests.swift */; };
 		33D0657284E554C28C8573F1 /* AliasSafetyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B55D8C0BE7FE3BE0712F1334 /* AliasSafetyTests.swift */; };
-		380E6E4F067878244A4CB255 /* uninstall.png in Resources */ = {isa = PBXBuildFile; fileRef = 81636BA30BBB2FD58B6DFE11 /* uninstall.png */; };
 		384AF9AD3CA3E051C9078E38 /* LiveCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE24DE2D2600A302EC71951B /* LiveCanvasView.swift */; };
 		3868726961E0CAA9A754C2FD /* BatchingNudgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80F3DC9B60D9A10597ADA7A1 /* BatchingNudgeTests.swift */; };
 		389E114506F4795BB35B6F82 /* AgentTerminalHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33AFD3299BC2308071173848 /* AgentTerminalHostTests.swift */; };
@@ -81,7 +80,6 @@
 		4F30F0D39AFB78ECCA6294D6 /* ExtensionPluginModals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62E2C79F823DC13AEA031CA3 /* ExtensionPluginModals.swift */; };
 		507B19565F086F149EABB411 /* MCPRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 684448C9FDE79F47F7F674DC /* MCPRoutingTests.swift */; };
 		5525F32966566E88FF188866 /* CuratedCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 691A950C150D14F3395231C9 /* CuratedCatalogTests.swift */; };
-		556679C24AF7B7C3BB3593F7 /* uninstall_animated.png in Resources */ = {isa = PBXBuildFile; fileRef = 709DF3411FC4DE2965D73A6E /* uninstall_animated.png */; };
 		56BBF13F2F7140164A0B9572 /* SessionCheckpointStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C37EABF32E2FA6911F83B3B /* SessionCheckpointStoreTests.swift */; };
 		56E7D3E7E0C62422272D11EE /* RenameToSwiftOpenWorkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE5CA166AD0F89FBA3522AE2 /* RenameToSwiftOpenWorkTests.swift */; };
 		57ACD4A2F8D4AEEDDF6C457F /* LoopEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F1B237E160FA882223607FC /* LoopEditorSheet.swift */; };
@@ -194,7 +192,6 @@
 		CF17786D4B7BEF1B2F75ABD3 /* SessionChangeSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DCA08C809C28A3BD4510C7C /* SessionChangeSummaryTests.swift */; };
 		D3994B086CBE9B18C06C7BB4 /* EvalHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7F35A67AF24941C6A792C1A /* EvalHarnessTests.swift */; };
 		D3EAC64F66CCEA59473CC719 /* EditorPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E167810E6AFA48453B5BAB0 /* EditorPane.swift */; };
-		D67A8C60D5C581A928E6AF73 /* install.png in Resources */ = {isa = PBXBuildFile; fileRef = 8C6C1387C06216393FCA37C5 /* install.png */; };
 		D819A117DC8D1F175844B7AF /* SourceTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CB86F43511D19A4A87A8D98 /* SourceTree.swift */; };
 		DB62D51431C46B425B8C9B06 /* AgentSignInTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43DCEF310EDA2489B70A9D14 /* AgentSignInTests.swift */; };
 		DB6784C56F046B1601051E14 /* MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56B6AF6262D67BA11C8738AD /* MessageBubbleView.swift */; };
@@ -369,7 +366,6 @@
 		6C807D6E8D9E37ADB1D74E30 /* HitTestableButtonSweepTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HitTestableButtonSweepTests.swift; sourceTree = "<group>"; };
 		6EA0EFA21CC01B31CF68136B /* SkillsAndMcpModals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillsAndMcpModals.swift; sourceTree = "<group>"; };
 		6EFD80AF1269AC53A14551D0 /* AgentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsView.swift; sourceTree = "<group>"; };
-		709DF3411FC4DE2965D73A6E /* uninstall_animated.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = uninstall_animated.png; sourceTree = "<group>"; };
 		7176EAF8690F64336D66BB24 /* CodeIndexAndCompactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeIndexAndCompactionTests.swift; sourceTree = "<group>"; };
 		736A9051A687054191A2AABD /* RepeatedFailingCallTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepeatedFailingCallTests.swift; sourceTree = "<group>"; };
 		745C2D0B3B43ED0D8D8ADE77 /* AnthropicRequestPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnthropicRequestPolicyTests.swift; sourceTree = "<group>"; };
@@ -390,7 +386,6 @@
 		80ECE0FBA97265ACBAD3D556 /* ProcessTreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessTreeTests.swift; sourceTree = "<group>"; };
 		80F3DC9B60D9A10597ADA7A1 /* BatchingNudgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatchingNudgeTests.swift; sourceTree = "<group>"; };
 		81101AC7F890CD2C2A4FFC6F /* MultiAgentDelegationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiAgentDelegationTests.swift; sourceTree = "<group>"; };
-		81636BA30BBB2FD58B6DFE11 /* uninstall.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = uninstall.png; sourceTree = "<group>"; };
 		833867696E1FAC204DC99020 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		837330AF2E6D7C0F5437ABCE /* FileReadPaginationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileReadPaginationTests.swift; sourceTree = "<group>"; };
 		844AF22FD319E171A2F1420C /* SideBySideDiffReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SideBySideDiffReviewView.swift; sourceTree = "<group>"; };
@@ -399,7 +394,6 @@
 		8BB1F03F60F9CACE712B1770 /* AgentTerminalHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTerminalHost.swift; sourceTree = "<group>"; };
 		8C374EDB6CA8A0C50D010A50 /* TeamMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeamMapView.swift; sourceTree = "<group>"; };
 		8C37EABF32E2FA6911F83B3B /* SessionCheckpointStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCheckpointStoreTests.swift; sourceTree = "<group>"; };
-		8C6C1387C06216393FCA37C5 /* install.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = install.png; sourceTree = "<group>"; };
 		8C9586B2BB84439DC990D24F /* ProvidersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProvidersView.swift; sourceTree = "<group>"; };
 		8D46196EE4D147CE029E08F4 /* SettingsView+Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsView+Preferences.swift"; sourceTree = "<group>"; };
 		8F44154AE4151F5C06F45CB0 /* BuiltInProviderDefaultTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInProviderDefaultTests.swift; sourceTree = "<group>"; };
@@ -704,19 +698,8 @@
 			children = (
 				08CAF15CFD3813B913E828B3 /* AppIcon.icns */,
 				833867696E1FAC204DC99020 /* Assets.xcassets */,
-				40DCBB5FEE733E399E8FA3B3 /* icons_2026-10-12 15-35-10.391 */,
 			);
 			path = Resources;
-			sourceTree = "<group>";
-		};
-		40DCBB5FEE733E399E8FA3B3 /* icons_2026-10-12 15-35-10.391 */ = {
-			isa = PBXGroup;
-			children = (
-				8C6C1387C06216393FCA37C5 /* install.png */,
-				709DF3411FC4DE2965D73A6E /* uninstall_animated.png */,
-				81636BA30BBB2FD58B6DFE11 /* uninstall.png */,
-			);
-			path = "icons_2026-10-12 15-35-10.391";
 			sourceTree = "<group>";
 		};
 		480303F6E0DBCD8B0DA2BD0E /* Preview */ = {
@@ -1125,9 +1108,6 @@
 			files = (
 				A0454228CF269B41F16E003F /* AppIcon.icns in Resources */,
 				FC71082CF35D2E2E0A118E4E /* Assets.xcassets in Resources */,
-				D67A8C60D5C581A928E6AF73 /* install.png in Resources */,
-				380E6E4F067878244A4CB255 /* uninstall.png in Resources */,
-				556679C24AF7B7C3BB3593F7 /* uninstall_animated.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
