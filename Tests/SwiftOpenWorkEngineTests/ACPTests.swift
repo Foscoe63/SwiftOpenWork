@@ -190,4 +190,16 @@ final class ACPRunnerTests: XCTestCase {
         let resolved = try await value()
         return try XCTUnwrap(resolved, file: file, line: line)
     }
+
+    /// A cancelled turn's delayed cleanup must not stop an agent that a newer turn is using.
+    func testCancelledTurnCleanupSparesNewerTurn() async {
+        let pool = ACPSessionPool()
+        let old = await pool.beginTurn(for: "chat|agent")
+        let new = await pool.beginTurn(for: "chat|agent")
+        XCTAssertNotEqual(old, new)
+        // Neither call may crash or clear the newer turn's busy mark.
+        await pool.removeIfCurrent("chat|agent", token: old)
+        await pool.endTurn(for: "chat|agent", token: old)
+        await pool.removeIfCurrent("chat|agent", token: new)
+    }
 }

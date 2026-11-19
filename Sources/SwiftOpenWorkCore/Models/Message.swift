@@ -69,6 +69,9 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
     /// API needs them back (Claude, within a tool-use turn). Nil for every other reply — and for
     /// every message saved before this existed, which decodes to nil.
     public var thinkingBlocks: [ThinkingBlock]?
+    /// The department the replying agent sat in when it answered ("" is General), so usage can be
+    /// reported by department even after an agent moves. Nil on replies saved before departments existed.
+    public var department: String?
 
     public init(
         id: String = UUID().uuidString,
@@ -128,7 +131,7 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         case timestamp, toolCalls, subAgentTasks, attachments
         case isStreaming, isError, promptTokens, completionTokens, generationTokensPerSecond
         case billedPromptTokens, billedCompletionTokens
-        case notices, haltReason, haltText, thinkingBlocks
+        case notices, haltReason, haltText, thinkingBlocks, department
     }
 
     public init(from decoder: Decoder) throws {
@@ -160,6 +163,7 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         self.haltReason = try container.decodeIfPresent(String.self, forKey: .haltReason)
         self.haltText = try container.decodeIfPresent(String.self, forKey: .haltText)
         self.thinkingBlocks = try container.decodeIfPresent([ThinkingBlock].self, forKey: .thinkingBlocks)
+        self.department = try container.decodeIfPresent(String.self, forKey: .department)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -191,5 +195,6 @@ public struct ChatMessage: Identifiable, Codable, Hashable, Sendable {
         try container.encodeIfPresent(haltReason, forKey: .haltReason)
         try container.encodeIfPresent(haltText, forKey: .haltText)
         try container.encodeIfPresent(thinkingBlocks, forKey: .thinkingBlocks)
+        try container.encodeIfPresent(department, forKey: .department)
     }
 }

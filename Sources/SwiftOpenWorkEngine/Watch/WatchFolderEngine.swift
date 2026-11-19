@@ -12,6 +12,12 @@ public final class WatchFolderEngine: ObservableObject {
 
     private init() {}
 
+    /// Built outside the main actor on purpose: a closure made inside this class inherits `@MainActor`,
+    /// and the dispatch source runs it on a utility queue, which traps the isolation check.
+    nonisolated private static func closer(for descriptor: Int32) -> @Sendable () -> Void {
+        { close(descriptor) }
+    }
+
     public func startWatching(items: [WatchItem], onEventTriggered: @escaping @MainActor (WatchItem, String) -> Void) {
         stopAll()
 
@@ -41,9 +47,7 @@ public final class WatchFolderEngine: ObservableObject {
                 }
             }
 
-            source.setCancelHandler {
-                close(descriptor)
-            }
+            source.setCancelHandler(handler: Self.closer(for: descriptor))
 
             source.resume()
             fileMonitors[item.id] = source

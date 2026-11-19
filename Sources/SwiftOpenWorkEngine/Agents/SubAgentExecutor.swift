@@ -156,6 +156,10 @@ public enum SubAgentExecutor {
             if tool.name == "agent_message" && !subAgent.canCommunicateWithOthers { return false }
             // Shortened results point at this tool, so a restricted agent needs it too.
             if tool.name == "recall_output" { return true }
+            // A department member can propose and search its department's team notes whatever its list says.
+            if tool.name == "propose_team_memory" || tool.name == "search_team_memory" {
+                return !PersistenceManager.shared.loadTeamMap().department(of: subAgent.id).isEmpty
+            }
             // An empty allowlist means "everything the workspace allows", which is how existing
             // agents are configured; a populated one is a real restriction.
             if !subAgent.allowedToolIds.isEmpty,
@@ -269,7 +273,7 @@ public enum SubAgentExecutor {
 
         let systemPrompt = """
         \(subAgent.systemPrompt)
-
+        \(TeamMapLogic.promptSection(for: subAgent, agents: PersistenceManager.shared.loadAgents(), state: PersistenceManager.shared.loadTeamMap()))
         You are \(subAgent.name), a \(subAgent.role) sub-agent working for \(parentAgent.name).
         You are running unattended: nobody is watching, so you cannot ask questions. \
         \(worktree != nil

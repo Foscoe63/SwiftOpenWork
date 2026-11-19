@@ -12,6 +12,8 @@ public struct AgentsView: View {
     @State private var pendingTemplateAgent: Agent? = nil
     @State private var editingAgent: Agent? = nil
     @State private var selectedTab: String = "list" // list, collaboration
+    /// Department tab shown in the list; "" is General.
+    @State private var selectedDepartment: String = ""
 
     // Collaboration room state
     @State private var collaborationGoal: String = "Architect and review a high-throughput Swift async actor pipeline."
@@ -141,13 +143,42 @@ public struct AgentsView: View {
 
     // MARK: - Agents List Content
     private var agentsListContent: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 320, maximum: 420), spacing: 14)], spacing: 14) {
-                ForEach(appState.agents) { agent in
-                    agentCard(agent: agent)
+        let sections = appState.teamSections
+        // A department that was deleted or emptied while selected falls back to the first tab.
+        let current = sections.first { $0.key == selectedDepartment } ?? sections.first
+        return VStack(spacing: 0) {
+            if sections.count > 1 {
+                departmentTabs(sections, current: current?.key)
+            }
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 320, maximum: 420), spacing: 14)], spacing: 14) {
+                    ForEach(sections.count > 1 ? (current?.allAgents ?? []) : appState.agents) { agent in
+                        agentCard(agent: agent)
+                    }
+                }
+                .padding(16)
+            }
+        }
+    }
+
+    /// One tab per department; agents outside any department are under "General".
+    private func departmentTabs(_ sections: [TeamMapSection], current: String?) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(sections) { section in
+                    let selected = section.key == current
+                    Button { selectedDepartment = section.key } label: {
+                        Text("\(appState.departmentLabel(section.key)) (\(section.count))")
+                            .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                            .padding(.horizontal, 12).padding(.vertical, 5)
+                            .foregroundColor(selected ? .white : ThemeColors.textSecondary(for: appState.settings.theme))
+                            .background(Capsule().fill(selected ? ThemeColors.accent(for: appState.settings.accentColor) : ThemeColors.cardBg(for: appState.settings.theme)))
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .padding(16)
+            .padding(.horizontal, 16).padding(.vertical, 8)
         }
     }
 
@@ -187,7 +218,7 @@ public struct AgentsView: View {
 
                 Menu {
                     Button("Set as Active Agent") {
-                        appState.selectedAgentId = agent.id
+                        appState.setActiveAgent(agent.id)
                         appState.showToast("\(agent.name) is now active")
                     }
                     Button("Start New Chat with Agent") {
@@ -418,13 +449,14 @@ public struct AgentEditModalView: View {
     @ObservedObject var appState: AppState
     var onSave: (Agent) -> Void
     var onCancel: () -> Void
-    /// Collapsed tool headings: "tools", "mcp", or "mcp:<server id>".
-    @State private var collapsedSections: Set<String> = []
+    /// Headings the person has opened. Every heading starts collapsed: "identity", "persona", "hierarchy",
+    /// "tools", "mcp", "mcp:<server id>", "skills", "llm".
+    @State private var expandedSections: Set<String> = []
 
-    private func isExpanded(_ key: String) -> Bool { !collapsedSections.contains(key) }
+    private func isExpanded(_ key: String) -> Bool { expandedSections.contains(key) }
 
     private func toggleSection(_ key: String) {
-        if collapsedSections.contains(key) { collapsedSections.remove(key) } else { collapsedSections.insert(key) }
+        if expandedSections.contains(key) { expandedSections.remove(key) } else { expandedSections.insert(key) }
     }
 
     private func collapsibleHeading(_ title: String, key: String, font: Font) -> some View {
@@ -455,6 +487,13 @@ public struct AgentEditModalView: View {
         self.appState = appState
         self.onSave = onSave
         self.onCancel = onCancel
+    }
+
+    /// A skill can be in both the saved list and the global skills folder (for example one imported
+    /// from `~/.claude/skills`), which listed it twice. Keep the first of each name.
+    private static func uniqueSkills(_ skills: [Skill]) -> [Skill] {
+        var seen = Set<String>()
+        return skills.filter { seen.insert($0.name.lowercased()).inserted }
     }
 
     /// Individual tools of each running MCP server. The server row above admits all of a server's
@@ -538,9 +577,9 @@ public struct AgentEditModalView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     // Identity
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Identity & Appearance")
-                            .font(.system(size: 12, weight: .bold))
+                        collapsibleHeading("Identity & Appearance", key: "identity", font: .system(size: 12, weight: .bold))
 
+                        if isExpanded("identity") {
                         HStack {
                             Text("Avatar Icon:")
                                 .font(.system(size: 11.5))
@@ -582,32 +621,35 @@ public struct AgentEditModalView: View {
                             .textFieldStyle(.roundedBorder)
                         TextField("Description", text: $draft.description)
                             .textFieldStyle(.roundedBorder)
+                        }
                     }
 
                     Divider()
 
                     // Instructions & Persona
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("System Instructions & Persona")
-                            .font(.system(size: 12, weight: .bold))
-                        TextEditor(text: $draft.systemPrompt)
-                            .font(.system(size: 11.5, design: .monospaced))
-                            .frame(height: 110)
-                            .padding(4)
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+                        collapsibleHeading("System Instructions & Persona", key: "persona", font: .system(size: 12, weight: .bold))
+                        if isExpanded("persona") {
+                            TextEditor(text: $draft.systemPrompt)
+                                .font(.system(size: 11.5, design: .monospaced))
+                                .frame(height: 110)
+                                .padding(4)
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+                        }
                     }
 
                     Divider()
 
                     // Sub-Agents & Hierarchy
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Sub-Agent Permissions & Hierarchy")
-                            .font(.system(size: 12, weight: .bold))
+                        collapsibleHeading("Sub-Agent Permissions & Hierarchy", key: "hierarchy", font: .system(size: 12, weight: .bold))
 
-                        Toggle("Can Spawn Child Sub-Agents", isOn: $draft.canSpawnSubAgents)
-                        Toggle("Can Communicate with Other Agents", isOn: $draft.canCommunicateWithOthers)
-                        Toggle("Auto-Delegate Complex Tasks", isOn: $draft.autoDelegate)
-                        Stepper("Max Sub-Agent Nesting Depth: \(draft.maxSubAgentDepth)", value: $draft.maxSubAgentDepth, in: 1...5)
+                        if isExpanded("hierarchy") {
+                            Toggle("Can Spawn Child Sub-Agents", isOn: $draft.canSpawnSubAgents)
+                            Toggle("Can Communicate with Other Agents", isOn: $draft.canCommunicateWithOthers)
+                            Toggle("Auto-Delegate Complex Tasks", isOn: $draft.autoDelegate)
+                            Stepper("Max Sub-Agent Nesting Depth: \(draft.maxSubAgentDepth)", value: $draft.maxSubAgentDepth, in: 1...5)
+                        }
                     }
 
                     Divider()
@@ -664,14 +706,14 @@ public struct AgentEditModalView: View {
 
                     // Allowed Skills
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Skills")
-                            .font(.system(size: 12, weight: .bold))
+                        collapsibleHeading("Skills", key: "skills", font: .system(size: 12, weight: .bold))
+                        if isExpanded("skills") {
                         Text((draft.allowedSkillIds ?? []).isEmpty
                              ? "No restriction: this agent is shown every enabled skill."
                              : "Only the skills ticked below are shown to this agent.")
                             .font(.system(size: 10.5))
                             .foregroundColor(.secondary)
-                        ForEach(appState.skills + ProjectSkills.loadGlobal()) { skill in
+                        ForEach(Self.uniqueSkills(appState.skills + ProjectSkills.loadGlobal())) { skill in
                             Toggle(skill.name, isOn: Binding(
                                 get: { skill.isAllowed(by: draft.allowedSkillIds) && !(draft.allowedSkillIds ?? []).isEmpty },
                                 set: { on in
@@ -686,15 +728,16 @@ public struct AgentEditModalView: View {
                             ))
                             .font(.system(size: 11.5))
                         }
+                        }
                     }
 
                     Divider()
 
                     // LLM Parameters
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("LLM Model & Parameters")
-                            .font(.system(size: 12, weight: .bold))
+                        collapsibleHeading("LLM Model & Parameters", key: "llm", font: .system(size: 12, weight: .bold))
 
+                        if isExpanded("llm") {
                         HStack {
                             Text("Model Provider:")
                                 .font(.system(size: 11.5))
@@ -751,6 +794,7 @@ public struct AgentEditModalView: View {
                                     Text(effort.displayName).tag(effort)
                                 }
                             }
+                        }
                         }
                     }
                 }

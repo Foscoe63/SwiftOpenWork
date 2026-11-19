@@ -350,6 +350,33 @@ final class AgentLoopTranscriptTests: XCTestCase {
         XCTAssertNil(AgentRunner.unchangedReadNote(toolName: "file_read", argumentsJson: args, workspaceRoot: root, log: log, transcript: transcript))
     }
 
+    func testReadsFromAnEarlierTurnSeedTheLogWhileTheFileIsUnchanged() throws {
+        try "echo hi\n".write(toFile: root + "/b.sh", atomically: true, encoding: .utf8)
+        let args = #"{"path":"b.sh"}"#
+        let call = ToolCallInfo(id: "r9", toolName: "file_read", argumentsJson: args,
+                                timestamp: Date().addingTimeInterval(10))
+        var assistant = ChatMessage(id: "a1", sessionId: "s", role: .assistant, content: "")
+        assistant.toolCalls = [call]
+        let result = ChatMessage(id: "r9", sessionId: "s", role: .tool, content: "1\techo hi")
+
+        let log = AgentRunner.seedReadLog(transcript: [assistant, result], workspaceRoot: root)
+        let note = AgentRunner.unchangedReadNote(toolName: "file_read", argumentsJson: args, workspaceRoot: root,
+                                                 log: log, transcript: [assistant, result])
+        XCTAssertTrue(note?.contains("earlier in this conversation") ?? false, note ?? "nil")
+
+        // Compacted out of context: nothing to point back at.
+        let folded = ChatMessage(id: "r9", sessionId: "s", role: .tool, content: "[Earlier tool result compacted] x")
+        XCTAssertTrue(AgentRunner.seedReadLog(transcript: [assistant, folded], workspaceRoot: root).isEmpty)
+    }
+
+    func testAFoldedFileReadKeepsItsDeclarations() {
+        let read = "a.swift — 40 lines\n 1\timport Foundation\n 2\tpublic struct Thing {\n 3\t    func run() {}\n 4\t    let x = 1"
+        let outline = ContextCompactor.declarationOutline(of: read)
+        XCTAssertTrue(outline.contains("2:public struct Thing"), outline)
+        XCTAssertTrue(outline.contains("3:func run()"), outline)
+        XCTAssertEqual(ContextCompactor.declarationOutline(of: "build ok\nfunc nothing"), "")
+    }
+
     // MARK: - History across turns
 
     private func turn() -> (session: Session, context: [ChatMessage]) {

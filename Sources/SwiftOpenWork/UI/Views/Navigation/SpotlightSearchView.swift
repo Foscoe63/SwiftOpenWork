@@ -332,7 +332,7 @@ public struct SpotlightSearchView: View {
                     items.append(PaletteItem(id: "agent.\(agent.id)", title: agent.name, subtitle: "Switch to this agent · \(agent.role)",
                                              kind: .agent, keywords: [agent.role]) {
                         close()
-                        appState.selectedAgentId = agent.id
+                        appState.setActiveAgent(agent.id)
                         appState.navigationDestination = .chat
                     })
                 }
