@@ -89,6 +89,36 @@ extension AppState {
         return made
     }
 
+    // MARK: Import
+
+    /// Adds a team or bot written for another tool. Several members become a department (named after the
+    /// team, or numbered if that is taken) with a lead when the file names one; a single bot is added as
+    /// an agent in General. Returns the new agents. Nothing is connected, scheduled or switched on.
+    @discardableResult
+    public func importExternalTeam(_ team: ExternalTeam) -> [Agent] {
+        var deptName = Self.cleanDepartmentName(team.name)
+        if deptName.isEmpty { deptName = "Imported team" }
+        if team.members.count < 2 {
+            guard let m = team.members.first else { return [] }
+            var name = String(m.name.prefix(60)), n = 2
+            while agents.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) { name = "\(m.name.prefix(56)) \(n)"; n += 1 }
+            var agent = Agent(name: name, description: m.description, role: m.title.isEmpty ? "Imported" : m.title, systemPrompt: m.instructions)
+            agent.temperature = settings.defaultTemperature
+            agents.append(agent)
+            PersistenceManager.shared.saveAgents(agents)
+            return [agent]
+        }
+        var unique = deptName, n = 2
+        while departmentNameTaken(unique) { unique = "\(deptName.prefix(TeamMapLogic.maxNameLength - 4)) \(n)"; n += 1 }
+        let template = DepartmentTemplate(
+            id: "import", title: team.name, summary: team.summary, icon: "square.and.arrow.down",
+            members: team.members.map { .init(role: $0.name, avatar: "person.crop.circle.badge.checkmark", color: "#8B5CF6",
+                                              blurb: $0.description, persona: $0.instructions, isLead: $0.isLead) },
+            instructions: ""
+        )
+        return createDepartment(from: template, named: unique)
+    }
+
     @discardableResult
     public func renameDepartment(_ old: String, to rawName: String) -> Bool {
         let name = Self.cleanDepartmentName(rawName)

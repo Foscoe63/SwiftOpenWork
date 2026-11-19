@@ -21,6 +21,7 @@ struct TeamMapView: View {
     @State private var showUsage = false
     @State private var usageDays = 7
     @State private var creating = false
+    @State private var importing = false
     @State private var renaming: String?
     @State private var renameText = ""
     @State private var deleting: String?
@@ -58,6 +59,9 @@ struct TeamMapView: View {
         .background(p.bg)
         .sheet(isPresented: $creating) {
             NewDepartmentSheet(appState: appState) { creating = false }
+        }
+        .sheet(isPresented: $importing) {
+            ImportTeamSheet(appState: appState) { importing = false }
         }
         .sheet(item: Binding(get: { renaming.map { Named(name: $0) } }, set: { renaming = $0?.name })) { item in
             VStack(alignment: .leading, spacing: 14) {
@@ -119,6 +123,12 @@ struct TeamMapView: View {
                 .buttonStyle(.hitTestable).foregroundColor(p.muted).padding(8)
                 .accessibilityLabel("Usage by department")
                 .popover(isPresented: $showUsage, arrowEdge: .bottom) { usageList }
+            Button { importing = true } label: {
+                Label("Import…", systemImage: "square.and.arrow.down").font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.hitTestable).foregroundColor(p.text)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 9).stroke(p.border))
             Button { sheetError = ""; creating = true } label: {
                 Label("New department", systemImage: "plus").font(.system(size: 12, weight: .medium))
             }
@@ -653,6 +663,92 @@ struct AlsoInChargeSheet: View {
             guard !loaded else { return }
             loaded = true
             chosen = Set(appState.teamMap.managed[leadId] ?? [])
+        }
+    }
+}
+
+/// Import a team or bot from OpenMausBot or botteams: a file link, a GitHub repository to browse, or pasted text.
+/// The person sees what it adds before anything is created.
+struct ImportTeamSheet: View {
+    @ObservedObject var appState: AppState
+    let onClose: () -> Void
+
+    @State private var source = ""
+    @State private var preview: ExternalTeam?
+    @State private var library: [GitHubSource.Listing] = []
+    @State private var status = ""
+    @State private var working = false
+
+    private var p: TeamPalette { TeamPalette(appState) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Import a team").font(.system(size: 17, weight: .semibold)).foregroundColor(p.text)
+            Text("Paste a link to an OpenMausBot or botteams file, a GitHub repository to browse, or the file's text. You see what it adds before anything is created.")
+                .font(.system(size: 12)).foregroundColor(p.muted).fixedSize(horizontal: false, vertical: true)
+            TextEditor(text: $source).font(.system(size: 12, design: .monospaced)).frame(height: 80)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(p.border))
+                .accessibilityLabel("Team link or text")
+            if !status.isEmpty { Text(status).font(.system(size: 12)).foregroundColor(p.muted) }
+            if !library.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(library) { item in
+                            HStack {
+                                Text(item.name).font(.system(size: 13)).foregroundColor(p.text)
+                                Spacer()
+                                Button("Review…") { source = item.url.absoluteString; library = []; load() }
+                            }
+                        }
+                    }
+                }.frame(maxHeight: 200)
+            }
+            if let preview {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(preview.name).font(.system(size: 13, weight: .semibold)).foregroundColor(p.text)
+                    if !preview.summary.isEmpty { Text(preview.summary).font(.system(size: 12)).foregroundColor(p.muted) }
+                    Text(preview.members.map { $0.isLead ? "\($0.name) (lead)" : $0.name }.joined(separator: ", ")).font(.system(size: 12)).foregroundColor(p.text)
+                    Text(preview.members.count > 1 ? "Creates \(preview.members.count) agents and a department called “\(preview.name)”." : "Creates 1 agent.")
+                        .font(.system(size: 11.5)).foregroundColor(p.muted)
+                    if !preview.connectors.isEmpty {
+                        Text("Works best with: " + preview.connectors.joined(separator: ", ") + ". Nothing is connected for you.").font(.system(size: 11.5)).foregroundColor(p.muted)
+                    }
+                    if preview.routineCount > 0 {
+                        Text("\(preview.routineCount) scheduled routine\(preview.routineCount == 1 ? "" : "s") in the file will not be imported.").font(.system(size: 11.5)).foregroundColor(p.muted)
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Cancel", action: onClose).keyboardShortcut(.cancelAction)
+                if let preview {
+                    Button("Import") { _ = appState.importExternalTeam(preview); onClose() }.buttonStyle(.borderedProminent)
+                } else {
+                    Button(working ? "Working…" : "Preview", action: load).buttonStyle(.borderedProminent)
+                        .disabled(working || source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .padding(24).frame(width: 520).background(p.bg)
+    }
+
+    private func load() {
+        let text = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        preview = nil; library = []; status = ""
+        working = true
+        Task { @MainActor in
+            defer { working = false }
+            do {
+                if text.hasPrefix("https://"), !text.contains(where: \.isWhitespace), let url = URL(string: text) {
+                    if GitHubSource.isRepoLink(url) { library = try await GitHubSource.listing(for: url); return }
+                    preview = ExternalTeamImport.convert(markdown: try await ExternalTeamImport.download(url))
+                } else {
+                    preview = ExternalTeamImport.convert(markdown: text)
+                }
+                if preview == nil { status = "That is not an OpenMausBot or botteams team." }
+            } catch {
+                status = error.localizedDescription
+            }
         }
     }
 }
