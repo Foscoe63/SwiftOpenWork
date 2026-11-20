@@ -152,6 +152,7 @@ public enum SubAgentExecutor {
         return all.filter { tool in
             guard tool.isEnabled else { return false }
             if neverAvailable.contains(tool.name) { return false }
+            if tool.name == "code_mode" && !settings.enableCodeMode { return false }
             if tool.name == "agent_spawn" && !canRecurse { return false }
             if tool.name == "agent_message" && !subAgent.canCommunicateWithOthers { return false }
             // Shortened results point at this tool, so a restricted agent needs it too.

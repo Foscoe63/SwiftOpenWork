@@ -59,6 +59,11 @@ extension SettingsView {
                         .toggleStyle(.switch)
                 }
 
+                SettingsRow(title: "Code Mode", subtitle: "Let agents write one JavaScript program that calls several tools and returns only the result. Every call it makes is still checked by your rules, hooks and approvals", icon: "curlybraces") {
+                    Toggle("", isOn: $appState.settings.enableCodeMode)
+                        .toggleStyle(.switch)
+                }
+
                 SettingsRow(title: "Ask Before Fetching New Sites", subtitle: "Approve each new site per chat, and every fetch from this Mac or local network. Off lets automations fetch unattended", icon: "hand.raised") {
                     Toggle("", isOn: $appState.settings.askBeforeFetchingNewSites)
                         .toggleStyle(.switch)

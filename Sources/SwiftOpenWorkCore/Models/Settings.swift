@@ -234,6 +234,8 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var terminalSafetyLevel: TerminalSafetyLevel
     public var terminalShell: String // e.g. "/bin/zsh", "/bin/bash", "/opt/homebrew/bin/fish"
     public var allowWebAccess: Bool
+    /// Offer the `code_mode` tool: the model writes one JavaScript program that calls other tools.
+    public var enableCodeMode: Bool
     /// Ask before `fetch_url` reaches a host this session has not used. Local and private-network
     /// addresses ask every time while this is on. Off restores unasked fetches, for automations
     /// that must fetch unattended.
@@ -416,6 +418,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         terminalSafetyLevel: TerminalSafetyLevel = .safeOnly,
         terminalShell: String = "/bin/zsh",
         allowWebAccess: Bool = true,
+        enableCodeMode: Bool = false,
         askBeforeFetchingNewSites: Bool = true,
         maxTurnCostUSD: Double = 0,
         localAPIExposeCloudModels: Bool = false,
@@ -507,6 +510,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.terminalSafetyLevel = terminalSafetyLevel
         self.terminalShell = terminalShell
         self.allowWebAccess = allowWebAccess
+        self.enableCodeMode = enableCodeMode
         self.askBeforeFetchingNewSites = askBeforeFetchingNewSites
         self.maxTurnCostUSD = maxTurnCostUSD
         self.localAPIExposeCloudModels = localAPIExposeCloudModels
@@ -587,6 +591,7 @@ public struct AppSettings: Codable, Hashable, Sendable {
         self.terminalSafetyLevel = try container.decodeIfPresent(TerminalSafetyLevel.self, forKey: .terminalSafetyLevel) ?? def.terminalSafetyLevel
         self.terminalShell = try container.decodeIfPresent(String.self, forKey: .terminalShell) ?? def.terminalShell
         self.allowWebAccess = try container.decodeIfPresent(Bool.self, forKey: .allowWebAccess) ?? def.allowWebAccess
+        self.enableCodeMode = try container.decodeIfPresent(Bool.self, forKey: .enableCodeMode) ?? def.enableCodeMode
         self.askBeforeFetchingNewSites = try container.decodeIfPresent(Bool.self, forKey: .askBeforeFetchingNewSites) ?? def.askBeforeFetchingNewSites
         self.maxTurnCostUSD = try container.decodeIfPresent(Double.self, forKey: .maxTurnCostUSD) ?? def.maxTurnCostUSD
         self.localAPIExposeCloudModels = try container.decodeIfPresent(Bool.self, forKey: .localAPIExposeCloudModels) ?? def.localAPIExposeCloudModels
