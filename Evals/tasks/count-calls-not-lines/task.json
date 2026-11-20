@@ -1,0 +1,11 @@
+{
+  "id": "count-calls-not-lines",
+  "title": "Count calls, not lines",
+  "prompt": "How many times is `api.` called in app.js (count each call, not each line)? Write just the number into answer.txt.",
+  "verify": "python3 -c \"import re;assert open('answer.txt').read().strip()==str(len(re.findall(r'api\\.[a-z]+\\(',open('app.js').read())))\"",
+  "timeout_seconds": 300,
+  "tags": [
+    "grounding",
+    "counting"
+  ]
+}

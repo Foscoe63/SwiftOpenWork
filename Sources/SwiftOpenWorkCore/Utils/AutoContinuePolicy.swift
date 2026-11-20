@@ -131,7 +131,11 @@ public enum AutoContinuePolicy {
             .split(separator: "\n", omittingEmptySubsequences: true)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-        guard let lastLine = lines.last?.lowercased() else { return false }
+        // Steps of one turn are joined with no separator, so "…config file.Everything is done." is
+        // two sentences. Without a break there the earlier one's "let me" read as the last words.
+        guard let lastLine = lines.last?
+            .replacingOccurrences(of: #"([.!?])([A-Z])"#, with: "$1 $2", options: .regularExpression)
+            .lowercased() else { return false }
         if lastLine.hasSuffix("?") { return false }
         // The last sentence of the last line.
         let body = lastLine.trimmingCharacters(in: CharacterSet(charactersIn: ".!:…").union(.whitespaces))

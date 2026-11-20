@@ -128,6 +128,12 @@ final class UnfulfilledIntentTests: XCTestCase {
         XCTAssertTrue(AutoContinuePolicy.endsWithUnfulfilledIntent("I found the bug. Let me read Config.swift..."))
     }
 
+    /// A turn's steps are joined with no separator: the earlier step's "let me" is not the last words.
+    func testStepsJoinedWithoutASeparatorAreReadAsSeparateSentences() {
+        XCTAssertFalse(AutoContinuePolicy.endsWithUnfulfilledIntent("Found it. Now let me check the config file.Everything is complete."))
+        XCTAssertTrue(AutoContinuePolicy.endsWithUnfulfilledIntent("Everything looks fine.Now let me check the config file."))
+    }
+
     func testFinishedAnswersAreNotStalls() {
         XCTAssertFalse(AutoContinuePolicy.endsWithUnfulfilledIntent(
             "I renamed the function and updated callers. Now let me know if you'd like changes."))
