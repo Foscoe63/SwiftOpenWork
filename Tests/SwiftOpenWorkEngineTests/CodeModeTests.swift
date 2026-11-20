@@ -191,6 +191,14 @@ final class CodeModeTests: XCTestCase {
         XCTAssertTrue(text.contains("[1 tool call]\n1. grep ok 3ms"))
     }
 
+    func testThePromptHintAppearsOnlyWhenTheToolIsOffered() {
+        XCTAssertEqual(CodeModePolicy.promptHint(offered: false), "")
+        let hint = CodeModePolicy.promptHint(offered: true)
+        XCTAssertTrue(hint.hasPrefix("code_mode:"))
+        XCTAssertTrue(hint.contains("ONE script"))
+        XCTAssertFalse(hint.contains("\n"), "the hint should be a single line")
+    }
+
     func testCodeModeIsOffUntilSwitchedOn() {
         XCTAssertFalse(AppSettings().enableCodeMode)
         XCTAssertNotNil(ToolHandlerRegistry.handlers["code_mode"])

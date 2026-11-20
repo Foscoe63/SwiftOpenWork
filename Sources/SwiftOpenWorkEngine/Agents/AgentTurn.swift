@@ -665,6 +665,7 @@ mcpPromptSummary = ""
             terminal_command/run_command: interactive:true for commands that prompt (answer them with send_input).
             \(mcpPromptSummary)
             \(BuiltInToolSearch.promptSection(deferredBuiltIns))
+            \(CodeModePolicy.promptHint(offered: availableTools.contains { $0.name == "code_mode" }))
             \(skillsSection)
             \(teamSection)
 

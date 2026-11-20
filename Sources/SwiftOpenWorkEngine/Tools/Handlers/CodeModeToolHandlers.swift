@@ -24,6 +24,19 @@ enum CodeModePolicy {
 
     static let maxCallsPerScript = 100
 
+    /// The line in the system prompt that tells the model when to reach for `code_mode`. Empty
+    /// when the tool is not offered, so a prompt never names a tool the agent does not have.
+    static func promptHint(offered: Bool) -> String {
+        guard offered else { return "" }
+        return """
+        code_mode: when a job needs many tool calls (reading or searching across many files, \
+        looping over results, filtering or counting before you answer), write ONE script with \
+        code_mode instead of calling tools one round at a time: \
+        `const r = await tools.grep({pattern: "TODO"}); return r.split("\\n").length;` \
+        Only what the script returns reaches you. For one or two calls, call the tools directly.
+        """
+    }
+
     /// Why `toolName` may not run from a script, or nil. `offered` is the canonical names of the
     /// built-in tools this agent has; nil skips that check.
     static func refusal(toolName: String, offered: Set<String>?, settings: AppSettings) -> String? {
