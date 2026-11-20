@@ -28,7 +28,7 @@ public enum ToolCallRepair {
         "quit_app", "worktree_create", "worktree_list", "worktree_remove", "worktree_merge", "screenshot_window",
         "accessibility_tree", "run_app", "preview_start", "preview_check", "preview_logs",
         "preview_stop", "agent_spawn", "agent_message", "memory_store", "memory_recall", "mcp_call", "mcp_describe", "tool_describe", "skill_load", "mcp_resources", "recall_output", "propose_team_memory", "search_team_memory",
-        "gmail_list", "google_calendar_list",
+        "gmail_list", "google_calendar_list", "code_mode",
     ]
 
     /// First entry is the canonical name; the rest are spellings that resolve to it.

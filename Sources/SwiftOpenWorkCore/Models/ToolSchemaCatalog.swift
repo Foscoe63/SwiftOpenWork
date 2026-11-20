@@ -85,6 +85,14 @@ public enum ToolSchemaCatalog {
                 parametersJsonSchema: schemas["search_team_memory"]!
             ),
             Tool(
+                id: "code_mode",
+                name: "code_mode",
+                displayName: "Code Mode",
+                description: "Run one JavaScript program that calls other tools and returns only its final result. Use it when a job needs many tool calls (read many files, search then filter, loop over results): `const r = await tools.grep({pattern:\"TODO\"}); return r.split(\"\\n\").length;`. Every tool is `await tools.<name>(args)` and returns its output text, or throws; console.log is captured. Call with list_tools=true to see the tools and their arguments. Calls that need approval still ask.",
+                category: .system,
+                parametersJsonSchema: schemas["code_mode"]!
+            ),
+            Tool(
                 id: "recall_output",
                 name: "recall_output",
                 displayName: "Recall Saved Output",
@@ -512,6 +520,7 @@ public enum ToolSchemaCatalog {
         "skill_load": #"{"type":"object","properties":{"name":{"type":"string","description":"The skill's name exactly as listed under Active Skills."}},"required":["name"]}"#,
         "propose_team_memory": #"{"type":"object","properties":{"kind":{"type":"string","enum":["person","place","decision","term"],"description":"What sort of note this is."},"name":{"type":"string","description":"A short title, at most 120 characters."},"detail":{"type":"string","description":"The fact, its context and why it matters, at most 600 characters."},"aliases":{"type":"array","items":{"type":"string"},"description":"Other names it goes by."},"key":{"type":"string","description":"Optional stable key. Reuse an existing note's key to propose a correction to it."}},"required":["kind","name","detail"]}"#,
         "search_team_memory": #"{"type":"object","properties":{"query":{"type":"string","description":"Words to find in the department's accepted notes."},"limit":{"type":"integer","description":"At most this many notes (default 12, cap 25)."}},"required":["query"]}"#,
+        "code_mode": #"{"type":"object","properties":{"code":{"type":"string","description":"The body of an async JavaScript function. Call tools with `await tools.<name>({...})` (output text, or throws), use Promise.all for independent reads, and `return` the value you want back. Only what you return and console.log reaches you."},"list_tools":{"type":"boolean","description":"Return the tools a script may call, with their arguments, instead of running code."},"timeout_seconds":{"type":"integer","description":"Wall-clock limit for the whole script (default 120, max 600)."}},"required":[]}"#,
         "recall_output": #"{"type":"object","properties":{"id":{"type":"string","description":"The saved id from the end of a shortened result, such as out_a1b2c3. Omit to list saved outputs."},"query":{"type":"string","description":"Words to find. Returns matching lines with a little context; a line must contain every word."},"start":{"type":"integer","description":"First line to read (1-indexed). Used when no query is given."},"lines":{"type":"integer","description":"How many lines to read from start (default 120, max 400)."}}}"#,
         "mcp_describe": #"{"type":"object","properties":{"query":{"type":"string","description":"Words from the tool's name or purpose, a server id, or an exact mcp__server__tool name. Space-separated words must all match."},"limit":{"type":"integer","description":"How many tools to load (default 6, max 12)."}},"required":["query"]}"#,
         "mcp_resources": #"{"type":"object","properties":{"server":{"type":"string","description":"Server id or name."},"action":{"type":"string","enum":["list_resources","read_resource","list_prompts","get_prompt"]},"uri":{"type":"string","description":"Resource URI for read_resource."},"name":{"type":"string","description":"Prompt name for get_prompt."},"arguments":{"type":"object","description":"Prompt arguments for get_prompt."}},"required":["server","action"]}"#,

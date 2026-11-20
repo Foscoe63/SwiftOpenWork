@@ -337,6 +337,7 @@ final class AgentTurn {
         // The agent's own tool list. It was only applied to sub-agents and MCP tools, so a main
         // agent with 27 boxes ticked was still sent every built-in tool the workspace had on.
         availableTools = Self.restrictToAllowlist(availableTools, allowed: agent.allowedToolIds)
+        if !loadedSettings.enableCodeMode { availableTools.removeAll { $0.name == "code_mode" } }
 
         // Casual / inventory turns must not wait on npx cold starts.
         casualChat = MCPClientManager.isCasualChatPrompt(lastPrompt)
@@ -664,6 +665,7 @@ mcpPromptSummary = ""
             terminal_command/run_command: interactive:true for commands that prompt (answer them with send_input).
             \(mcpPromptSummary)
             \(BuiltInToolSearch.promptSection(deferredBuiltIns))
+            \(CodeModePolicy.promptHint(offered: availableTools.contains { $0.name == "code_mode" }))
             \(skillsSection)
             \(teamSection)
 

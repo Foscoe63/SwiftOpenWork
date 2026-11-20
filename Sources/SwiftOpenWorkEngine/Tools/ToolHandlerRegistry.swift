@@ -43,6 +43,7 @@ enum ToolHandlerRegistry {
         + ToolExecutionEngine.agentToolHandlers
         + ToolExecutionEngine.teamToolHandlers
         + ToolExecutionEngine.mcpToolHandlers
+        + ToolExecutionEngine.codeModeToolHandlers
 
     static let handlers: [String: ToolHandler] = {
         var table: [String: ToolHandler] = [:]
