@@ -9,7 +9,10 @@ public enum HookEvent: String, Sendable, CaseIterable {
     case postToolUse = "PostToolUse"
     /// When a message is sent. Can block the turn or add context.
     case userPromptSubmit = "UserPromptSubmit"
-    /// When a turn ends. Observational.
+    /// When the agent is about to finish a turn. Exit 2 (or `{"decision":"block"}`) refuses the
+    /// finish: the reason goes back to the agent, which keeps working. This is the verify step —
+    /// run a checker, and the agent cannot say "done" until it passes. At most a few refusals
+    /// per turn, so a checker that can never pass cannot hold a turn forever.
     case stop = "Stop"
 }
 
@@ -232,7 +235,8 @@ public enum ToolHooks {
                 case .postToolUse:
                     outcome.context.append(text)
                 case .stop:
-                    break
+                    outcome.blockReason = text
+                    return outcome
                 }
                 continue
             }
@@ -242,7 +246,7 @@ public enum ToolHooks {
                 continue
             }
             let parsed = interpret(stdout: ran.stdout, event: event)
-            if let block = parsed.block, event == .preToolUse || event == .userPromptSubmit {
+            if let block = parsed.block, event == .preToolUse || event == .userPromptSubmit || event == .stop {
                 outcome.blockReason = block
                 return outcome
             }

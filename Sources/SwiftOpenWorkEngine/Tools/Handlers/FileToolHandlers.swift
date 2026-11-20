@@ -116,6 +116,39 @@ extension ToolExecutionEngine {
                 durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
             )
         }
+        // Add to a file without replacing it: `append: true` for the end, `before: "<line>"` for just
+        // above a line (a footer). Existing text is never rewritten, so a long document can grow
+        // entry by entry without one bad call wiping the rest.
+        let before = (dict["before"] as? String).flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        let append = (dict["append"] as? Bool) == true || (dict["mode"] as? String)?.lowercased() == "append"
+        if append || before != nil {
+            let expanded = (fullPath as NSString).expandingTildeInPath
+            let existing = (try? String(contentsOfFile: expanded, encoding: .utf8)) ?? ""
+            var combined: String
+            if let before {
+                var lines = existing.components(separatedBy: "\n")
+                let target = before.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let index = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines) == target }) else {
+                    return ToolExecutionResult(
+                        success: false, output: "",
+                        error: "file_write: no line equal to `before` was found in '\(path)', so nothing was written. Copy the line exactly as it appears in the file (read the end of the file first).",
+                        durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                    )
+                }
+                let block = content.hasSuffix("\n") ? String(content.dropLast()) : content
+                lines.insert(contentsOf: block.components(separatedBy: "\n") + [""], at: index)
+                combined = lines.joined(separator: "\n")
+            } else {
+                let separator = existing.isEmpty || existing.hasSuffix("\n") ? "" : "\n"
+                combined = existing + separator + content
+            }
+            await FileCheckpointStore.shared.record(path: fullPath)
+            var result = writeFile(path: fullPath, content: combined, startTime: startTime)
+            if result.success {
+                result.output = "Added \(content.count) characters to '\(path)' (\(before != nil ? "before the given line" : "at the end")); the rest of the file is unchanged."
+            }
+            return result
+        }
         await FileCheckpointStore.shared.record(path: fullPath)
         return writeFile(path: fullPath, content: content, startTime: startTime)
     }

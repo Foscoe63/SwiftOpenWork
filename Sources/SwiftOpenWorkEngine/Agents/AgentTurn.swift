@@ -108,6 +108,14 @@ final class AgentTurn {
     var askUserStreak = 0
     var halted = false
     var finishedNaturally = false
+    /// The Stop hook already ran at the point the agent tried to finish; `finish()` must not run it again.
+    var stopHookRan = false
+    /// Times a Stop hook refused the finish this turn, and the most it may.
+    var stopHookRefusals = 0
+    static let maxStopHookRefusals = 3
+    /// "You said you'd act but called no tool" nudges this turn, and the most it may send.
+    var intentNudges = 0
+    static let maxIntentNudges = 3
     // Set when a tool result this iteration marked settled progress — a green test run, a
     // clean tree — which is the cheapest moment to compact.
     var reachedMilestoneThisIteration = false
@@ -771,7 +779,7 @@ mcpPromptSummary = ""
 
         let pendingCallsToExecute = await collectToolCalls(step)
         if pendingCallsToExecute.isEmpty {
-            return answerOrNudge(step)
+            return await answerOrNudge(step)
         }
         return await runToolCalls(step, pendingCallsToExecute)
     }
@@ -1122,7 +1130,7 @@ mcpPromptSummary = ""
 
     /// A step with no tool calls: the answer, an empty reply to retry, or an announced action
     /// the model has to be told to carry out.
-    private func answerOrNudge(_ step: StreamedStep) -> StepOutcome {
+    private func answerOrNudge(_ step: StreamedStep) async -> StepOutcome {
         let turnTextBefore = step.turnTextBefore
         let nativeEmittedToolCalls = step.toolCallCollector.snapshot()
         let newlyGeneratedDelta = String(accumulator.fullText.dropFirst(turnTextBefore.count)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1146,9 +1154,10 @@ mcpPromptSummary = ""
             // Only text that *ends* on an announced action counts: matching anywhere
             // nudged finished answers ("…now let me know if you'd like changes").
             let hasUnfulfilledActionIntent = AutoContinuePolicy.endsWithUnfulfilledIntent(newlyGeneratedDelta)
-                && newlyGeneratedDelta.count < 1200 && iteration < 6
+                && newlyGeneratedDelta.count < 1200 && intentNudges < Self.maxIntentNudges
 
             if hasUnfulfilledActionIntent {
+                intentNudges += 1
                 // No tool is named: this used to point at `call_tool_by_name`, the first MCP
                 // tool, or a literal `mcp_call` with `{}`, which failed when no MCP server
                 // was connected and steered the model away from the tool it meant.
@@ -1171,6 +1180,27 @@ mcpPromptSummary = ""
                 workingMessages.append(nudgeMsg)
                 return .nextStep
             } else {
+                // The agent thinks it is done. A Stop hook can disagree: it is how a department's
+                // checker (a build, a document verifier) stands between "done" and actually done.
+                stopHookRan = true
+                let verdict = await ToolHooks.run(
+                    .stop, input: ["stop_reason": "end_turn", "last_message": String(newlyGeneratedDelta.prefix(4000))],
+                    workspaceRoot: workspace.folderPath, sessionId: session.id
+                )
+                for notice in verdict.notices { accumulator.appendNotice(notice) }
+                if let reason = verdict.blockReason, stopHookRefusals < Self.maxStopHookRefusals {
+                    stopHookRefusals += 1
+                    stopHookRan = false
+                    accumulator.appendNotice("Verification failed (\(stopHookRefusals)/\(Self.maxStopHookRefusals)); the agent was sent back to fix it.")
+                    workingMessages.append(ChatMessage(
+                        sessionId: session.id, role: .assistant, content: accumulator.stepText(from: turnTextBefore.count)
+                    ))
+                    workingMessages.append(ChatMessage(
+                        sessionId: session.id, role: .user,
+                        content: "[System Command]: The check that runs before you may finish reported a problem. Fix it, run the check again yourself, and only then give the final answer.\n\n" + String(reason.prefix(6000))
+                    ))
+                    return .nextStep
+                }
                 finalStepText = accumulator.stepText(from: turnTextBefore.count)
                 finishedNaturally = true
                 return .endTurn
@@ -2084,10 +2114,12 @@ mcpPromptSummary = ""
             "prompt_tokens": turnPromptTokens, "completion_tokens": turnCompletionTokens, "iterations": iteration,
             "cost_usd": TurnCost.usd(model: model, promptTokens: turnPromptTokens, completionTokens: turnCompletionTokens),
         ])
-        _ = await ToolHooks.run(
-            .stop,
-            input: ["stop_reason": accumulator.message.haltReason ?? (finishedNaturally ? "end_turn" : "incomplete")],
-            workspaceRoot: workspace.folderPath, sessionId: session.id
-        )
+        if !stopHookRan {
+            _ = await ToolHooks.run(
+                .stop,
+                input: ["stop_reason": accumulator.message.haltReason ?? (finishedNaturally ? "end_turn" : "incomplete")],
+                workspaceRoot: workspace.folderPath, sessionId: session.id
+            )
+        }
     }
 }
