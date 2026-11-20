@@ -1561,7 +1561,19 @@ public final class AppState: ObservableObject {
     }
 
     /// In a group chat, Continue goes to the agent that stopped, not to the whole room.
+    ///
+    /// Outside a group the same applies when the agent that stopped is not the chat's own: a task
+    /// sent to a department is answered by its lead, so a bare Continue would go to the chat's
+    /// agent instead and the work would never resume where it stopped.
     private func continuePrompt(for session: Session) -> String {
+        if !session.isGroup,
+           let id = session.messages.last(where: { $0.role == .assistant })?.agentId,
+           id != currentAgent.id,
+           let agent = agents.first(where: { $0.id == id }),
+           !agent.name.trimmingCharacters(in: .whitespaces).isEmpty,
+           TeamMapLogic.targets(text: "@\(agent.name)", agents: agents, state: teamMap).agentIds == [agent.id] {
+            return "@\(agent.name) " + AutoContinuePolicy.continuePrompt
+        }
         guard session.isGroup,
               let id = session.messages.last(where: { $0.role == .assistant })?.agentId,
               let agent = participants(of: session).first(where: { $0.id == id }) else {

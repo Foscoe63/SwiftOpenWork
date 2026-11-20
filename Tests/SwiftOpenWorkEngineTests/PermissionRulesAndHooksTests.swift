@@ -173,6 +173,18 @@ final class PermissionRulesAndHooksTests: XCTestCase {
         XCTAssertFalse(other.isBlocked, "the matcher scopes the hook")
     }
 
+    func testStopHookExitTwoRefusesTheFinishAndGivesTheReason() async throws {
+        try writeHooks(#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo 3 errors >&2; exit 2"}]}]}}"#, trusted: true)
+        let outcome = await ToolHooks.run(.stop, input: ["stop_reason": "end_turn"], workspaceRoot: root)
+        XCTAssertEqual(outcome.blockReason, "3 errors")
+    }
+
+    func testStopHookThatPassesDoesNotBlock() async throws {
+        try writeHooks(#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"exit 0"}]}]}}"#, trusted: true)
+        let outcome = await ToolHooks.run(.stop, input: ["stop_reason": "end_turn"], workspaceRoot: root)
+        XCTAssertFalse(outcome.isBlocked)
+    }
+
     func testHookReceivesTheCallOnStdin() async throws {
         try writeHooks(#"{"hooks":{"PreToolUse":[{"hooks":[{"command":"cat > \"$SWIFTOPENWORK_PROJECT_DIR/stdin.json\""}]}]}}"#, trusted: true)
         _ = await ToolHooks.run(.preToolUse, toolName: "file_write", input: ["tool_input": ["path": "a.txt"]], workspaceRoot: root, sessionId: "S1")

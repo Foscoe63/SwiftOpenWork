@@ -29,6 +29,29 @@ final class CheckpointAndGitTests: XCTestCase {
 
     private func path(_ name: String) -> String { root + "/" + name }
 
+    // MARK: - Adding to a file without replacing it
+
+    func testAppendKeepsTheExistingText() async throws {
+        try "one\ntwo\n".write(toFile: path("log.md"), atomically: true, encoding: .utf8)
+        let result = await run("file_write", ["path": "log.md", "content": "three\n", "append": true])
+        XCTAssertTrue(result.success)
+        XCTAssertEqual(try String(contentsOfFile: path("log.md"), encoding: .utf8), "one\ntwo\nthree\n")
+    }
+
+    func testBeforeInsertsAboveTheFooterAndKeepsEverythingElse() async throws {
+        try "# Map\n\n## A\ntext\n\n*End*\n".write(toFile: path("map.md"), atomically: true, encoding: .utf8)
+        let result = await run("file_write", ["path": "map.md", "content": "## B\nmore\n", "before": "*End*"])
+        XCTAssertTrue(result.success)
+        XCTAssertEqual(try String(contentsOfFile: path("map.md"), encoding: .utf8), "# Map\n\n## A\ntext\n\n## B\nmore\n\n*End*\n")
+    }
+
+    func testBeforeWithAMissingLineWritesNothing() async throws {
+        try "alpha\n".write(toFile: path("x.md"), atomically: true, encoding: .utf8)
+        let result = await run("file_write", ["path": "x.md", "content": "new", "before": "*End*"])
+        XCTAssertFalse(result.success)
+        XCTAssertEqual(try String(contentsOfFile: path("x.md"), encoding: .utf8), "alpha\n")
+    }
+
     // MARK: - Checkpoints
 
     func testRevertRestoresAnEditedFile() async throws {
