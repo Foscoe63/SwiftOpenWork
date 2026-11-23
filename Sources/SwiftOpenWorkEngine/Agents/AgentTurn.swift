@@ -322,7 +322,10 @@ final class AgentTurn {
     /// The tools an agent may be sent. An empty list means no restriction.
     nonisolated static func restrictToAllowlist(_ tools: [Tool], allowed: [String]) -> [Tool] {
         guard !allowed.isEmpty else { return tools }
-        let names = Set(allowed.map { AgentRunner.canonicalToolName($0) })
+        var names = Set(allowed.map { AgentRunner.canonicalToolName($0) })
+        // An agent that may ask the user a question may also ask for a secret. Agents saved before
+        // `request_secret` existed list `ask_user` but not it, and would never be offered it.
+        if names.contains("ask_user") { names.insert("request_secret") }
         return tools.filter {
             alwaysAvailableTools.contains($0.name) || allowed.contains($0.id)
                 || names.contains(AgentRunner.canonicalToolName($0.name))
