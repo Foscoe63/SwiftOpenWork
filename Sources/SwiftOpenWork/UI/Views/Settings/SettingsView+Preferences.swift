@@ -177,6 +177,11 @@ extension SettingsView {
                     }
                 }
 
+                SettingsRow(title: "Check Work Before Finishing", subtitle: "Sends the agent back (twice at most) if it edited files but never ran a build or test afterwards, or left test files and documents you did not ask for.", icon: "checkmark.circle") {
+                    Toggle("", isOn: $appState.settings.completionChecks)
+                        .toggleStyle(.switch)
+                }
+
                 SettingsRow(title: "Command Reviewer Model", subtitle: "A local model checks each shell command against the rules in .swiftopenwork/adversary.md (or adversary.md in the app's data folder) before it runs. Does nothing without a rules file. Off by default.", icon: "checkmark.shield") {
                     let reviewChoices: [(value: String, label: String)] = appState.providers
                         .filter { $0.isEnabled && CompactionSummarizer.isLocal($0.kind) }

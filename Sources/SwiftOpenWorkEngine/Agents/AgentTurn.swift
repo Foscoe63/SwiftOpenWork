@@ -112,6 +112,9 @@ final class AgentTurn {
     var stopHookRan = false
     /// Times a Stop hook refused the finish this turn, and the most it may.
     var stopHookRefusals = 0
+    /// What this turn did, for `CompletionCheck` to judge before the agent may say it is done.
+    var completionLog = CompletionCheck.Log()
+    var completionNudges = 0
     static let maxStopHookRefusals = 3
     /// "You said you'd act but called no tool" nudges this turn, and the most it may send.
     var intentNudges = 0
@@ -688,6 +691,10 @@ mcpPromptSummary = ""
             \(teamSection)
 
             CRITICAL:
+            Stay in scope: do what was asked and no more. Do not refactor, rename, reformat or fix
+            unrelated code, and do not add files, tests, docs or dependencies that were not asked for;
+            mention anything else worth doing in one line. When you say you are done, say what you
+            actually ran and what it returned.
             0. When you change code: locate it with grep/glob rather than guessing, then verify with
                build_project (and run_tests when behaviour changed) before saying it is done. A
                compiler error is yours to fix, not to report. If an edit goes wrong, revert_changes
@@ -1190,7 +1197,21 @@ mcpPromptSummary = ""
                 workingMessages.append(nudgeMsg)
                 return .nextStep
             } else {
-                // The agent thinks it is done. A Stop hook can disagree: it is how a department's
+                // The agent thinks it is done. Did it check its work, and stay in scope?
+                if loadedSettings.completionChecks, completionNudges < CompletionCheck.maxNudges,
+                   let problem = CompletionCheck.problem(
+                    log: completionLog, request: workingMessages.last(where: ContextCompactor.isPersonRequest)?.content ?? "",
+                    finalText: newlyGeneratedDelta
+                   ) {
+                    completionNudges += 1
+                    accumulator.appendNotice("Completion check (\(completionNudges)/\(CompletionCheck.maxNudges)): the agent was sent back.")
+                    workingMessages.append(ChatMessage(
+                        sessionId: session.id, role: .assistant, content: accumulator.stepText(from: turnTextBefore.count)
+                    ))
+                    workingMessages.append(ChatMessage(sessionId: session.id, role: .user, content: "[System Command]: " + problem))
+                    return .nextStep
+                }
+                // A Stop hook can disagree: it is how a department's
                 // checker (a build, a document verifier) stands between "done" and actually done.
                 stopHookRan = true
                 let verdict = await ToolHooks.run(
@@ -1385,6 +1406,7 @@ mcpPromptSummary = ""
         callInfo.durationMs = (CFAbsoluteTimeGetCurrent() - startTool) * 1000
         accumulator.updateToolCall(callInfo)
 
+        completionLog.record(toolName: toolName, argumentsJson: argsJson, success: resultSuccess)
         noteProgress(toolName: toolName, outcome: outcome)
         await offerToolsTheCallUnlocked(
             toolName: toolName, argsJson: argsJson, outcome: outcome, notesAfterResults: &notesAfterResults
