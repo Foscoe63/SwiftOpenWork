@@ -555,6 +555,9 @@ public enum SubAgentExecutor {
                         settings: settings,
                         sessionId: parentSession,
                         workspaceRoot: effectiveWorkspace.folderPath
+                    ), !PermissionRules.unattendedAllows(
+                        toolName: call.toolName, argumentsJson: call.argumentsJson,
+                        workspaceRoot: effectiveWorkspace.folderPath
                     ) {
                         _ = await ToolApprovalManager.shared.requestApproval(
                             callId: call.id, toolName: call.toolName, argumentsJson: call.argumentsJson, reason: reason

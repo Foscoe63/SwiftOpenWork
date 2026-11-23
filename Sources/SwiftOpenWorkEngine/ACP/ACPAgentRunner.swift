@@ -726,6 +726,10 @@ public enum ACPAgentRunner {
             }
             let settings = PersistenceManager.shared.loadSettings()
             if settings.terminalSafetyLevel == .allowEverything { return answer(true, decision: .automatic, note: "Allow All") }
+            if let equivalent, ToolApprovalManager.shared.isUnattended,
+               PermissionRules.unattendedAllows(toolName: equivalent.tool, argumentsJson: arguments, workspaceRoot: workspace.folderPath) {
+                return answer(true, decision: .approved, note: "unattended allow rule")
+            }
 
             var call = calls[id] ?? ToolCallInfo(id: id, toolName: info.kind ?? "tool", argumentsJson: arguments, status: .running)
             call.status = .waitingApproval
