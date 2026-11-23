@@ -1548,6 +1548,7 @@ public final class AppState: ObservableObject {
         isGenerating = false
         ToolApprovalManager.shared.rejectAllPending()
         UserChoiceManager.shared.cancelAll()
+        SecretRequestManager.shared.cancelAll()
         // Keep any queued follow-up — auto-sending after Stop felt like Stop was ignored.
         if queuedFollowUp != nil {
             showToast("Stopped — queued message kept")

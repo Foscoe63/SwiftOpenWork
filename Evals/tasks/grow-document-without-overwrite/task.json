@@ -1,0 +1,11 @@
+{
+  "id": "grow-document-without-overwrite",
+  "title": "Add entries to a long document without losing the rest",
+  "prompt": "map.md has five entries and ends with the line '*End of map.*'. Add two new entries, '## file6.js' and '## file7.js', each with a '**Purpose**' line, above that last line. Do not change or remove anything else.",
+  "verify": "python3 -c \"t=open('map.md').read(); hs=[l for l in t.split(chr(10)) if l.startswith('## ')]; assert hs==['## file%d.js'%i for i in range(1,8)], hs; assert t.rstrip().endswith('*End of map.*'); assert all('Entry %d.'%i in t for i in range(1,6))\"",
+  "timeout_seconds": 300,
+  "tags": [
+    "edit",
+    "document"
+  ]
+}

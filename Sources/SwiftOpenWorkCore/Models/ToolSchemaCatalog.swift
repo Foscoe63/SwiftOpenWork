@@ -424,6 +424,14 @@ public enum ToolSchemaCatalog {
                 parametersJsonSchema: schemas["ask_user"]!
             ),
             Tool(
+                id: "request_secret",
+                name: "request_secret",
+                displayName: "Request Secret",
+                description: "Ask the user to type a secret (API key, token, password) into a secure field. You never see the value: it is saved to the Keychain and shell commands get it as the environment variable named NAME.",
+                category: .system,
+                parametersJsonSchema: schemas["request_secret"]!
+            ),
+            Tool(
                 id: "exit_plan_mode",
                 name: "exit_plan_mode",
                 displayName: "Exit Plan Mode",
@@ -443,7 +451,7 @@ public enum ToolSchemaCatalog {
     }
 
     private static let schemas: [String: String] = [
-        "agent_spawn": #"{"type":"object","properties":{"target_agent_id":{"type":"string","description":"Which agent to delegate to - its id or name, from the configured agents."},"task_title":{"type":"string","description":"The objective, stated so it can be worked on without further questions. The sub-agent runs unattended and cannot ask you anything."},"task_description":{"type":"string","description":"Context the sub-agent needs: files, constraints, what done looks like."},"max_steps":{"type":"integer","description":"Optional. Steps it gets, for a task bigger than the default budget; capped at three times the setting. Its time limit grows to match."},"effort":{"type":"string","enum":["off","low","medium","high"],"description":"Optional reasoning effort. Defaults to yours."}},"required":["target_agent_id","task_title"]}"#,
+        "agent_spawn": #"{"type":"object","properties":{"target_agent_id":{"type":"string","description":"Which agent to delegate to - its id or name, from the configured agents."},"task_title":{"type":"string","description":"The objective, stated so it can be worked on without further questions. The sub-agent runs unattended and cannot ask you anything."},"task_description":{"type":"string","description":"Context the sub-agent needs: files, constraints, what done looks like."},"max_steps":{"type":"integer","description":"Optional. Steps it gets, for a task bigger than the default budget; capped at three times the setting. Its time limit grows to match."},"effort":{"type":"string","enum":["off","low","medium","high"],"description":"Optional reasoning effort. Defaults to yours."},"resume_id":{"type":"string","description":"Optional. The sub-agent id from an earlier agent_spawn result in this chat. Continues that agent with what it already read and its worktree; put the follow-up in task_title. target_agent_id is then ignored."}},"required":["target_agent_id","task_title"]}"#,
 
         // Isolation. A worktree is where an agent may commit, because history added on a branch
         // of its own cannot rewrite anything you wrote.
@@ -525,6 +533,7 @@ public enum ToolSchemaCatalog {
         "mcp_describe": #"{"type":"object","properties":{"query":{"type":"string","description":"Words from the tool's name or purpose, a server id, or an exact mcp__server__tool name. Space-separated words must all match."},"limit":{"type":"integer","description":"How many tools to load (default 6, max 12)."}},"required":["query"]}"#,
         "mcp_resources": #"{"type":"object","properties":{"server":{"type":"string","description":"Server id or name."},"action":{"type":"string","enum":["list_resources","read_resource","list_prompts","get_prompt"]},"uri":{"type":"string","description":"Resource URI for read_resource."},"name":{"type":"string","description":"Prompt name for get_prompt."},"arguments":{"type":"object","description":"Prompt arguments for get_prompt."}},"required":["server","action"]}"#,
         "mcp_call": #"{"type":"object","properties":{"server":{"type":"string"},"tool":{"type":"string"},"arguments":{"type":"object"}},"required":["server","tool"]}"#,
+        "request_secret": #"{"type":"object","properties":{"name":{"type":"string","description":"Environment variable name: upper-case letters, digits and underscores, starting with a letter, e.g. GITHUB_TOKEN."},"reason":{"type":"string","description":"One sentence shown to the user: what it is for."}},"required":["name","reason"]}"#,
         "ask_user": #"{"type":"object","properties":{"question":{"type":"string","description":"Question for the user"},"options":{"type":"array","items":{"type":"string"},"description":"Optional multiple-choice options"}},"required":["question"]}"#,
         "exit_plan_mode": #"{"type":"object","properties":{"summary":{"type":"string","description":"Short summary of the approved plan"}},"required":[]}"#,
         "todo_write": #"{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"content":{"type":"string"},"status":{"type":"string","description":"pending|in_progress|done"}},"required":["content","status"]}}},"required":["items"]}"#

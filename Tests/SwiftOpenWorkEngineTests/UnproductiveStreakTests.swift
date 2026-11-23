@@ -33,6 +33,12 @@ final class AgentToolAllowlistTests: XCTestCase {
         XCTAssertEqual(Set(kept), ["file_read", "tool_describe"])
     }
 
+    func testAnAgentThatMayAskTheUserIsAlsoOfferedRequestSecret() {
+        let all = ["ask_user", "request_secret", "grep"].map(tool)
+        XCTAssertEqual(Set(AgentTurn.restrictToAllowlist(all, allowed: ["ask_user"]).map(\.name)), ["ask_user", "request_secret"])
+        XCTAssertEqual(AgentTurn.restrictToAllowlist(all, allowed: ["grep"]).map(\.name), ["grep"])
+    }
+
     func testEmptyListMeansEverything() {
         let all = ["file_read", "grep"].map(tool)
         XCTAssertEqual(AgentTurn.restrictToAllowlist(all, allowed: []).count, 2)

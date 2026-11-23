@@ -1007,7 +1007,9 @@ public final class AgentRunner {
         A sub-agent runs unattended with its own tools, in an isolated git worktree when the workspace \
         is a repository, and its report comes back as the tool result. Changes it makes stay on its \
         branch until merged; say so rather than claiming they are in the user's checkout, and bring \
-        them in with worktree_merge when the user wants them.\(messaging)\(localCost)\(limits)
+        them in with worktree_merge when the user wants them. To correct or extend a sub-agent's work, \
+        call agent_spawn again with the resume_id from its result instead of starting over: it keeps \
+        what it read and its worktree. Never give two agents the same file.\(messaging)\(localCost)\(limits)
         """
     }
 
@@ -1349,7 +1351,7 @@ public final class AgentRunner {
             argumentsJson = normalized
         }
         switch toolName {
-        case "ask_user":
+        case "ask_user", "request_secret":
             return nil
         case "exit_plan_mode":
             // Plan mode is the user's guard against the agent changing things before they have

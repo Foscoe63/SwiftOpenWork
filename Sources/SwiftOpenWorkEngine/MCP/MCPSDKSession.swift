@@ -10,6 +10,8 @@ public actor MCPSDKSession {
     public let config: MCPServerConfig
     private var process: Process?
     private var client: Client?
+    /// The server's own guidance for the model, from its `initialize` result.
+    public private(set) var serverInstructions: String?
     private var inPipe: Pipe?
     private var outPipe: Pipe?
 
@@ -157,7 +159,8 @@ public actor MCPSDKSession {
         let transport = StdioTransport(input: inputFD, output: outputFD)
         let client = Client(name: "SwiftOpenWork", version: "1.0.0")
         do {
-            _ = try await client.connect(transport: transport)
+            let initialized = try await client.connect(transport: transport)
+            serverInstructions = initialized.instructions
         } catch {
             MCPProcessRegistry.stopTree(process)
             self.process = nil

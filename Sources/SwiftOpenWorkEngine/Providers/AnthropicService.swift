@@ -327,7 +327,8 @@ public final class AnthropicService: LLMProviderClient, Sendable {
                             "properties": [
                                 "target_agent_id": ["type": "string", "description": "Which agent to delegate to - its id or name, from the configured agents"],
                                 "task_title": ["type": "string", "description": "The objective, stated so it can be worked on without further questions"],
-                                "task_description": ["type": "string", "description": "Context the sub-agent needs: files, constraints, what done looks like"]
+                                "task_description": ["type": "string", "description": "Context the sub-agent needs: files, constraints, what done looks like"],
+                                "resume_id": ["type": "string", "description": "Sub-agent id from an earlier result in this chat, to continue that agent; the follow-up goes in task_title"]
                             ],
                             "required": ["target_agent_id", "task_title"]
                         ]

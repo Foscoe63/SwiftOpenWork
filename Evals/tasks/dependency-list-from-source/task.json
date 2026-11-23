@@ -1,0 +1,11 @@
+{
+  "id": "dependency-list-from-source",
+  "title": "List a file's real dependencies, not guessed ones",
+  "prompt": "In notes.md, replace the TODO under **Dependencies** for server.js with the modules server.js actually requires, one per line in backticks (for example `fs`). Read server.js to get them; do not guess.",
+  "verify": "python3 -c \"import re;t=open('notes.md').read();deps=set(re.findall(r'`([^`]+)`',t.split('**Dependencies**')[1]));assert deps=={'fs','path','./runner','http'},deps\"",
+  "timeout_seconds": 300,
+  "tags": [
+    "document",
+    "grounding"
+  ]
+}

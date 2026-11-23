@@ -112,6 +112,9 @@ final class AgentTurn {
     var stopHookRan = false
     /// Times a Stop hook refused the finish this turn, and the most it may.
     var stopHookRefusals = 0
+    /// What this turn did, for `CompletionCheck` to judge before the agent may say it is done.
+    var completionLog = CompletionCheck.Log()
+    var completionNudges = 0
     static let maxStopHookRefusals = 3
     /// "You said you'd act but called no tool" nudges this turn, and the most it may send.
     var intentNudges = 0
@@ -322,7 +325,10 @@ final class AgentTurn {
     /// The tools an agent may be sent. An empty list means no restriction.
     nonisolated static func restrictToAllowlist(_ tools: [Tool], allowed: [String]) -> [Tool] {
         guard !allowed.isEmpty else { return tools }
-        let names = Set(allowed.map { AgentRunner.canonicalToolName($0) })
+        var names = Set(allowed.map { AgentRunner.canonicalToolName($0) })
+        // An agent that may ask the user a question may also ask for a secret. Agents saved before
+        // `request_secret` existed list `ask_user` but not it, and would never be offered it.
+        if names.contains("ask_user") { names.insert("request_secret") }
         return tools.filter {
             alwaysAvailableTools.contains($0.name) || allowed.contains($0.id)
                 || names.contains(AgentRunner.canonicalToolName($0.name))
@@ -457,6 +463,11 @@ mcpPromptSummary = ""
                 Prefer native tool calls. Do not narrate before calling. Servers that expose only `get_tool_definitions` and `call_tool_by_name` need the catalog listed first; their catalog tools then become directly callable.
                 """
             }
+            // What each connected server says about its own tools.
+            let serverIds = Set(mcpTools.compactMap { MCPNamespacedTool.parse($0.name)?.serverId })
+            let serverNames = Dictionary(loadedSettings.mcpServers.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+            let instructions = await MCPClientManager.shared.serverInstructions(for: serverIds, names: serverNames)
+            mcpPromptSummary += MCPServerInstructions.block(instructions)
         } else if !casualChat && !loadedSettings.mcpServers.filter(\.isEnabled).isEmpty {
             mcpPromptSummary = """
 
@@ -484,7 +495,9 @@ mcpPromptSummary = ""
         // where the list is already cut down.
         deferredBuiltIns = []
         if !inventoryPrompt && !groupToolless && !planModeActive {
-            let split = BuiltInToolSearch.partition(availableTools, prompt: lastPrompt)
+            // A small local model gets a shorter list up front; see `usesCompactProfile`.
+            let compact = BuiltInToolSearch.usesCompactProfile(providerType: provider.type, contextWindow: model.contextWindow)
+            let split = BuiltInToolSearch.partition(availableTools, prompt: lastPrompt, compact: compact)
             availableTools = split.loaded
             deferredBuiltIns = split.deferred
         }
@@ -678,6 +691,10 @@ mcpPromptSummary = ""
             \(teamSection)
 
             CRITICAL:
+            Stay in scope: do what was asked and no more. Do not refactor, rename, reformat or fix
+            unrelated code, and do not add files, tests, docs or dependencies that were not asked for;
+            mention anything else worth doing in one line. When you say you are done, say what you
+            actually ran and what it returned.
             0. When you change code: locate it with grep/glob rather than guessing, then verify with
                build_project (and run_tests when behaviour changed) before saying it is done. A
                compiler error is yours to fix, not to report. If an edit goes wrong, revert_changes
@@ -1180,7 +1197,21 @@ mcpPromptSummary = ""
                 workingMessages.append(nudgeMsg)
                 return .nextStep
             } else {
-                // The agent thinks it is done. A Stop hook can disagree: it is how a department's
+                // The agent thinks it is done. Did it check its work, and stay in scope?
+                if loadedSettings.completionChecks, completionNudges < CompletionCheck.maxNudges,
+                   let problem = CompletionCheck.problem(
+                    log: completionLog, request: workingMessages.last(where: ContextCompactor.isPersonRequest)?.content ?? "",
+                    finalText: newlyGeneratedDelta
+                   ) {
+                    completionNudges += 1
+                    accumulator.appendNotice("Completion check (\(completionNudges)/\(CompletionCheck.maxNudges)): the agent was sent back.")
+                    workingMessages.append(ChatMessage(
+                        sessionId: session.id, role: .assistant, content: accumulator.stepText(from: turnTextBefore.count)
+                    ))
+                    workingMessages.append(ChatMessage(sessionId: session.id, role: .user, content: "[System Command]: " + problem))
+                    return .nextStep
+                }
+                // A Stop hook can disagree: it is how a department's
                 // checker (a build, a document verifier) stands between "done" and actually done.
                 stopHookRan = true
                 let verdict = await ToolHooks.run(
@@ -1375,6 +1406,7 @@ mcpPromptSummary = ""
         callInfo.durationMs = (CFAbsoluteTimeGetCurrent() - startTool) * 1000
         accumulator.updateToolCall(callInfo)
 
+        completionLog.record(toolName: toolName, argumentsJson: argsJson, success: resultSuccess)
         noteProgress(toolName: toolName, outcome: outcome)
         await offerToolsTheCallUnlocked(
             toolName: toolName, argsJson: argsJson, outcome: outcome, notesAfterResults: &notesAfterResults
@@ -1421,6 +1453,26 @@ mcpPromptSummary = ""
             return false
         }
 
+        // The person's own rules, read by a local model, get a say before a shell command runs.
+        if !loadedSettings.commandReviewerModel.isEmpty,
+           let command = CommandReviewer.shellCommand(toolName: toolName, argumentsJson: argsJson),
+           case .block(let reason) = await CommandReviewer.review(
+                command: command, workspaceRoot: workspace.folderPath, sessionId: session.id,
+                setting: loadedSettings.commandReviewerModel,
+                providers: PersistenceManager.shared.loadProviders()
+           ) {
+            callInfo.status = .error
+            callInfo.errorMessage = "Blocked by the command reviewer."
+            AuditLog.shared.toolCall(sessionId: session.id, tool: toolName, argumentsJson: argsJson,
+                                     decision: .deniedByRule, success: false, note: "command reviewer: \(reason)")
+            accumulator.addToolCall(callInfo)
+            workingMessages.append(ChatMessage(
+                id: callId, sessionId: session.id, role: .tool,
+                content: "Blocked by the command reviewer: \(reason). Do not retry this command; choose another approach or say what you could not do."
+            ))
+            return false
+        }
+
         // Sensitive actions (deleting a file, or shell commands under an "always ask"
         // safety policy) are paused for a real user decision before they touch disk.
         if let reason = AgentRunner.approvalReason(
@@ -1430,6 +1482,14 @@ mcpPromptSummary = ""
             sessionId: session.id,
             workspaceRoot: workspace.folderPath
         ) {
+            if ToolApprovalManager.shared.isUnattended,
+               PermissionRules.unattendedAllows(toolName: toolName, argumentsJson: argsJson, workspaceRoot: workspace.folderPath) {
+                AuditLog.shared.toolCall(sessionId: session.id, tool: toolName, argumentsJson: argsJson,
+                                         decision: .approved, success: true, note: "unattended allow rule: \(reason)")
+                // The executor refuses a shell command under "Always Ask" unless an approval is on record.
+                ApprovedCalls.record(callId)
+                return true
+            }
             callInfo.status = .waitingApproval
             callInfo.approvalReason = reason
             accumulator.addToolCall(callInfo)
@@ -1519,7 +1579,35 @@ mcpPromptSummary = ""
         var resultError: String?
         var producedImages: [String] = []
 
-        if toolName == "ask_user" {
+        if toolName == "request_secret" {
+            let args = (argsJson.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]) ?? [:]
+            let name = (args["name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            let reason = (args["reason"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !AgentSecrets.isValidName(name) {
+                resultSuccess = false
+                resultError = "invalid name"
+                resultOutput = "Error: name must be an environment variable name: upper-case letters, digits and underscores, starting with a letter (for example GITHUB_TOKEN)."
+            } else if AgentSecrets.has(name) {
+                resultOutput = "\(name) is already saved. Shell commands can use $\(name). Ask again only if it was rejected as wrong."
+            } else if ToolApprovalManager.shared.isUnattended {
+                resultSuccess = false
+                resultError = "no one is available to enter it"
+                resultOutput = "Error: this run is unattended, so nobody can enter a secret. Do not ask again: say that \(name) is needed and stop."
+            } else {
+                switch await SecretRequestManager.shared.request(name: name, reason: reason, callId: callId) {
+                case .saved:
+                    resultOutput = "Saved. Shell commands can use it as $\(name); you cannot read the value and any output that contains it is redacted."
+                case .declined:
+                    resultSuccess = false
+                    resultError = "declined"
+                    resultOutput = "The user declined to provide \(name). Do not ask again; continue without it or say what you cannot do."
+                case .failed:
+                    resultSuccess = false
+                    resultError = "could not save"
+                    resultOutput = "Error: \(name) could not be saved to the Keychain."
+                }
+            }
+        } else if toolName == "ask_user" {
             askUserStreak += 1
             if askUserStreak > 5 {
                 resultSuccess = false

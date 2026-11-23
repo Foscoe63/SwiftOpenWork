@@ -245,6 +245,39 @@ final class PermissionRulesAndHooksTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root + "/made.txt"))
         ToolHooks.revokeProjectTrust(workspaceRoot: root)
     }
+
+    func testUnattendedAllowNeverLiftsTheNonTrustGuardsAndReadsTheGlobalFile() throws {
+        let global = root + "/global-permissions.json"
+        PermissionRules.globalPathOverride = global
+        try #"{"unattended":{"allow":["fetch_url","file_read(**/.env*)","file_delete"]}}"#
+            .write(toFile: global, atomically: true, encoding: .utf8)
+        func ok(_ tool: String, _ a: [String: Any]) -> Bool {
+            PermissionRules.unattendedAllows(toolName: tool, argumentsJson: args(a), workspaceRoot: root)
+        }
+        XCTAssertFalse(ok("fetch_url", ["url": "https://example.com"]))
+        XCTAssertFalse(ok("file_read", ["path": root + "/.env"]))
+        XCTAssertTrue(ok("file_delete", ["path": root + "/x.txt"]), "the global file's list applies too")
+    }
+
+    @MainActor func testUnattendedAllowIsOnlyConsultedInAnUnattendedRun() async {
+        let inside = await ToolApprovalManager.shared.runUnattended {
+            await MainActor.run { ToolApprovalManager.shared.isUnattended }
+        }
+        XCTAssertTrue(inside.result)
+        XCTAssertFalse(ToolApprovalManager.shared.isUnattended)
+    }
+
+    func testUnattendedAllowListSettlesOnlyListedCalls() throws {
+        let json = #"{"unattended":{"allow":["terminal_command(git commit*)","terminal_command(rm *)"]},"deny":["terminal_command(rm *)"]}"#
+        try json.write(toFile: root + "/.swiftopenwork/permissions.json", atomically: true, encoding: .utf8)
+        func ok(_ tool: String, _ a: [String: Any]) -> Bool {
+            PermissionRules.unattendedAllows(toolName: tool, argumentsJson: args(a), workspaceRoot: root)
+        }
+        XCTAssertTrue(ok("terminal_command", ["command": "git commit -m x"]))
+        XCTAssertFalse(ok("terminal_command", ["command": "git push"]))
+        XCTAssertFalse(ok("terminal_command", ["command": "rm -rf build"]), "a deny rule still wins")
+        XCTAssertFalse(ok("terminal_command", ["command": "git commit -m x; rm -rf ~"]), "chained commands are not the listed one")
+    }
 }
 
 /// The audit record.

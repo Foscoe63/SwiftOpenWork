@@ -23,7 +23,7 @@ public enum ToolCallRepair {
         "git_status", "git_diff", "git_log", "git_commit", "pr_status", "pr_create", "document_create", "changed_files", "revert_changes",
         "rename_symbol", "go_to_definition", "find_references", "symbol_info", "call_hierarchy",
         "code_diagnostics", "document_symbols", "setup_xcode_language_server", "fetch_url",
-        "web_search", "ask_user", "exit_plan_mode", "todo_write", "calculator", "get_current_date",
+        "web_search", "ask_user", "request_secret", "exit_plan_mode", "todo_write", "calculator", "get_current_date",
         "document_extract", "workspace_semantic_search", "generate_image", "mlx_vision_describe",
         "quit_app", "worktree_create", "worktree_list", "worktree_remove", "worktree_merge", "screenshot_window",
         "accessibility_tree", "run_app", "preview_start", "preview_check", "preview_logs",

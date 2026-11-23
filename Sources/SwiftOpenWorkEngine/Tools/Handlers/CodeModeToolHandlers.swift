@@ -16,6 +16,7 @@ enum CodeModePolicy {
     static let neverCallable: Set<String> = [
         "code_mode",        // a script inside a script only hides its calls
         "ask_user",         // answered by the loop, not the dispatcher
+        "request_secret",   // likewise: the value goes to the Keychain, not through a program
         "exit_plan_mode",   // lifting the guard is for the person to approve, in the open
         "worktree_merge",   // writes into the user's checkout
         "agent_spawn", "agent_message",
@@ -235,7 +236,12 @@ extension ToolExecutionEngine {
                 sessionId: sessionId, workspaceRoot: workspace.folderPath
             )
         }
-        if let reason {
+        if let reason, await ToolApprovalManager.shared.isUnattended,
+           PermissionRules.unattendedAllows(toolName: name, argumentsJson: argumentsJson, workspaceRoot: workspace.folderPath) {
+            AuditLog.shared.toolCall(sessionId: sessionId, tool: name, argumentsJson: argumentsJson,
+                                     decision: .approved, success: true, note: "unattended allow rule: \(reason)")
+            ApprovedCalls.record(innerId)
+        } else if let reason {
             let outcome = await ToolApprovalManager.shared.requestApproval(
                 callId: innerId, toolName: name, argumentsJson: argumentsJson, reason: "A code_mode script wants to run this. \(reason)"
             )

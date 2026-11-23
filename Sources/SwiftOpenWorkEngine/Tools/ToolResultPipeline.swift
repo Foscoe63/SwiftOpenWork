@@ -41,7 +41,9 @@ public enum ToolResultPipeline {
         }
     }
 
-    public static func process(_ text: String, toolName: String, sessionId: String?) -> Outcome {
+    public static func process(_ rawText: String, toolName: String, sessionId: String?) -> Outcome {
+        // A command that echoes a secret the user handed over must not show it to the model.
+        let text = AgentSecrets.redact(rawText)
         // Reading output back must not itself be shortened and re-stored.
         if ToolCallRepair.canonicalName(toolName) == "recall_output" {
             let bounded = ToolBounds.boundResult(text)
