@@ -23,6 +23,11 @@ final class CompletionCheckTests: XCTestCase {
         XCTAssertNotNil(CompletionCheck.problem(log: log([("build_project", "", true), ("edit_file", "a.swift", true)]), request: "fix it", finalText: "done"))
     }
 
+    func testReadingTheEditedFileBackCountsButReadingAnotherDoesNot() {
+        XCTAssertNil(CompletionCheck.problem(log: log([("edit_file", "a.txt", true), ("file_read", "a.txt", true)]), request: "fix it", finalText: "done"))
+        XCTAssertNotNil(CompletionCheck.problem(log: log([("edit_file", "a.txt", true), ("file_read", "b.txt", true)]), request: "fix it", finalText: "done"))
+    }
+
     func testAFailedCheckNeedsFixingOrAdmitting() {
         let l = log([("edit_file", "a.swift", true), ("build_project", "", false)])
         XCTAssertNotNil(CompletionCheck.problem(log: l, request: "fix it", finalText: "All done!"))

@@ -27,6 +27,7 @@ public enum CompletionCheck {
 
     static let creators: Set<String> = ["file_write", "write_file", "create_file", "save_file", "document_create"]
     static let editors: Set<String> = ["file_write", "write_file", "create_file", "save_file", "edit_file", "file_edit", "multi_edit", "edit_file_multi", "rename_symbol"]
+    static let readers: Set<String> = ["file_read", "read_file"]
     static let checks: Set<String> = ["build_project", "run_tests", "terminal_command", "run_command", "code_diagnostics"]
 
     static func isCheck(_ tool: String) -> Bool { checks.contains(ToolCallRepair.builtInCanonical(tool) ?? tool) }
@@ -65,7 +66,11 @@ public enum CompletionCheck {
             return "You created things the request did not ask for (\(extras.joined(separator: "; "))). Delete them, or tell the user plainly that you added them and why, so they can decide. Do not add unrequested files, tests or refactors."
         }
 
-        let runs = calls[(lastEdit + 1)...].filter { isCheck($0.tool) }
+        // A build or test, or reading an edited file back: the only direct check a plain-text edit has.
+        let edited = Set(calls[...lastEdit].filter { editors.contains($0.tool) && $0.success }.compactMap(\.path))
+        let runs = calls[(lastEdit + 1)...].filter {
+            isCheck($0.tool) || (readers.contains($0.tool) && $0.success && $0.path.map(edited.contains) == true)
+        }
         guard let last = runs.last else {
             return "You changed files but have not verified the result since. Run build_project or run_tests (or another direct check), fix what fails, then report what ran and what it returned. If nothing can be run, say exactly why."
         }
