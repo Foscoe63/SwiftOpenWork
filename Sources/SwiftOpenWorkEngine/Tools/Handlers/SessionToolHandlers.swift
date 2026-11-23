@@ -171,8 +171,8 @@ extension ToolExecutionEngine {
         let startTime = call.startTime
         let query = dict["query"] as? String ?? dict["name"] as? String ?? dict["tool"] as? String ?? ""
         let limit = (dict["limit"] as? Int) ?? Int(dict["limit"] as? String ?? "") ?? MCPToolSearch.defaultLimit
-        let pool = PersistenceManager.shared.loadTools().filter { $0.isEnabled && BuiltInToolSearch.deferrable.contains($0.name) }
-            + ToolSchemaCatalog.parityDefaults.filter { BuiltInToolSearch.deferrable.contains($0.name) }
+        let pool = PersistenceManager.shared.loadTools().filter { $0.isEnabled && BuiltInToolSearch.loadable.contains($0.name) }
+            + ToolSchemaCatalog.parityDefaults.filter { BuiltInToolSearch.loadable.contains($0.name) }
         var seen = Set<String>()
         let unique = pool.filter { seen.insert($0.name).inserted }
         let found = MCPToolSearch.match(query: query, in: unique, limit: limit)

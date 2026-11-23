@@ -489,7 +489,9 @@ mcpPromptSummary = ""
         // where the list is already cut down.
         deferredBuiltIns = []
         if !inventoryPrompt && !groupToolless && !planModeActive {
-            let split = BuiltInToolSearch.partition(availableTools, prompt: lastPrompt)
+            // A small local model gets a shorter list up front; see `usesCompactProfile`.
+            let compact = BuiltInToolSearch.usesCompactProfile(providerType: provider.type, contextWindow: model.contextWindow)
+            let split = BuiltInToolSearch.partition(availableTools, prompt: lastPrompt, compact: compact)
             availableTools = split.loaded
             deferredBuiltIns = split.deferred
         }
