@@ -177,6 +177,28 @@ extension SettingsView {
                     }
                 }
 
+                SettingsRow(title: "Command Reviewer Model", subtitle: "A local model checks each shell command against the rules in .swiftopenwork/adversary.md (or adversary.md in the app's data folder) before it runs. Does nothing without a rules file. Off by default.", icon: "checkmark.shield") {
+                    let reviewChoices: [(value: String, label: String)] = appState.providers
+                        .filter { $0.isEnabled && CompactionSummarizer.isLocal($0.kind) }
+                        .flatMap { provider in
+                            provider.models.map {
+                                (CompactionSummarizer.settingValue(providerId: provider.id, modelId: $0.id), "\(provider.name) · \($0.name)")
+                            }
+                        }
+                    let reviewCurrent = appState.settings.commandReviewerModel
+                    Picker("", selection: $appState.settings.commandReviewerModel) {
+                        Text("Off").tag("")
+                        if !reviewCurrent.isEmpty, !reviewChoices.contains(where: { $0.value == reviewCurrent }) {
+                            Text("Unavailable (\(reviewCurrent))").tag(reviewCurrent)
+                        }
+                        ForEach(reviewChoices, id: \.value) { choice in
+                            Text(choice.label).tag(choice.value)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 260)
+                }
+
                 SettingsRow(title: "Audio Notifications", subtitle: "Play chime when agents finish long tasks", icon: "speaker.wave.2") {
                     Toggle("", isOn: $appState.settings.playNotificationSounds)
                         .toggleStyle(.switch)

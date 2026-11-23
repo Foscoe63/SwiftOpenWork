@@ -1431,6 +1431,26 @@ mcpPromptSummary = ""
             return false
         }
 
+        // The person's own rules, read by a local model, get a say before a shell command runs.
+        if !loadedSettings.commandReviewerModel.isEmpty,
+           let command = CommandReviewer.shellCommand(toolName: toolName, argumentsJson: argsJson),
+           case .block(let reason) = await CommandReviewer.review(
+                command: command, workspaceRoot: workspace.folderPath, sessionId: session.id,
+                setting: loadedSettings.commandReviewerModel,
+                providers: PersistenceManager.shared.loadProviders()
+           ) {
+            callInfo.status = .error
+            callInfo.errorMessage = "Blocked by the command reviewer."
+            AuditLog.shared.toolCall(sessionId: session.id, tool: toolName, argumentsJson: argsJson,
+                                     decision: .deniedByRule, success: false, note: "command reviewer: \(reason)")
+            accumulator.addToolCall(callInfo)
+            workingMessages.append(ChatMessage(
+                id: callId, sessionId: session.id, role: .tool,
+                content: "Blocked by the command reviewer: \(reason). Do not retry this command; choose another approach or say what you could not do."
+            ))
+            return false
+        }
+
         // Sensitive actions (deleting a file, or shell commands under an "always ask"
         // safety policy) are paused for a real user decision before they touch disk.
         if let reason = AgentRunner.approvalReason(
