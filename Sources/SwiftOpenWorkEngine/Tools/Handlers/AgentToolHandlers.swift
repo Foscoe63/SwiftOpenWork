@@ -32,7 +32,24 @@ extension ToolExecutionEngine {
 
         // No default target. This defaulted to "coder-agent", so a call that forgot the field
         // quietly sent research or review work to the Software Engineer.
-        guard let targetAgentId = (dict["target_agent_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+        // `resume_id` continues an earlier sub-agent of this chat: same agent, same conversation,
+        // same worktree. `task_title` then carries the follow-up instead of a new objective.
+        let resumeId = (dict["resume_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let parentSessionId = AgentRunContext.current?.sessionId ?? ""
+        var resumed: SubAgentSessions.Saved?
+        if !resumeId.isEmpty {
+            guard let found = await SubAgentSessions.shared.session(id: resumeId, parentSessionId: parentSessionId) else {
+                let known = await SubAgentSessions.shared.ids(in: parentSessionId)
+                return Self.failure(
+                    "No sub-agent '\(resumeId)' in this chat to resume"
+                        + (known.isEmpty ? "; none have finished here yet." : ". Resumable: \(known.joined(separator: ", ")).")
+                        + " Start a new one by leaving out resume_id.",
+                    startTime
+                )
+            }
+            resumed = found
+        }
+        guard let targetAgentId = resumed?.agentId ?? (dict["target_agent_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
               !targetAgentId.isEmpty else {
             return Self.failure("agent_spawn needs target_agent_id. Available: \(teamList)", startTime)
         }
@@ -119,6 +136,8 @@ extension ToolExecutionEngine {
                 maxIterations: budget.steps,
                 deadlineSeconds: budget.seconds,
                 reasoningEffort: effort,
+                resumeMessages: resumed?.messages,
+                resumeWorktree: resumed?.worktree,
                 onProgress: { line in
                     if let callId { LiveToolOutput.shared.append(callId: callId, chunk: line + "\n") }
                 }
@@ -159,6 +178,23 @@ extension ToolExecutionEngine {
         if let asked = Self.intArgument(dict["max_steps"]), asked > budget.steps {
             notes.append("You asked for \(asked) steps; the limit is \(budget.steps), so that is what it got. "
                 + "If the work did not fit, split it into smaller agent_spawn calls instead of asking for more.")
+        }
+        // Keep the conversation so a follow-up can continue it. A run that failed before doing
+        // anything has nothing worth continuing.
+        if !SubAgentExecutor.failedBeforeStarting(outcome), !parentSessionId.isEmpty {
+            var kept: AgentWorktree.Info?
+            if let path = outcome.worktreePath, let branch = outcome.branch, let head = outcome.baseCommit {
+                kept = AgentWorktree.Info(path: path, branch: branch, head: head)
+            }
+            let id = await SubAgentSessions.shared.save(
+                id: resumed?.id,
+                parentSessionId: parentSessionId,
+                agentId: targetAgent.id,
+                objective: resumed?.objective ?? taskTitle,
+                messages: outcome.transcript,
+                worktree: kept
+            )
+            notes.append("Sub-agent id `\(id)`: to send it a follow-up or let it finish what it left, call agent_spawn with resume_id `\(id)` and the follow-up in task_title. It keeps what it already read and its worktree.")
         }
         let report = notes.isEmpty ? outcome.report : notes.joined(separator: "\n") + "\n\n" + outcome.report
         return ToolExecutionResult(

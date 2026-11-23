@@ -40,6 +40,8 @@ public enum SubAgentExecutor {
         public var iterations: Int
         public var stoppedBecause: String
         public var durationMs: Double
+        /// The conversation the sub-agent ended with, kept so the lead can resume it.
+        public var transcript: [ChatMessage] = []
 
         /// What the parent agent is told. A sub-agent that edited files and says only "done" is
         /// worse than useless — the parent cannot review what it cannot see.
@@ -207,6 +209,8 @@ public enum SubAgentExecutor {
         deadlineSeconds: Double = 300,
         reasoningEffort: ReasoningEffort = .off,
         isolate: Bool = true,
+        resumeMessages: [ChatMessage]? = nil,
+        resumeWorktree: AgentWorktree.Info? = nil,
         onProgress: @MainActor @escaping (String) -> Void = { _ in }
     ) async -> Outcome {
         let started = CFAbsoluteTimeGetCurrent()
@@ -226,7 +230,12 @@ public enum SubAgentExecutor {
         var worktree: AgentWorktree.Info?
         var isolationNote = ""
         var effectiveWorkspace = workspace
-        if isolate {
+        if let resumed = resumeWorktree, FileManager.default.fileExists(atPath: resumed.path) {
+            // Continuing: the same worktree, with the work it already did in it.
+            worktree = resumed
+            effectiveWorkspace.folderPath = resumed.path
+            onProgress("Resumed in \(resumed.branch)")
+        } else if isolate {
             do {
                 let info = try await AgentWorktree.create(
                     workspacePath: workspace.folderPath,
@@ -317,12 +326,18 @@ public enum SubAgentExecutor {
             """
         }
 
-        var messages: [ChatMessage] = [
-            ChatMessage(role: .user, content: """
+        var messages: [ChatMessage] = (resumeMessages ?? []) + [
+            ChatMessage(role: .user, content: resumeMessages == nil ? """
             Objective: \(objective)
 
             Context from \(parentAgent.name):
             \(context)\(teamNote)
+            """ : """
+            Follow-up from \(parentAgent.name). You have your earlier work above; continue from it.
+
+            \(objective)
+
+            \(context)
             """)
         ]
 
@@ -665,7 +680,8 @@ public enum SubAgentExecutor {
             diffStat: diffStat,
             iterations: iterations,
             stoppedBecause: stoppedBecause,
-            durationMs: (CFAbsoluteTimeGetCurrent() - started) * 1000
+            durationMs: (CFAbsoluteTimeGetCurrent() - started) * 1000,
+            transcript: messages
         )
     }
 
