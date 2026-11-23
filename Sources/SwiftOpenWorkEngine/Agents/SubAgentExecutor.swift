@@ -548,17 +548,23 @@ public enum SubAgentExecutor {
                     }
                     // Unattended: whatever would ask a person is refused and recorded, except edits
                     // inside this sub-agent's own worktree (see `SubAgentToolPolicy`).
-                    if let reason = SubAgentToolPolicy.approvalReason(
+                    let approvalNeeded = SubAgentToolPolicy.approvalReason(
                         toolName: call.toolName,
                         argumentsJson: call.argumentsJson,
                         worktreePath: worktree?.path,
                         settings: settings,
                         sessionId: parentSession,
                         workspaceRoot: effectiveWorkspace.folderPath
-                    ), !PermissionRules.unattendedAllows(
+                    )
+                    if let reason = approvalNeeded, PermissionRules.unattendedAllows(
                         toolName: call.toolName, argumentsJson: call.argumentsJson,
                         workspaceRoot: effectiveWorkspace.folderPath
                     ) {
+                        AuditLog.shared.toolCall(
+                            sessionId: parentSession, tool: call.toolName, argumentsJson: call.argumentsJson,
+                            decision: .approved, success: true, note: "sub-agent, unattended allow rule: " + reason
+                        )
+                    } else if let reason = approvalNeeded {
                         _ = await ToolApprovalManager.shared.requestApproval(
                             callId: call.id, toolName: call.toolName, argumentsJson: call.argumentsJson, reason: reason
                         )
