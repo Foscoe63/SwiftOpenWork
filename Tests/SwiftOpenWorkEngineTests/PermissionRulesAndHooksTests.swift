@@ -245,6 +245,18 @@ final class PermissionRulesAndHooksTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root + "/made.txt"))
         ToolHooks.revokeProjectTrust(workspaceRoot: root)
     }
+
+    func testUnattendedAllowListSettlesOnlyListedCalls() throws {
+        let json = #"{"unattended":{"allow":["terminal_command(git commit*)","terminal_command(rm *)"]},"deny":["terminal_command(rm *)"]}"#
+        try json.write(toFile: root + "/.swiftopenwork/permissions.json", atomically: true, encoding: .utf8)
+        func ok(_ tool: String, _ a: [String: Any]) -> Bool {
+            PermissionRules.unattendedAllows(toolName: tool, argumentsJson: args(a), workspaceRoot: root)
+        }
+        XCTAssertTrue(ok("terminal_command", ["command": "git commit -m x"]))
+        XCTAssertFalse(ok("terminal_command", ["command": "git push"]))
+        XCTAssertFalse(ok("terminal_command", ["command": "rm -rf build"]), "a deny rule still wins")
+        XCTAssertFalse(ok("terminal_command", ["command": "git commit -m x; rm -rf ~"]), "chained commands are not the listed one")
+    }
 }
 
 /// The audit record.

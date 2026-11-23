@@ -1437,6 +1437,12 @@ mcpPromptSummary = ""
             sessionId: session.id,
             workspaceRoot: workspace.folderPath
         ) {
+            if ToolApprovalManager.shared.isUnattended,
+               PermissionRules.unattendedAllows(toolName: toolName, argumentsJson: argsJson, workspaceRoot: workspace.folderPath) {
+                AuditLog.shared.toolCall(sessionId: session.id, tool: toolName, argumentsJson: argsJson,
+                                         decision: .approved, success: true, note: "unattended allow rule: \(reason)")
+                return true
+            }
             callInfo.status = .waitingApproval
             callInfo.approvalReason = reason
             accumulator.addToolCall(callInfo)

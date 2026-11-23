@@ -148,6 +148,45 @@ public enum PermissionRules {
         return PermissionRule(tool: text, action: action)
     }
 
+    // MARK: - Unattended runs
+
+    /// Tools whose approval is not about trusting the agent (secret files, plan mode, fetch policy).
+    /// A standing allow, attended or not, never lifts these.
+    static let neverAllowed: Set<String> = [
+        "exit_plan_mode", "fetch_url",
+        "file_read", "read_file", "document_extract", "extract_document", "read_pdf_or_image",
+        "grep", "search_code", "code_search",
+    ]
+
+    /// What a run with nobody present may do that would otherwise have asked. The `unattended`
+    /// object in a permissions file lists only allows: `{"unattended": {"allow": ["terminal_command(git commit*)"]}}`.
+    /// Everything not listed stays refused, and a deny rule still wins.
+    public static func unattendedRules(workspaceRoot: String) -> [PermissionRule] {
+        var paths = [globalPath]
+        if !workspaceRoot.isEmpty { paths.append(projectPath(workspaceRoot: workspaceRoot)) }
+        return paths.flatMap { path -> [PermissionRule] in
+            guard let data = FileManager.default.contents(atPath: path),
+                  let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let section = root["unattended"] as? [String: Any] else { return [] }
+            return ((section["allow"] as? [Any]) ?? []).compactMap { entry in
+                (entry as? String).flatMap { shorthand($0, action: .allow) }
+            }
+        }
+    }
+
+    /// True when an unattended run may go ahead with a call that needs approval.
+    public static func unattendedAllows(
+        toolName: String, argumentsJson: String, workspaceRoot: String
+    ) -> Bool {
+        let canonical = ToolCallRepair.builtInCanonical(toolName) ?? toolName
+        guard !neverAllowed.contains(canonical) else { return false }
+        let rules = unattendedRules(workspaceRoot: workspaceRoot)
+        guard !rules.isEmpty else { return false }
+        if let standing = verdict(toolName: toolName, argumentsJson: argumentsJson, workspaceRoot: workspaceRoot),
+           standing.action == .deny { return false }
+        return verdict(toolName: toolName, argumentsJson: argumentsJson, workspaceRoot: workspaceRoot, rules: rules)?.action == .allow
+    }
+
     // MARK: - Deciding
 
     /// The rule that decides this call, or nil when none applies and the approval level stands.
