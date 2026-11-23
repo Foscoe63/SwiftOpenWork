@@ -342,6 +342,13 @@ public enum SubAgentExecutor {
         ]
 
         var toolCallsMade: [String] = []
+        // The lead's "did you check your work" rule, for the same reason: an agent that edited and
+        // then reported has told the lead nothing it can rely on. Only asked when the agent was
+        // given a way to check, and never for one that did not edit.
+        var completionLog = CompletionCheck.Log()
+        var completionNudges = 0
+        let canCheck = !offeredTools.isDisjoint(with: CompletionCheck.checks.union(CompletionCheck.readers))
+        let checksEnabled = PersistenceManager.shared.loadSettings().completionChecks
         var refusedWritePaths: [String] = []
         // Same breaker as the lead's loop. A sub-agent had none, and one spent its whole budget
         // re-reading files it had already read.
@@ -486,6 +493,15 @@ public enum SubAgentExecutor {
                 }
                 if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { lastText = text }
 
+                if pending.isEmpty, checksEnabled, canCheck, !finalStep, completionNudges < CompletionCheck.maxNudges,
+                   let problem = CompletionCheck.problem(log: completionLog, request: objective, finalText: text) {
+                    completionNudges += 1
+                    messages.append(ChatMessage(role: .assistant, content: text))
+                    messages.append(ChatMessage(role: .user, content: "[System Command]: " + problem))
+                    onProgress("\(subAgent.name): checking its work")
+                    continue
+                }
+
                 if pending.isEmpty {
                     summary = text
                     stoppedBecause = finalStep ? "hit its \(maxIterations)-step budget and wrapped up with this report" : "completed"
@@ -614,6 +630,7 @@ public enum SubAgentExecutor {
                     // Same rule as the lead's breaker: `build_project {}` after an edit is not the
                     // same call as before it, so a successful edit ends the sameness. Without this
                     // an edit-and-rebuild loop was stopped at its fifth build.
+                    completionLog.record(toolName: call.toolName, argumentsJson: call.argumentsJson, success: result.success)
                     if Self.edit(resetsRepeatCountsFor: call.toolName, succeeded: result.success) {
                         identicalCalls.removeAll()
                     }
