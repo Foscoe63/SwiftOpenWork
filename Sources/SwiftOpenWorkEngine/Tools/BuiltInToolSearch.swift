@@ -34,8 +34,17 @@ public enum BuiltInToolSearch {
     /// schemas are a small share of the window and the extra lookup step is not worth taking.
     public static let compactContextCeiling = 65_536
 
-    public static func usesCompactProfile(providerType: ProviderType, contextWindow: Int) -> Bool {
-        providerType == .local && contextWindow <= compactContextCeiling
+    /// `SWIFTOPENWORK_COMPACT_TOOLS=on|off` forces the profile for an eval run, which registers its
+    /// model as a cloud provider and so would never get it otherwise. Unset means automatic.
+    public static func usesCompactProfile(
+        providerType: ProviderType, contextWindow: Int,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        switch environment["SWIFTOPENWORK_COMPACT_TOOLS"]?.lowercased() {
+        case "on", "1", "true": return true
+        case "off", "0", "false": return false
+        default: return providerType == .local && contextWindow <= compactContextCeiling
+        }
     }
 
     /// Below this many deferrable tools the listing costs about what the schemas do.
