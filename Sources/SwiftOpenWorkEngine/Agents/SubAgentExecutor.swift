@@ -564,6 +564,7 @@ public enum SubAgentExecutor {
                             sessionId: parentSession, tool: call.toolName, argumentsJson: call.argumentsJson,
                             decision: .approved, success: true, note: "sub-agent, unattended allow rule: " + reason
                         )
+                        ApprovedCalls.record(call.id)
                     } else if let reason = approvalNeeded {
                         _ = await ToolApprovalManager.shared.requestApproval(
                             callId: call.id, toolName: call.toolName, argumentsJson: call.argumentsJson, reason: reason

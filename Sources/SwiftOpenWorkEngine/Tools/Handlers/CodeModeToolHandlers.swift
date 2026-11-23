@@ -240,6 +240,7 @@ extension ToolExecutionEngine {
            PermissionRules.unattendedAllows(toolName: name, argumentsJson: argumentsJson, workspaceRoot: workspace.folderPath) {
             AuditLog.shared.toolCall(sessionId: sessionId, tool: name, argumentsJson: argumentsJson,
                                      decision: .approved, success: true, note: "unattended allow rule: \(reason)")
+            ApprovedCalls.record(innerId)
         } else if let reason {
             let outcome = await ToolApprovalManager.shared.requestApproval(
                 callId: innerId, toolName: name, argumentsJson: argumentsJson, reason: "A code_mode script wants to run this. \(reason)"

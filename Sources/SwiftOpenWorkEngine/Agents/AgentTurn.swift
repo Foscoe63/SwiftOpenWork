@@ -1444,6 +1444,8 @@ mcpPromptSummary = ""
                PermissionRules.unattendedAllows(toolName: toolName, argumentsJson: argsJson, workspaceRoot: workspace.folderPath) {
                 AuditLog.shared.toolCall(sessionId: session.id, tool: toolName, argumentsJson: argsJson,
                                          decision: .approved, success: true, note: "unattended allow rule: \(reason)")
+                // The executor refuses a shell command under "Always Ask" unless an approval is on record.
+                ApprovedCalls.record(callId)
                 return true
             }
             callInfo.status = .waitingApproval
