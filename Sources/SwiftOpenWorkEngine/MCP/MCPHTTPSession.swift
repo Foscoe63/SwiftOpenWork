@@ -45,6 +45,8 @@ public actor MCPHTTPSession {
 
     private var sessionId: String?
     private var protocolVersion = "2025-03-26"
+    /// The server's own guidance for the model, from its `initialize` result.
+    public private(set) var serverInstructions: String?
     private var initialized = false
     private var nextId = 1
     private let urlSession: URLSession
@@ -96,8 +98,9 @@ public actor MCPHTTPSession {
         if let error = message["error"] as? [String: Any] {
             throw MCPHTTPError.rpc("MCP initialize failed: \(error["message"] as? String ?? "\(error)")")
         }
-        if let result = message["result"] as? [String: Any], let version = result["protocolVersion"] as? String {
-            protocolVersion = version
+        if let result = message["result"] as? [String: Any] {
+            if let version = result["protocolVersion"] as? String { protocolVersion = version }
+            serverInstructions = result["instructions"] as? String
         }
         sessionId = http.value(forHTTPHeaderField: "Mcp-Session-Id")
         initialized = true

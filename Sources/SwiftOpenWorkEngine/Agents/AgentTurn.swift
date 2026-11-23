@@ -457,6 +457,11 @@ mcpPromptSummary = ""
                 Prefer native tool calls. Do not narrate before calling. Servers that expose only `get_tool_definitions` and `call_tool_by_name` need the catalog listed first; their catalog tools then become directly callable.
                 """
             }
+            // What each connected server says about its own tools.
+            let serverIds = Set(mcpTools.compactMap { MCPNamespacedTool.parse($0.name)?.serverId })
+            let serverNames = Dictionary(loadedSettings.mcpServers.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+            let instructions = await MCPClientManager.shared.serverInstructions(for: serverIds, names: serverNames)
+            mcpPromptSummary += MCPServerInstructions.block(instructions)
         } else if !casualChat && !loadedSettings.mcpServers.filter(\.isEnabled).isEmpty {
             mcpPromptSummary = """
 

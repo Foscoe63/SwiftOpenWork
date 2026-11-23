@@ -666,6 +666,19 @@ public actor MCPClientManager {
         }
     }
 
+    /// Instructions from the connected servers among `ids`, as (display name, text). Only servers
+    /// that are already running are read; nothing is started.
+    public func serverInstructions(for ids: Set<String>, names: [String: String]) async -> [(name: String, text: String)] {
+        var out: [(name: String, text: String)] = []
+        for id in ids {
+            var text: String?
+            if let session = sdkSessions[id] { text = await session.serverInstructions }
+            if text == nil, let session = httpSessions[id] { text = await session.serverInstructions }
+            if let text, !text.isEmpty { out.append((names[id] ?? id, text)) }
+        }
+        return out
+    }
+
     public func startServer(config: MCPServerConfig) async throws -> [MCPToolDefinition] {
         startedFingerprints[config.id] = Self.fingerprint(config)
         if config.transportType == .stdio {
