@@ -116,7 +116,7 @@ public enum SubAgentExecutor {
     /// belongs to the turn the user is in. `worktree_merge` writes into the user's checkout, which
     /// is the lead's call to make with the user, never a sub-agent's. `agent_spawn` is gated
     /// separately, by depth.
-    public static let neverAvailable: Set<String> = ["ask_user", "exit_plan_mode", "worktree_merge"]
+    public static let neverAvailable: Set<String> = ["ask_user", "request_secret", "exit_plan_mode", "worktree_merge"]
 
     /// The most steps a lead can ask for in one `agent_spawn`.
     public static let maxRequestableSteps = 50

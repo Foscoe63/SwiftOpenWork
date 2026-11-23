@@ -11,6 +11,7 @@ import SwiftOpenWorkStorage
 extension ToolExecutionEngine {
     static let sessionToolHandlers: [ToolRegistration] = [
         ToolRegistration(["ask_user"]) { await $0.askUserTool($1) },
+        ToolRegistration(["request_secret"]) { await $0.askUserTool($1) },
         ToolRegistration(["exit_plan_mode"]) { await $0.exitPlanModeTool($1) },
         ToolRegistration(["todo_write"]) { await $0.todoWriteTool($1) },
         ToolRegistration(["calculator"]) { await $0.calculatorTool($1) },

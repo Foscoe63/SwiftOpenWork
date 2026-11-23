@@ -1351,7 +1351,7 @@ public final class AgentRunner {
             argumentsJson = normalized
         }
         switch toolName {
-        case "ask_user":
+        case "ask_user", "request_secret":
             return nil
         case "exit_plan_mode":
             // Plan mode is the user's guard against the agent changing things before they have

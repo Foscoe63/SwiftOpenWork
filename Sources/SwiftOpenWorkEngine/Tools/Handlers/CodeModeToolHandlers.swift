@@ -16,6 +16,7 @@ enum CodeModePolicy {
     static let neverCallable: Set<String> = [
         "code_mode",        // a script inside a script only hides its calls
         "ask_user",         // answered by the loop, not the dispatcher
+        "request_secret",   // likewise: the value goes to the Keychain, not through a program
         "exit_plan_mode",   // lifting the guard is for the person to approve, in the open
         "worktree_merge",   // writes into the user's checkout
         "agent_spawn", "agent_message",

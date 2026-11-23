@@ -1251,6 +1251,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         Self.configureLaunch(process, shellPath: shellPath, command: command, settings: settings, cwd: cwd)
         var environment = ToolExecutionEngine.defaultEnvironment(custom: settings.customEnvironmentVariables)
         environment["TERM"] = "xterm-256color"
+        AgentSecrets.inject(into: &environment)
 
         let result = await runner.run(
             executable: process.executableURL?.path ?? shellPath,
@@ -1288,6 +1289,7 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         Self.configureLaunch(process, shellPath: shellPath, command: command, settings: settings, cwd: cwd)
         var environment = ToolExecutionEngine.defaultEnvironment(custom: settings.customEnvironmentVariables)
         if safeOnly { environment.merge(SafeShellCommand.gitHardeningEnvironment) { _, new in new } }
+        AgentSecrets.inject(into: &environment)
         process.environment = environment
         process.currentDirectoryURL = URL(fileURLWithPath: (cwd as NSString).expandingTildeInPath)
 

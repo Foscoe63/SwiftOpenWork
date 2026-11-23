@@ -1519,7 +1519,35 @@ mcpPromptSummary = ""
         var resultError: String?
         var producedImages: [String] = []
 
-        if toolName == "ask_user" {
+        if toolName == "request_secret" {
+            let args = (argsJson.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]) ?? [:]
+            let name = (args["name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            let reason = (args["reason"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !AgentSecrets.isValidName(name) {
+                resultSuccess = false
+                resultError = "invalid name"
+                resultOutput = "Error: name must be an environment variable name: upper-case letters, digits and underscores, starting with a letter (for example GITHUB_TOKEN)."
+            } else if AgentSecrets.has(name) {
+                resultOutput = "\(name) is already saved. Shell commands can use $\(name). Ask again only if it was rejected as wrong."
+            } else if ToolApprovalManager.shared.isUnattended {
+                resultSuccess = false
+                resultError = "no one is available to enter it"
+                resultOutput = "Error: this run is unattended, so nobody can enter a secret. Do not ask again: say that \(name) is needed and stop."
+            } else {
+                switch await SecretRequestManager.shared.request(name: name, reason: reason, callId: callId) {
+                case .saved:
+                    resultOutput = "Saved. Shell commands can use it as $\(name); you cannot read the value and any output that contains it is redacted."
+                case .declined:
+                    resultSuccess = false
+                    resultError = "declined"
+                    resultOutput = "The user declined to provide \(name). Do not ask again; continue without it or say what you cannot do."
+                case .failed:
+                    resultSuccess = false
+                    resultError = "could not save"
+                    resultOutput = "Error: \(name) could not be saved to the Keychain."
+                }
+            }
+        } else if toolName == "ask_user" {
             askUserStreak += 1
             if askUserStreak > 5 {
                 resultSuccess = false

@@ -189,6 +189,8 @@ public struct ComposerView: View {
     @ObservedObject var appState: AppState
     @ObservedObject var voiceEngine = VoiceSpeechEngine.shared
     @ObservedObject private var userChoiceManager = UserChoiceManager.shared
+    @ObservedObject private var secretRequests = SecretRequestManager.shared
+    @State private var secretValue: String = ""
     @State private var attachments: [MessageAttachment] = []
     @State private var showingSlashCommands = false
     @State private var askUserFreeText: String = ""
@@ -342,6 +344,47 @@ public struct ComposerView: View {
                 .background(ThemeColors.cardBg(for: appState.settings.theme))
                 .cornerRadius(8)
                 .padding(.horizontal, 16)
+            }
+
+            if let secret = secretRequests.pending {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "key.fill")
+                            .foregroundColor(ThemeColors.accent(for: appState.settings.accentColor))
+                        Text("Agent needs a secret: \(secret.name)")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                    }
+                    if !secret.reason.isEmpty {
+                        Text(secret.reason)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(ThemeColors.textPrimary(for: appState.settings.theme))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text("Saved to your Keychain. The agent never sees the value; shell commands get it as $\(secret.name).")
+                        .font(.system(size: 11))
+                        .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                    HStack(spacing: 8) {
+                        SecureField("Paste or type the value…", text: $secretValue)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Save") {
+                            let value = secretValue
+                            secretValue = ""
+                            secretRequests.submit(value: value)
+                        }
+                        .disabled(secretValue.isEmpty)
+                        Button("Decline") {
+                            secretValue = ""
+                            secretRequests.decline()
+                        }
+                    }
+                }
+                .padding(12)
+                .background(ThemeColors.cardBg(for: appState.settings.theme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(ThemeColors.accent(for: appState.settings.accentColor).opacity(0.45), lineWidth: 1)
+                )
             }
 
             if let pending = userChoiceManager.pending {
