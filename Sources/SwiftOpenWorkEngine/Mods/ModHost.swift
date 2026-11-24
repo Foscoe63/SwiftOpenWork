@@ -125,6 +125,35 @@ public final class ModHost: ObservableObject {
         (ModDiscovery.readJSON(ModPaths.switchesFile) ?? [:]).compactMapValues { $0 as? Bool }
     }
 
+    // MARK: - Panes that stay open
+
+    /// Panes a mod opened and the person has not closed, by mod, so they are there again in the next
+    /// chat and the next launch, whether or not the event that first opened them happens.
+    private static var panesFile: String { (ModPaths.nativeDir as NSString).appendingPathComponent("panes.json") }
+
+    private var rememberedPanes: [String: [String: String]] {
+        ((ModDiscovery.readJSON(Self.panesFile) ?? [:]) as [String: Any]).compactMapValues { $0 as? [String: String] }
+    }
+
+    private func rememberPane(plugin: String, id: String, title: String?) {
+        var map = rememberedPanes
+        var panes = map[plugin] ?? [:]
+        if let title { panes[id] = title } else { panes.removeValue(forKey: id) }
+        map[plugin] = panes.isEmpty ? nil : panes
+        try? FileManager.default.createDirectory(atPath: ModPaths.nativeDir, withIntermediateDirectories: true)
+        if let data = try? JSONSerialization.data(withJSONObject: map, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: Self.panesFile))
+        }
+    }
+
+    private func restorePanes(for name: String) {
+        for (id, title) in rememberedPanes[name] ?? [:] where paneRecords[id] == nil {
+            paneRecords[id] = (name, title)
+            if activePaneId == nil { activePaneId = id }
+        }
+        markDirty()
+    }
+
     private func saveEnabled(_ map: [String: Bool]) {
         try? FileManager.default.createDirectory(atPath: ModPaths.nativeDir, withIntermediateDirectories: true)
         if let data = try? JSONSerialization.data(withJSONObject: map, options: [.prettyPrinted, .sortedKeys]) {
@@ -253,6 +282,7 @@ public final class ModHost: ObservableObject {
                 if let record, record.status == .starting { self.fail(record, "timed out while loading") }
             }
         }
+        if record.status == .running { restorePanes(for: m.name) }
         refresh()
     }
 
@@ -748,7 +778,8 @@ public final class ModHost: ObservableObject {
     }
 
     public func closePane(_ id: String) {
-        if paneRecords.removeValue(forKey: id) != nil {
+        if let gone = paneRecords.removeValue(forKey: id) {
+            rememberPane(plugin: gone.plugin, id: id, title: nil)
             Task { await raiseAll("ui.close", ModRuntime.json(["id": id, "origin": "person"])) }
         }
         markDirty()
@@ -833,12 +864,13 @@ public final class ModHost: ObservableObject {
             let p = dict(0)
             guard let id = p["id"] as? String, !id.isEmpty else { throw ServiceError(message: "ui.open needs an id") }
             paneRecords[id] = (name, (p["title"] as? String) ?? id)
+            rememberPane(plugin: name, id: id, title: (p["title"] as? String) ?? id)
             activePaneId = id
             onOpenPane(id)
             markDirty(); return ["isPlaced": true]
         case "ui.close":
             let id = (dict(0)["id"] as? String) ?? ""
-            if paneRecords.removeValue(forKey: id) != nil { Task { await raiseAll("ui.close", ModRuntime.json(["id": id, "origin": "plugin"])) } }
+            if paneRecords.removeValue(forKey: id) != nil { rememberPane(plugin: name, id: id, title: nil); Task { await raiseAll("ui.close", ModRuntime.json(["id": id, "origin": "plugin"])) } }
             markDirty(); return nil
         case "ui.panes": return paneRecords.map { ["id": $0.key, "title": $0.value.title, "isShown": true, "isFocused": false, "isPlaced": true] as [String: Any] }
         case "ui.copy":

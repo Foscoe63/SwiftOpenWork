@@ -149,6 +149,24 @@ final class ModTests: XCTestCase {
         XCTAssertEqual(reply, "0")
     }
 
+    func testAPaneThePersonLeftOpenComesBackUntilClosed() async throws {
+        let m = try await makeMod("deskpane", """
+        export const register = (on) => {
+          on('command.run', { command: 'deskpane' }, async ($) => { await $.ui.open({ id: 'desk', title: 'Desk' }); return { text: 'ok' } })
+        }
+        """)
+        _ = await ModHost.shared.runCommand(plugin: "deskpane", name: "deskpane", args: "")
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertEqual(ModHost.shared.panes.map(\.id), ["desk"])
+        await ModHost.shared.start(m)   // a restart, with nothing opening the pane again
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertEqual(ModHost.shared.panes.map(\.id), ["desk"])
+        ModHost.shared.closePane("desk")
+        await ModHost.shared.start(m)
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertTrue(ModHost.shared.panes.isEmpty)
+    }
+
     func testDeclaredPermissionsAreEnforced() async throws {
         let source = """
         export const register = (on) => {
