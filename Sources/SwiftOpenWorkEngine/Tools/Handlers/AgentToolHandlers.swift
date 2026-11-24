@@ -123,8 +123,10 @@ extension ToolExecutionEngine {
             subAgent: targetAgent,
             parent: parentFrame?.reasoningEffort
         )
+        // Mods (Helper Desk and the like) follow a subagent from this id.
+        let modAgentId = await ModHost.shared.subAgentStarted(description: taskTitle, type: targetAgent.name, model: choice.model.id)
         let runSubAgent = { (provider: ModelProvider, model: ModelInfo) async -> SubAgentExecutor.Outcome in
-            await SubAgentExecutor.run(
+            await ModAgentContext.$id.withValue(modAgentId) { await SubAgentExecutor.run(
                 subAgent: targetAgent,
                 parentAgent: currentAgent,
                 objective: taskTitle,
@@ -141,7 +143,7 @@ extension ToolExecutionEngine {
                 onProgress: { line in
                     if let callId { LiveToolOutput.shared.append(callId: callId, chunk: line + "\n") }
                 }
-            )
+            ) }
         }
         var outcome = await runSubAgent(choice.provider, choice.model)
         var choiceNote = choice.note
@@ -164,6 +166,7 @@ extension ToolExecutionEngine {
                 + "which could not be used (\(unreachable)); it ran on \(parent.model.name) instead."
         }
         if let callId { await LiveToolOutput.shared.finish(callId: callId) }
+        await ModHost.shared.subAgentFinished(id: modAgentId, succeeded: outcome.succeeded, durationMs: Int(outcome.durationMs))
 
         task.status = outcome.succeeded ? .completed : .failed
         task.progress = 1.0

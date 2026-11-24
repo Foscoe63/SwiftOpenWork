@@ -99,6 +99,11 @@ public final class ModHost: ObservableObject {
     private var records: [String: Record] = [:]
     private var state: [String: (value: Any, version: Int)] = [:]
     private var paneRecords: [String: (plugin: String, title: String)] = [:]
+    /// Subagents of this chat, for `$.agent.list()` and the events they raise.
+    struct SubAgentRecord { var id: String; var description: String; var type: String; var model: String; var status: String; var startedAt: Date }
+    private var subAgents: [String: SubAgentRecord] = [:]
+    /// Calls a mod made that SwiftOpenWork has no answer for, by mod, so its card can say so.
+    private var unsupportedCalls: [String: Set<String>] = [:]
     private var statusByPlugin: [String: String] = [:]
     private var commandRecords: [String: ModCommand] = [:]
     private var chainSeq = 0
@@ -156,7 +161,8 @@ public final class ModHost: ObservableObject {
                 hookCount: record?.hooks.count ?? 0, toolCount: record?.tools.count ?? 0,
                 commandCount: commandRecords.values.filter { $0.plugin == m.name }.count,
                 isRemovable: m.source == ModPaths.nativeSource,
-                permissions: m.permissions
+                permissions: m.permissions,
+                compatibility: ModCompatibility.notes(for: m, unsupportedCalls: unsupportedCalls[m.name] ?? [])
             )
         }
     }
@@ -268,6 +274,7 @@ public final class ModHost: ObservableObject {
     public func stopAll() async {
         watchTask?.cancel()
         for name in Array(records.keys) { await stop(name, quiet: true) }
+        subAgents.removeAll(); unsupportedCalls.removeAll()
         markDirty()
     }
 
@@ -479,6 +486,7 @@ public final class ModHost: ObservableObject {
     public func setSession(id: String, cwd: String) {
         guard id != sessionConv else { return }
         sessionConv = id
+        subAgents = subAgents.filter { $0.value.status == "running" }
         Task { await raiseAll("session.start", sessionStartInput()) }
         markDirty()
     }
@@ -544,6 +552,35 @@ public final class ModHost: ObservableObject {
         markDirty()
     }
 
+    // MARK: - Subagents
+
+    /// A subagent is starting. Mods hear `agent.spawn` (they may watch it) and see it in `$.agent.list()`.
+    /// Returns the id its later events carry.
+    public func subAgentStarted(description: String, type: String, model: String) async -> String {
+        let id = "sub-" + String(UUID().uuidString.prefix(8)).lowercased()
+        subAgents[id] = SubAgentRecord(id: id, description: description, type: type, model: model, status: "running", startedAt: Date())
+        markDirty()
+        if hasHook("agent.spawn") {
+            let input = ModRuntime.json(["description": description, "subagentType": type, "model": model, "prompt": ""] as [String: Any])
+            _ = await raise("agent.spawn", input, timeout: 5) { _ in ModRuntime.json(["agentId": id, "model": model] as [String: Any]) }
+        }
+        return id
+    }
+
+    /// One model request of the subagent running in this task.
+    public func subAgentStep(index: Int, model: String, effort: String) async {
+        guard let id = ModAgentContext.id, hasHook("turn.step") else { return }
+        await raiseAll("turn.step", ModRuntime.json(["agentId": id, "index": index, "model": model, "effort": effort] as [String: Any]))
+    }
+
+    public func subAgentFinished(id: String, succeeded: Bool, durationMs: Int) async {
+        subAgents[id]?.status = succeeded ? "completed" : "failed"
+        markDirty()
+        guard hasHook("turn.complete") else { return }
+        let input = ModRuntime.json(["agentId": id, "reason": succeeded ? "answer" : "error", "isAborted": false, "durationMs": durationMs] as [String: Any])
+        _ = await raise("turn.complete", input, timeout: 5) { _ in "{}" }
+    }
+
     // MARK: - Tools
 
     /// The names Claude Code's mods know built-in tools by, and the field names they use.
@@ -553,11 +590,18 @@ public final class ModHost: ObservableObject {
             "file_read": "Read", "read_file": "Read", "file_write": "Write", "write_file": "Write", "create_file": "Write",
             "edit_file": "Edit", "file_edit": "Edit", "multi_edit": "MultiEdit", "terminal_command": "Bash", "run_command": "Bash",
             "grep": "Grep", "glob": "Glob", "list_directory": "LS", "list_dir": "LS", "fetch_url": "WebFetch", "web_search": "WebSearch",
-            "exit_plan_mode": "ExitPlanMode", "use_skill": "Skill",
+            "exit_plan_mode": "ExitPlanMode", "use_skill": "Skill", "agent_spawn": "Agent", "todo_write": "TodoWrite",
         ]
         let name = map[canonical] ?? tool
         var input = (try? JSONSerialization.jsonObject(with: Data(argumentsJson.utf8))) as? [String: Any] ?? [:]
         if ["Read", "Write", "Edit", "MultiEdit"].contains(name), let path = input["path"] { input["file_path"] = path; input.removeValue(forKey: "path") }
+        // Delegating to another agent is Claude Code's Agent (Task) tool; the plan is TodoWrite.
+        if name == "Agent" {
+            if let title = input["task_title"] { input["description"] = title }
+            if let target = input["target_agent_id"] { input["subagent_type"] = target }
+            if let detail = input["task_description"] { input["prompt"] = detail }
+        }
+        if name == "TodoWrite", input["todos"] == nil, let items = input["items"] { input["todos"] = items }
         return (name, input)
     }
 
@@ -577,6 +621,8 @@ public final class ModHost: ObservableObject {
         var event = call.input
         event["tool"] = call.name
         event["tool_use_id"] = callId ?? ""
+        // A call a subagent makes names it, so mods can tell it from the main chat's.
+        if let agent = ModAgentContext.id { event["agentId"] = agent }
         let box = ResultBox()
         let result = await raise("tool.call", ModRuntime.json(event), timeout: 20) { _ in
             let done = await perform()
@@ -867,7 +913,10 @@ public final class ModHost: ObservableObject {
             let builtin = env.builtinCommands().map { ["name": $0, "description": "", "source": "builtin"] as [String: Any] }
             let custom = commandRecords.values.map { ["name": $0.name, "description": $0.description, "source": "plugin", "plugin": $0.plugin] as [String: Any] }
             return builtin + custom
-        case "agent.list": return env.agents()
+        case "agent.list":
+            return subAgents.values.sorted { $0.startedAt < $1.startedAt }.map {
+                ["id": $0.id, "name": $0.description, "description": $0.description, "type": $0.type, "model": $0.model, "status": $0.status] as [String: Any]
+            }
         // files
         case "fs.read":
             guard let text = try? String(contentsOfFile: mapPath(str(0)), encoding: .utf8) else { throw ServiceError(message: "Cannot read \(str(0))") }
@@ -912,7 +961,10 @@ public final class ModHost: ObservableObject {
         case "http.fetch": return await fetch(urlText: str(0), options: dict(1))
         case "audio.speak": Self.speak(str(0)); return [String: Any]()
         case "audio.play": if let sound = NSSound(contentsOfFile: mapPath(str(0)), byReference: true) { sound.play() }; return [String: Any]()
-        default: throw ServiceError(message: "$.\(noun).\(method) is not available in SwiftOpenWork")
+        default:
+            unsupportedCalls[name, default: []].insert("\(noun).\(method)")
+            markDirty()
+            throw ServiceError(message: "$.\(noun).\(method) is not available in SwiftOpenWork")
         }
     }
 
@@ -1031,4 +1083,10 @@ extension ModJSON {
         case .object(let o): return o.mapValues(\.any)
         }
     }
+}
+
+
+/// The subagent a piece of work belongs to, so the tool calls and requests it makes are attributed to it.
+public enum ModAgentContext {
+    @TaskLocal public static var id: String?
 }

@@ -380,6 +380,9 @@ public enum SubAgentExecutor {
                     break
                 }
                 iterations += 1
+                if ModAgentContext.id != nil {
+                    await ModHost.shared.subAgentStep(index: iterations, model: model.id, effort: "\(reasoningEffort)")
+                }
 
                 // Running out of steps used to cut a sub-agent off mid-edit with an empty report,
                 // so everything it had learned was lost. Warn it with a few steps left, and make the
