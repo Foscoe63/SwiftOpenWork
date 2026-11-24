@@ -196,6 +196,73 @@ final class ModTests: XCTestCase {
         XCTAssertTrue(text.contains("Anything else it tries is refused."))
     }
 
+    func testSubagentsReachModsLikeClaudeCodesAgentTool() async throws {
+        try await makeMod("watcher", """
+        const seen = []
+        export const register = (on) => {
+          on('agent.spawn', async ($, e, next) => { const r = await next(e); seen.push('spawn:' + e.description + ':' + r.agentId); return r })
+          on('tool.call', async ($, e, next) => { if (e.agentId) seen.push('tool:' + e.tool + ':' + e.agentId); return next(e) })
+          on('turn.step', async function* ($, e, next) { const r = yield* next(e); if (e.agentId) seen.push('step:' + e.agentId + ':' + e.index); return r })
+          on('turn.complete', async ($, e, next) => { const r = await next(e); if (e.agentId) seen.push('done:' + e.agentId + ':' + e.reason); return r })
+          on('command.run', { command: 'seen' }, async ($) => {
+            const list = await $.agent.list()
+            return { text: seen.join('|') + '#' + list.map(a => a.id + '=' + a.status).join(',') }
+          })
+        }
+        """)
+        let id = await ModHost.shared.subAgentStarted(description: "Look around", type: "researcher", model: "m1")
+        await ModAgentContext.$id.withValue(id) {
+            await ModHost.shared.subAgentStep(index: 1, model: "m1", effort: "off")
+            _ = await ModHost.shared.wrapToolCall(toolName: "file_read", argumentsJson: #"{"path":"a"}"#, callId: "c1") {
+                ToolExecutionResult(success: true, output: "x")
+            }
+        }
+        // A call from the main chat carries no agent id.
+        _ = await ModHost.shared.wrapToolCall(toolName: "file_read", argumentsJson: #"{"path":"b"}"#, callId: "c2") { ToolExecutionResult(success: true, output: "y") }
+        await ModHost.shared.subAgentFinished(id: id, succeeded: true, durationMs: 5)
+        let out = await ModHost.shared.runCommand(plugin: "watcher", name: "seen", args: "")
+        XCTAssertTrue(out.contains("spawn:Look around:\(id)"), out)
+        XCTAssertTrue(out.contains("tool:Read:\(id)"), out)
+        XCTAssertFalse(out.contains("tool:Read:\(id)|tool"), out)
+        XCTAssertTrue(out.contains("step:\(id):1"), out)
+        XCTAssertTrue(out.contains("done:\(id):answer"), out)
+        XCTAssertTrue(out.hasSuffix("#\(id)=completed"), out)
+    }
+
+    func testAgentSpawnIsClaudesAgentTool() {
+        let call = ModHost.claudeNames(tool: "agent_spawn", argumentsJson: #"{"task_title":"Audit","target_agent_id":"coder","task_description":"look"}"#)
+        XCTAssertEqual(call.name, "Agent")
+        XCTAssertEqual(call.input["description"] as? String, "Audit")
+        XCTAssertEqual(call.input["subagent_type"] as? String, "coder")
+        XCTAssertEqual(call.input["prompt"] as? String, "look")
+    }
+
+    func testModsSayWhatWontWorkHere() async throws {
+        try await makeMod("foreign", """
+        export const register = (on) => {
+          on('session.end', async ($, e, next) => next(e))
+          on('tool.call', async ($, e, next) => next(e))
+          on('command.run', { command: 'poke' }, async ($) => {
+            try { await $.prompt.suggest("x"); return { text: 'ok' } } catch (err) { return { text: 'no' } }
+          })
+        }
+        """)
+        ModHost.shared.refresh()
+        var info = try XCTUnwrap(ModHost.shared.mods.first { $0.name == "foreign" })
+        XCTAssertEqual(info.compatibility, ["never fires here: session.end"])
+        _ = await ModHost.shared.runCommand(plugin: "foreign", name: "poke", args: "")
+        ModHost.shared.refresh()
+        info = try XCTUnwrap(ModHost.shared.mods.first { $0.name == "foreign" })
+        XCTAssertEqual(info.compatibility.count, 2, "\(info.compatibility)")
+        XCTAssertTrue(info.compatibility.last?.contains("$.prompt.suggest") == true, "\(info.compatibility)")
+    }
+
+    func testAModUsingOnlySupportedHooksHasNothingToReport() async throws {
+        try await makeMod("native", ModAuthoring.template(name: "native", description: "d"))
+        ModHost.shared.refresh()
+        XCTAssertEqual(ModHost.shared.mods.first { $0.name == "native" }?.compatibility, [])
+    }
+
     func testAModThatThrowsOnLoadIsMarkedFailed() async throws {
         try await makeMod("broken", "export const register = () => { throw new Error('nope') }")
         ModHost.shared.refresh()
@@ -263,6 +330,42 @@ final class ModTests: XCTestCase {
         await ModHost.shared.startEnabled()
         ModHost.shared.refresh()
         XCTAssertEqual(ModHost.shared.mods.first { $0.name == "outside" }?.status, .needsReview)
+    }
+}
+
+/// Helper Desk (from GrizzyCode) shows a card per subagent, and used to stay empty here because
+/// SwiftOpenWork never told mods a subagent had started. Skipped where it isn't installed.
+@MainActor
+final class HelperDeskTests: XCTestCase {
+    static func flatten(_ node: ModNode) -> String {
+        switch node {
+        case .text(let s): return s
+        case .fragment(let items): return items.map(flatten).joined(separator: " ")
+        case .element(let e): return e.children.map(flatten).joined(separator: " ")
+        }
+    }
+
+    func testHelperDeskGetsACardWhenASubagentStarts() async throws {
+        let manifest = try XCTUnwrap(ModDiscovery.discover().first { $0.name == "helper-desk" }, "helper-desk not installed")
+        await ModHost.shared.start(manifest)
+        try await Task.sleep(nanoseconds: 600_000_000)
+        let id = await ModHost.shared.subAgentStarted(description: "Check the build", type: "coder", model: "qwen")
+        try await Task.sleep(nanoseconds: 300_000_000)
+        await ModAgentContext.$id.withValue(id) {
+            await ModHost.shared.subAgentStep(index: 1, model: "qwen", effort: "off")
+            _ = await ModHost.shared.wrapToolCall(toolName: "terminal_command", argumentsJson: #"{"command":"swift build"}"#, callId: "h1") {
+                ToolExecutionResult(success: true, output: "ok")
+            }
+        }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let pane = await ModHost.shared.render(component: "Pane", requestId: "helpers",
+                                               props: ["bodyColumns": .number(44), "title": .string("Helper Desk")])
+        guard case .tree(let node) = pane else { return XCTFail("Helper Desk drew nothing: \(pane) log: \(ModHost.shared.logs["helper-desk"] ?? [])") }
+        let text = Self.flatten(node)
+        XCTAssertTrue(text.contains("Check the build"), text)
+        XCTAssertFalse(text.contains("No subagents yet"), text)
+        await ModHost.shared.subAgentFinished(id: id, succeeded: true, durationMs: 10)
+        await ModHost.shared.stopAll()
     }
 }
 

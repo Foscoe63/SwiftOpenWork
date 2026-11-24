@@ -33,6 +33,12 @@ Draw with `const { Box, Text, Button, Input, Select, Link, Code, Markdown } = $.
 
 `$.ui` (toast, status, ask, notify, open, close, copy) · `$.session` (id, cwd, messages, turns, model, usage, send) · `$.prompt` (read, fill) · `$.turn.abort` · `$.model` (complete, fork, classify) · `$.fs` (read, write, list, exists, stat, mkdir, remove) · `$.process.run([argv])` · `$.http.fetch(url, init)` · `$.store` (get, set, delete, keys; per mod) · `$.state` and `atom`, `read`, `update` from `'claude-code'` · `$.clock` (after, every, sleep) · `$.command` · `$.tool` (register, list, call) · `$.mcp.call(server, tool, args)` · `$.agent.list` · `$.audio.speak`.
 
+## Mods made for another app
+
+Mods from Claude Code and GrizzyCode load as they are. Paths under `~/.claude` are kept inside this app's own folders, tool names are the ones those mods know (`Read`, `Bash`, `Agent`, `TodoWrite`…), and a subagent shows up the way it does there: an `agent.spawn` hook, `agentId` on the tool calls and `turn.step`/`turn.complete` events it makes, and `$.agent.list()` with its status.
+
+Settings → Mods says what of a mod will not work here: hooks the app never raises (such as `session.compact`), and calls to the app that it has no answer for. The same note appears when you turn the mod on.
+
 ## Permissions
 
 List what the mod needs in `plugin.json`:

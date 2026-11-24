@@ -143,6 +143,8 @@ public struct ModInfo: Identifiable, Equatable, Sendable {
     public var isRemovable: Bool
     /// The permissions the mod declared; nil when it declared none (full access).
     public var permissions: [String]? = nil
+    /// What of the mod will not work in SwiftOpenWork (it was made for another app). Empty: nothing known.
+    public var compatibility: [String] = []
 }
 
 /// What a mod may ask the app to do beyond drawing panels, status text and commands. A mod lists the

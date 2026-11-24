@@ -127,6 +127,13 @@ struct ModsSettingsPage: View {
                 Text(mod.description).font(.system(size: 11.5)).foregroundColor(ThemeColors.textSecondary(for: theme)).fixedSize(horizontal: false, vertical: true)
             }
             Text(permissionLine(mod)).font(.system(size: 10.5)).foregroundColor(mod.permissions == nil ? .orange : ThemeColors.textSecondary(for: theme))
+            if !mod.compatibility.isEmpty {
+                Text("Partly works here: " + mod.compatibility.joined(separator: "; "))
+                    .font(.system(size: 10.5)).foregroundColor(.yellow)
+            } else if mod.source != "SwiftOpenWork" {
+                Text("Made for another app. Nothing in it is known not to work in SwiftOpenWork.")
+                    .font(.system(size: 10.5)).foregroundColor(ThemeColors.textSecondary(for: theme))
+            }
             if let error = mod.error {
                 Text(error.split(separator: "\n").first.map(String.init) ?? error).font(.system(size: 11)).foregroundColor(.red).textSelection(.enabled)
             }
@@ -224,7 +231,7 @@ struct ModsSettingsPage: View {
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "Turn on “\(mod.name)”?"
-            alert.informativeText = "\(mod.description.isEmpty ? "" : mod.description + "\n\n")Mods are programs, run with your permissions.\n\n\(ModPermission.summary(declared: mod.permissions))\n\nOnly turn on mods you trust.\n\nSource: \(mod.source)\n\(mod.root)"
+            alert.informativeText = "\(mod.description.isEmpty ? "" : mod.description + "\n\n")Mods are programs, run with your permissions.\n\n\(ModPermission.summary(declared: mod.permissions))\n\n\(mod.compatibility.isEmpty ? "" : "Made for another app, so part of it won’t work here: " + mod.compatibility.joined(separator: "; ") + ".\n\n")Only turn on mods you trust.\n\nSource: \(mod.source)\n\(mod.root)"
             alert.addButton(withTitle: "Turn on"); alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { host.refresh(); return }
         }
