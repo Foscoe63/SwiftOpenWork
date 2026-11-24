@@ -167,6 +167,19 @@ final class ModTests: XCTestCase {
         XCTAssertTrue(ModHost.shared.panes.isEmpty)
     }
 
+    func testTurnCompleteCarriesTheTurnsTokenUsage() async throws {
+        try await makeMod("usage", """
+        export const register = (on) => {
+          on('turn.complete', async ($, e, next) => { await $.store.set('u', JSON.stringify(e.usage)); return next(e) })
+          on('command.run', { command: 'u' }, async ($) => ({ text: String(await $.store.get('u')) }))
+        }
+        """)
+        await ModHost.shared.turnComplete(answer: "ok", durationMs: 5, aborted: false, turnId: "t", inputTokens: 120, outputTokens: 7)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let reply = await ModHost.shared.runCommand(plugin: "usage", name: "u", args: "")
+        XCTAssertTrue(reply.contains("\"input_tokens\":120") && reply.contains("\"output_tokens\":7"), reply)
+    }
+
     func testDeclaredPermissionsAreEnforced() async throws {
         let source = """
         export const register = (on) => {

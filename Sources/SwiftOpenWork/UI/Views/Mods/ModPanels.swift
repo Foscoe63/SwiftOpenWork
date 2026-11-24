@@ -9,7 +9,10 @@ struct ModBandView: View {
     @State private var result: ModRenderResult = .none
 
     var body: some View {
-        Group {
+        // The task below has to hang on something that is always there: a view with nothing in it never
+        // appears, so a task on it never runs and the strip could never be asked for.
+        ZStack(alignment: .topLeading) {
+            Color.clear.frame(height: 0)
             if host.hasBand, case .tree(let node) = result, !result.isEmpty {
                 ModElementView(node: node, component: "AbovePrompt", requestId: "band", theme: "")
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -20,6 +23,8 @@ struct ModBandView: View {
                     .padding(.horizontal, 16)
             }
         }
+        // Nothing to draw takes no room: cancel the gap the stack around it would leave.
+        .padding(.bottom, result.isEmpty ? -8 : 0)
         .task(id: "\(host.revision)-\(host.hasBand)-\(appState.isGenerating)") {
             guard host.hasBand else { result = .none; return }
             result = await host.render(component: "AbovePrompt", requestId: "band", props: [

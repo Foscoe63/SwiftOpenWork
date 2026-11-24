@@ -303,7 +303,8 @@ final class AgentTurn {
         await ModHost.shared.turnComplete(
             answer: String(accumulator.message.content.suffix(8000)),
             durationMs: Int(Date().timeIntervalSince(modTurnStarted) * 1000),
-            aborted: halted || Task.isCancelled, turnId: session.id
+            aborted: halted || Task.isCancelled, turnId: session.id,
+            inputTokens: turnPromptTokens, outputTokens: turnCompletionTokens
         )
     }
 

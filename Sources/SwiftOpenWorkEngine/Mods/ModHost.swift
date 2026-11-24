@@ -573,10 +573,11 @@ public final class ModHost: ObservableObject {
         await raiseAll("turn.step", ModRuntime.json(["turnId": turnId, "index": index, "model": model, "messageCount": messageCount] as [String: Any]))
     }
 
-    public func turnComplete(answer: String, durationMs: Int, aborted: Bool, turnId: String) async {
+    public func turnComplete(answer: String, durationMs: Int, aborted: Bool, turnId: String, inputTokens: Int = 0, outputTokens: Int = 0) async {
         isWorking = false
         if hasHook("turn.complete") {
-            let input = ModRuntime.json(["answer": answer, "durationMs": durationMs, "isAborted": aborted, "turnId": turnId, "reason": aborted ? "aborted" : "answer"] as [String: Any])
+            let input = ModRuntime.json(["answer": answer, "durationMs": durationMs, "isAborted": aborted, "turnId": turnId, "reason": aborted ? "aborted" : "answer",
+                                          "usage": ["input_tokens": inputTokens, "output_tokens": outputTokens, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0]] as [String: Any])
             _ = await raise("turn.complete", input) { _ in "{}" }
         }
         markDirty()
