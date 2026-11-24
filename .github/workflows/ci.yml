@@ -53,9 +53,11 @@ jobs:
           path: |
             ~/Library/Caches/org.swift.swiftpm
             .build/ci
-          key: spm-${{ runner.os }}-${{ hashFiles('SwiftOpenWork.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-          restore-keys: |
-            spm-${{ runner.os }}-
+          # Package.swift is in the key as well as Package.resolved, and there is deliberately no
+          # prefix fallback: restoring an older tree after a dependency change brings back the old
+          # checkout (for mlx-swift-lm 3.31.x, one that declares no traits) and SwiftPM then rejects
+          # `traits: []` against it before it can fetch the new version.
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.swift', 'SwiftOpenWork.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
 
       # As of Xcode 26 the Metal toolchain is a separately downloadable component rather
       # than part of the base install. mlx-swift compiles .metal kernel sources, so without

@@ -27,7 +27,11 @@ let package = Package(
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.0.0"),
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.10.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMajor(from: "3.31.4")),
+        .package(
+            url: "https://github.com/ml-explore/mlx-swift-lm", from: "3.33.0",
+            // The default trait compiles MLXFoundationModels, which does not build against the macOS 27 SDK
+            // and is not used here.
+            traits: []),
         .package(url: "https://github.com/huggingface/swift-huggingface.git", from: "0.9.0"),
         // A real terminal emulator and PTY for the Terminal tab, so interactive programs work.
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
