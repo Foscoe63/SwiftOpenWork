@@ -377,7 +377,10 @@ final class HelperDeskTests: XCTestCase {
     }
 
     func testHelperDeskGetsACardWhenASubagentStarts() async throws {
-        let manifest = try XCTUnwrap(ModDiscovery.discover().first { $0.name == "helper-desk" }, "helper-desk not installed")
+        // Skipped, not failed, where the mod isn't installed (a clean CI runner has none).
+        guard let manifest = ModDiscovery.discover().first(where: { $0.name == "helper-desk" }) else {
+            throw XCTSkip("helper-desk not installed")
+        }
         await ModHost.shared.start(manifest)
         try await Task.sleep(nanoseconds: 600_000_000)
         let id = await ModHost.shared.subAgentStarted(description: "Check the build", type: "coder", model: "qwen")
