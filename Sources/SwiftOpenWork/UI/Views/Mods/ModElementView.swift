@@ -273,7 +273,7 @@ private struct ModButtonNode: View {
                 .cornerRadius(6)
                 .opacity(element.prop("dimColor")?.bool == true ? 0.62 : 1)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.hitTestable)
         .disabled(busy || element.pressHandle == nil)
         .help(element.prop("hotkey")?.string.map { "Shortcut: \($0)" } ?? "")
     }

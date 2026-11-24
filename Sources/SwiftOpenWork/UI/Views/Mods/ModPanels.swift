@@ -75,7 +75,7 @@ struct ModPanesView: View {
                         HStack(spacing: 4) {
                             Text(pane.title).font(.system(size: 11, weight: pane.id == host.activePaneId ? .semibold : .regular)).lineLimit(1)
                             Button { host.closePane(pane.id) } label: { Image(systemName: "xmark").font(.system(size: 8)) }
-                                .buttonStyle(.plain).help("Close")
+                                .buttonStyle(.hitTestable).help("Close")
                         }
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(pane.id == host.activePaneId ? ThemeColors.cardBg(for: appState.settings.theme) : Color.clear)
@@ -134,7 +134,7 @@ struct ModQuestionSheet: View {
                     .padding(8).frame(maxWidth: .infinity)
                     .background(Color.secondary.opacity(0.12)).cornerRadius(6)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.hitTestable)
             }
             HStack {
                 TextField("Something else…", text: $other).textFieldStyle(.roundedBorder)

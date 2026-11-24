@@ -155,7 +155,8 @@ public final class ModHost: ObservableObject {
                 enabled: enabled[m.name] == true, status: status, error: record?.error,
                 hookCount: record?.hooks.count ?? 0, toolCount: record?.tools.count ?? 0,
                 commandCount: commandRecords.values.filter { $0.plugin == m.name }.count,
-                isRemovable: m.source == ModPaths.nativeSource
+                isRemovable: m.source == ModPaths.nativeSource,
+                permissions: m.permissions
             )
         }
     }
@@ -765,6 +766,10 @@ public final class ModHost: ObservableObject {
         func str(_ i: Int) -> String { i < a.count ? ((a[i] as? String) ?? "\(a[i])") : "" }
         func dict(_ i: Int) -> [String: Any] { i < a.count ? ((a[i] as? [String: Any]) ?? [:]) : [:] }
         let name = record.manifest.name
+        if let declared = record.manifest.permissions, let needed = ModPermission.required(for: "\(noun).\(method)"), !declared.contains(needed.rawValue) {
+            appendLog(name, "Refused \(noun).\(method): the mod did not declare “\(needed.rawValue)” under permissions in plugin.json.")
+            throw ServiceError(message: "This mod did not declare the “\(needed.rawValue)” permission (\(needed.title.lowercased())) in plugin.json, so it can’t do that.")
+        }
         switch "\(noun).\(method)" {
         // display
         case "ui.status":

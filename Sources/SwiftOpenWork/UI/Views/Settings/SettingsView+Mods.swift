@@ -13,6 +13,8 @@ struct ModsSettingsPage: View {
     @State private var newName = ""
     @State private var newDescription = ""
     @State private var expandedLogs: Set<String> = []
+    @State private var filter = ""
+    @State private var dropTargeted = false
 
     private var theme: AppTheme { appState.settings.theme }
 
@@ -41,14 +43,52 @@ struct ModsSettingsPage: View {
             }
 
             SettingsCard(title: "Your Mods (\(host.mods.count))", description: "This app’s folder is ~/.swiftopenwork/mods. Claude Code’s installed plugins and ~/.GrizzyCode/mods are listed too, read only.", icon: "square.stack.3d.up") {
+                if host.mods.count > 4 {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass").foregroundColor(ThemeColors.textSecondary(for: theme))
+                        TextField("Filter by name or description", text: $filter).textFieldStyle(.plain)
+                        if !filter.isEmpty {
+                            Button { filter = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain)
+                        }
+                    }
+                    .font(.system(size: 12))
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
+                }
                 if host.mods.isEmpty {
                     Text("No mods found. Make one with “New mod…”, install one from a folder or .zip, or install a mod in Claude Code.")
                         .font(.system(size: 11.5)).foregroundColor(ThemeColors.textSecondary(for: theme))
                 }
-                ForEach(host.mods) { mod in card(mod) }
+                if visibleMods.isEmpty, !host.mods.isEmpty {
+                    Text("No mod matches “\(filter)”.").font(.system(size: 11.5)).foregroundColor(ThemeColors.textSecondary(for: theme))
+                }
+                ForEach(visibleMods) { mod in card(mod) }
             }
         }
         .onAppear { host.refresh() }
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: 10).strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6]))
+                    .background(Color.accentColor.opacity(0.06))
+                    .overlay(Text("Drop a mod folder or .zip to install").font(.system(size: 13, weight: .semibold)).foregroundColor(.accentColor))
+                    .allowsHitTesting(false)
+            }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
+            for provider in providers {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    DispatchQueue.main.async { install(path: url.path) }
+                }
+            }
+            return true
+        }
+    }
+
+    private var visibleMods: [ModInfo] {
+        let query = filter.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !query.isEmpty else { return host.mods }
+        return host.mods.filter { $0.name.lowercased().contains(query) || $0.description.lowercased().contains(query) }
     }
 
     // MARK: - Pieces
@@ -66,6 +106,12 @@ struct ModsSettingsPage: View {
         }
     }
 
+    private func permissionLine(_ mod: ModInfo) -> String {
+        guard let declared = mod.permissions else { return "Full access: this mod has not declared what it needs" }
+        if declared.isEmpty { return "Needs no special permissions" }
+        return "Can: " + declared.map { ModPermission(rawValue: $0)?.title.lowercased() ?? $0 }.joined(separator: ", ")
+    }
+
     private func card(_ mod: ModInfo) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
@@ -80,6 +126,7 @@ struct ModsSettingsPage: View {
             if !mod.description.isEmpty {
                 Text(mod.description).font(.system(size: 11.5)).foregroundColor(ThemeColors.textSecondary(for: theme)).fixedSize(horizontal: false, vertical: true)
             }
+            Text(permissionLine(mod)).font(.system(size: 10.5)).foregroundColor(mod.permissions == nil ? .orange : ThemeColors.textSecondary(for: theme))
             if let error = mod.error {
                 Text(error.split(separator: "\n").first.map(String.init) ?? error).font(.system(size: 11)).foregroundColor(.red).textSelection(.enabled)
             }
@@ -161,7 +208,11 @@ struct ModsSettingsPage: View {
         panel.canChooseFiles = true; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false
         panel.message = "Choose a mod folder, or a .zip or .plugin file."
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let result = ModAuthoring.install(from: url.path)
+        install(path: url.path)
+    }
+
+    private func install(path: String) {
+        let result = ModAuthoring.install(from: path)
         host.refresh()
         if let error = result.error { say(error, error: true); return }
         if ModHost.shared.mods.first(where: { $0.name == result.name })?.enabled == true { Task { await host.reload(result.name) } }
@@ -173,7 +224,7 @@ struct ModsSettingsPage: View {
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "Turn on “\(mod.name)”?"
-            alert.informativeText = "\(mod.description.isEmpty ? "" : mod.description + "\n\n")Mods are programs. This one can read and write files, run commands and see your conversations, with your permissions. Only turn on mods you trust.\n\nSource: \(mod.source)\n\(mod.root)"
+            alert.informativeText = "\(mod.description.isEmpty ? "" : mod.description + "\n\n")Mods are programs, run with your permissions.\n\n\(ModPermission.summary(declared: mod.permissions))\n\nOnly turn on mods you trust.\n\nSource: \(mod.source)\n\(mod.root)"
             alert.addButton(withTitle: "Turn on"); alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { host.refresh(); return }
         }

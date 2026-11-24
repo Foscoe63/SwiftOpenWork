@@ -14,9 +14,9 @@ final class SmokeTests: XCTestCase {
 
     func testInspectorTabCaseCountAndOrder() {
         let expected: [InspectorTab] = [
-            .editor, .preview, .subagents, .comms, .artifacts, .files, .tools, .terminal
+            .editor, .preview, .subagents, .comms, .artifacts, .files, .tools, .terminal, .mods
         ]
-        XCTAssertEqual(InspectorTab.allCases.count, 8, "InspectorTab should have exactly 8 cases")
+        XCTAssertEqual(InspectorTab.allCases.count, 9, "InspectorTab should have exactly 9 cases")
         XCTAssertEqual(InspectorTab.allCases, expected, "InspectorTab cases should match expected order")
     }
 

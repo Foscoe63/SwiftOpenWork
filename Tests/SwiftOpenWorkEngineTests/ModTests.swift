@@ -26,6 +26,12 @@ final class ModTests: XCTestCase {
         let created = ModAuthoring.create(name: name, description: "test mod")
         XCTAssertTrue(created.ok, created.error ?? "")
         try source.write(toFile: (created.path as NSString).appendingPathComponent("hooks/register.tsx"), atomically: true, encoding: .utf8)
+        // The starter declares only what it uses; these test mods use anything, so leave them unlimited.
+        let manifestPath = (created.path as NSString).appendingPathComponent(".claude-plugin/plugin.json")
+        if var json = ModDiscovery.readJSON(manifestPath) {
+            json.removeValue(forKey: "permissions")
+            try JSONSerialization.data(withJSONObject: json).write(to: URL(fileURLWithPath: manifestPath))
+        }
         let manifest = try XCTUnwrap(ModHost.shared.manifest(named: name))
         await ModHost.shared.start(manifest)
         return manifest
@@ -141,6 +147,53 @@ final class ModTests: XCTestCase {
         """)
         let reply = await ModHost.shared.runCommand(plugin: "atoms", name: "peek", args: "")
         XCTAssertEqual(reply, "0")
+    }
+
+    func testDeclaredPermissionsAreEnforced() async throws {
+        let source = """
+        export const register = (on) => {
+          on('command.run', { command: 'go' }, async ($) => {
+            try { const p = await $.process.run(['/bin/echo', 'hi']); return { text: 'ran:' + p.stdout.trim() } }
+            catch (err) { return { text: 'refused:' + String(err && err.message || err) } }
+          })
+        }
+        """
+        // Declared without "process": the call is refused.
+        let limited = ModAuthoring.create(name: "limited", description: "d")
+        XCTAssertTrue(limited.ok)
+        try source.write(toFile: limited.path + "/hooks/register.tsx", atomically: true, encoding: .utf8)
+        XCTAssertEqual(ModHost.shared.manifest(named: "limited")?.permissions, ["conversation"])
+        await ModHost.shared.start(try XCTUnwrap(ModHost.shared.manifest(named: "limited")))
+        let refused = await ModHost.shared.runCommand(plugin: "limited", name: "go", args: "")
+        XCTAssertTrue(refused.hasPrefix("refused:"), refused)
+        XCTAssertTrue(refused.contains("process"), refused)
+
+        // Declared with it: allowed.
+        let manifestPath = limited.path + "/.claude-plugin/plugin.json"
+        var json = try XCTUnwrap(ModDiscovery.readJSON(manifestPath))
+        json["permissions"] = ["process"]
+        try JSONSerialization.data(withJSONObject: json).write(to: URL(fileURLWithPath: manifestPath))
+        await ModHost.shared.start(try XCTUnwrap(ModHost.shared.manifest(named: "limited")))
+        let allowed = await ModHost.shared.runCommand(plugin: "limited", name: "go", args: "")
+        XCTAssertEqual(allowed, "ran:hi")
+
+        // Not declared at all: not limited.
+        json.removeValue(forKey: "permissions")
+        try JSONSerialization.data(withJSONObject: json).write(to: URL(fileURLWithPath: manifestPath))
+        XCTAssertNil(ModHost.shared.manifest(named: "limited")?.permissions)
+        await ModHost.shared.start(try XCTUnwrap(ModHost.shared.manifest(named: "limited")))
+        let open = await ModHost.shared.runCommand(plugin: "limited", name: "go", args: "")
+        XCTAssertEqual(open, "ran:hi")
+    }
+
+    func testPermissionSummaryNamesWhatTheModAsksFor() {
+        XCTAssertTrue(ModPermission.summary(declared: nil).contains("not said what it needs"))
+        XCTAssertTrue(ModPermission.summary(declared: []).contains("nothing beyond"))
+        let text = ModPermission.summary(declared: ["process", "network", "wizardry"])
+        XCTAssertTrue(text.contains("• Run programs and commands"))
+        XCTAssertTrue(text.contains("• Use the internet"))
+        XCTAssertTrue(text.contains("wizardry"))
+        XCTAssertTrue(text.contains("Anything else it tries is refused."))
     }
 
     func testAModThatThrowsOnLoadIsMarkedFailed() async throws {
