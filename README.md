@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Foscoe63/SwiftOpenWork/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Foscoe63/SwiftOpenWork?style=flat-square&label=release" /></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-black?style=flat-square&logo=apple&logoColor=white" />
   <img alt="Swift 5.9 language mode" src="https://img.shields.io/badge/Swift-5.9%20language%20mode-F05138?style=flat-square&logo=swift&logoColor=white" />
   <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-MLX-5AC8FA?style=flat-square&logo=apple&logoColor=white" />
@@ -64,7 +65,7 @@ The short version. The full reference is in **[docs/FEATURES.md](docs/FEATURES.m
 - **External agents** — run Claude Code, Codex, Gemini CLI, OpenCode or Goose as chat agents over ACP
 - **Automations and Loops** — scheduled, on-launch and folder-watch triggers, and self-verifying multi-step workflows
 - **Editor and preview** — a built-in code editor with ghost-text suggestions, find in project, command palette and a live preview with console capture and click-to-pick
-- **Mods** — Claude Code–format function-hook plugins (also GrizzyCode's): panels, status lines, slash commands, agent tools and hooks around prompts, tool calls and turns, each in its own sandbox. Settings → Mods. See [Mods](docs/FEATURES.md#mods)
+- **Mods** — Claude Code–format function-hook plugins (also GrizzyCode's): panels, status lines, slash commands, agent tools and hooks around prompts, tool calls and turns, each in its own sandbox. A mod declares the permissions it needs and the trust prompt lists them. Settings → Mods. See [Mods](docs/FEATURES.md#mods) and the [authoring guide](docs/MODS.md)
 - **MCP** — Model Context Protocol client with cache-first discovery, hard deadlines, fail-closed read/write classification and per-tool switches; stock servers ship disabled. See [MCP servers](docs/FEATURES.md#mcp-servers)
 
 ---
