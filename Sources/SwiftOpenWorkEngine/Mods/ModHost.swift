@@ -889,7 +889,9 @@ public final class ModHost: ObservableObject {
         case "store.keys": return Array((storeRead()[name] ?? [:]).keys).sorted()
         case "state.get":
             let v = state[stateKey(record, dict(0))]
-            return ["value": v?.value ?? NSNull(), "version": v?.version ?? 0]
+            // A key never set has no `value` at all, so a mod's default (`read` falls back on undefined) applies.
+            guard let v else { return ["version": 0] as [String: Any] }
+            return ["value": v.value, "version": v.version] as [String: Any]
         case "state.set":
             let key = stateKey(record, dict(0)); let current = state[key]
             if let want = dict(2)["ifVersion"] as? Int, (current?.version ?? 0) != want { return ["isApplied": false, "version": current?.version ?? 0] }

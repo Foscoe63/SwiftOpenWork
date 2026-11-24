@@ -131,6 +131,18 @@ final class ModTests: XCTestCase {
         XCTAssertEqual(text.children, [.text("drawn")])
     }
 
+    func testUnsetStateReadsAsTheAtomsDefault() async throws {
+        try await makeMod("atoms", """
+        import { atom, read } from 'claude-code'
+        const list = atom({ plugin: 'atoms', key: 'list' }, { items: [] })
+        export const register = (on) => {
+          on('command.run', { command: 'peek' }, async ($) => ({ text: String((await read($, list)).items.length) }))
+        }
+        """)
+        let reply = await ModHost.shared.runCommand(plugin: "atoms", name: "peek", args: "")
+        XCTAssertEqual(reply, "0")
+    }
+
     func testAModThatThrowsOnLoadIsMarkedFailed() async throws {
         try await makeMod("broken", "export const register = () => { throw new Error('nope') }")
         ModHost.shared.refresh()

@@ -117,6 +117,7 @@ private struct ModBox: View {
     let element: ModElement
     let ctx: ModDrawContext
 
+    private var hasBorder: Bool { !(element.prop("borderStyle")?.string ?? "").isEmpty }
     private var isColumn: Bool { (element.prop("flexDirection")?.string ?? "row").hasPrefix("column") }
     private var gap: CGFloat { ModMetrics.across(element.prop("gap")) ?? ModMetrics.across(element.prop("columnGap")) ?? 0 }
 
@@ -127,10 +128,13 @@ private struct ModBox: View {
                 if isColumn {
                     VStack(alignment: horizontalAlignment, spacing: ModMetrics.down(element.prop("gap")) ?? ModMetrics.down(element.prop("rowGap")) ?? 0) { kids }
                 } else {
-                    HStack(alignment: verticalAlignment, spacing: gap) { kids }
+                    HStack(alignment: verticalAlignment, spacing: gap) { rowKids }
                 }
             }
             content
+                // A terminal border takes a cell on every side; ours is drawn over the box, so leave room for it.
+                .padding(.horizontal, hasBorder ? 6 : 0)
+                .padding(.vertical, hasBorder ? 5 : 0)
                 .padding(.leading, edge("paddingLeft", "paddingX", "padding", horizontal: true))
                 .padding(.trailing, edge("paddingRight", "paddingX", "padding", horizontal: true))
                 .padding(.top, edge("paddingTop", "paddingY", "padding", horizontal: false))
@@ -144,6 +148,25 @@ private struct ModBox: View {
                 .padding(.trailing, edge("marginRight", "marginX", "margin", horizontal: true))
                 .padding(.top, edge("marginTop", "marginY", "margin", horizontal: false))
                 .padding(.bottom, edge("marginBottom", "marginY", "margin", horizontal: false))
+        }
+    }
+
+    /// A row's children, spread the way `justifyContent` asks (the default packs them at the start).
+    @ViewBuilder private var rowKids: some View {
+        let mode = element.prop("justifyContent")?.string ?? ""
+        let items = Array(element.children.enumerated())
+        if mode == "space-between", items.count > 1 {
+            ForEach(items, id: \.offset) { index, child in
+                if index > 0 { Spacer(minLength: 0) }
+                ModNodeView(node: child, ctx: ctx)
+            }
+        } else if mode == "flex-end" || mode == "center" {
+            Spacer(minLength: 0)
+            kids
+            if mode == "center" { Spacer(minLength: 0) }
+        } else {
+            kids
+            if !mode.isEmpty { Spacer(minLength: 0) }   // a lone child still sits at the start
         }
     }
 
