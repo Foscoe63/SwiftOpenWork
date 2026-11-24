@@ -65,6 +65,23 @@ struct ModPanesView: View {
                         .font(.system(size: 12, weight: .semibold))
                     Text("A mod can open a pane here. Turn mods on in Settings → Mods.")
                         .font(.system(size: 11)).foregroundColor(.secondary).multilineTextAlignment(.center)
+                    // Some mods only open their pane when something happens (Helper Desk: a subagent).
+                    // Their commands are listed so the pane can be opened any time, in any chat.
+                    if !host.commands.isEmpty {
+                        Divider().padding(.vertical, 4)
+                        Text("Open from a running mod").font(.system(size: 11, weight: .semibold))
+                        ForEach(host.commands) { command in
+                            Button { _ = appState.handleModSlashCommand("/\(command.name)") } label: {
+                                VStack(spacing: 1) {
+                                    Text("/\(command.name)  ·  \(command.plugin)").font(.system(size: 11, weight: .medium))
+                                    if !command.description.isEmpty {
+                                        Text(command.description).font(.system(size: 10)).foregroundColor(.secondary).lineLimit(2)
+                                    }
+                                }
+                            }
+                            .controlSize(.small)
+                        }
+                    }
                     Button("Open Mods settings") { appState.settingsTab = "mods"; appState.navigationDestination = .settings }
                         .controlSize(.small)
                 }
