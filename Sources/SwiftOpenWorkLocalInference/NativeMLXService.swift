@@ -444,8 +444,8 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         // was filed as reasoning and the visible answer came back empty.
         let preOpensThinking = thinkingEnabled && LocalMLXEngine.shared
             .resolveLocalModelDirectory(modelId: model.id, settings: PersistenceManager.shared.loadSettings())
-            .map { ReasoningChannel.templatePreOpensThinking(modelDirectory: $0) } ?? false
-        let splitter = ReasoningChannel.StreamSplitter(startsInsideReasoning: preOpensThinking)
+            .map { SwiftOpenWorkCore.ReasoningChannel.templatePreOpensThinking(modelDirectory: $0) } ?? false
+        let splitter = SwiftOpenWorkCore.ReasoningChannel.StreamSplitter(startsInsideReasoning: preOpensThinking)
 
         // The stream is read in a task this service owns, and the call does not return until MLX
         // has stopped. Stopping to read only *asks* the generation to stop; it keeps evaluating on
@@ -539,7 +539,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
     /// Read a generation stream to its end, or until the reading task is cancelled.
     private static func consume(
         _ stream: AsyncThrowingStream<Generation, Error>,
-        splitter: ReasoningChannel.StreamSplitter,
+        splitter: SwiftOpenWorkCore.ReasoningChannel.StreamSplitter,
         onChunk: @Sendable @escaping (LLMStreamChunk) -> Void
     ) async throws -> ConsumedGeneration {
         var result = ConsumedGeneration()
@@ -664,7 +664,7 @@ public final class NativeMLXService: LLMProviderClient, @unchecked Sendable {
         )
         // Thinking is switched off, so the template does not pre-open a reasoning block; tags the
         // model writes anyway are still split out.
-        let splitter = ReasoningChannel.StreamSplitter(startsInsideReasoning: false)
+        let splitter = SwiftOpenWorkCore.ReasoningChannel.StreamSplitter(startsInsideReasoning: false)
         let stream = session.streamDetails(to: sanitizeForHFChatTemplate(user), role: .user, images: [], videos: [], audios: [])
         let consumer = Task {
             for try await generation in stream {
