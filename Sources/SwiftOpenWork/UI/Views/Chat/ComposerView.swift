@@ -189,6 +189,8 @@ public struct ComposerView: View {
     @ObservedObject var appState: AppState
     @ObservedObject var voiceEngine = VoiceSpeechEngine.shared
     @ObservedObject private var userChoiceManager = UserChoiceManager.shared
+    /// Watched so commands a mod adds appear in the slash menu.
+    @ObservedObject private var mods = ModHost.shared
     @ObservedObject private var secretRequests = SecretRequestManager.shared
     @State private var secretValue: String = ""
     @State private var attachments: [MessageAttachment] = []
@@ -217,6 +219,7 @@ public struct ComposerView: View {
         let query = trimmed.dropFirst().lowercased()
         let all = SlashCommands.builtIn.map { (command: $0.command, description: $0.description, isCustom: false) }
             + appState.customSlashCommands.map { (command: $0.command, description: $0.description.isEmpty ? "Custom command" : $0.description, isCustom: true) }
+            + appState.modSlashCommands.map { (command: $0.command, description: $0.description, isCustom: true) }
         return all.filter { query.isEmpty || $0.command.dropFirst().hasPrefix(query) }
     }
 
@@ -286,6 +289,7 @@ public struct ComposerView: View {
     public var body: some View {
         VStack(spacing: 8) {
             UnsavedEditorFilesBanner(appState: appState)
+            ModBandView(appState: appState)
 
             if case .needsReview(let found) = appState.projectTrust {
                 HStack(spacing: 8) {

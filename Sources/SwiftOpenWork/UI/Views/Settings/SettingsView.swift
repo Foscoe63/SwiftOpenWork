@@ -123,6 +123,8 @@ public struct SettingsView: View {
                             memoryPage
                         case "slashCommands":
                             slashCommandsPage
+                        case "mods":
+                            ModsSettingsPage(appState: appState)
                         default:
                             generalPage
                         }
@@ -343,6 +345,7 @@ public struct SettingsView: View {
                         sidebarItem(id: "skills", title: "Skills & MCP", icon: "sparkles")
                         sidebarItem(id: "memory", title: "Memory", icon: "brain")
                         sidebarItem(id: "slashCommands", title: "Slash Commands", icon: "slash.circle")
+                        sidebarItem(id: "mods", title: "Mods", icon: "puzzlepiece.extension")
                     }
                 }
                 .padding(.horizontal, 10)
@@ -476,6 +479,7 @@ public struct SettingsView: View {
         case "skills": return "Skills & MCP"
         case "memory": return "Long-Term Memory"
         case "slashCommands": return "Slash Commands"
+        case "mods": return "Mods"
         default: return "Settings"
         }
     }
@@ -499,6 +503,7 @@ public struct SettingsView: View {
         case "skills": return "Model Context Protocol tools and custom extensions"
         case "memory": return "Persistent knowledge stored across agent sessions"
         case "slashCommands": return "Built-in commands, and your own that send a saved prompt"
+        case "mods": return "Programs that add panels, commands, tools and hooks around your chats"
         default: return "Configure SwiftOpenWork preferences"
         }
     }

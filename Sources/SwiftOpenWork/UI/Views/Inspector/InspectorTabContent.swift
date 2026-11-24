@@ -33,6 +33,8 @@ struct InspectorTabContent: View {
             ToolsPanelView(appState: appState)
         case .terminal:
             TerminalPane(appState: appState)
+        case .mods:
+            ModPanesView(appState: appState)
         }
     }
 }

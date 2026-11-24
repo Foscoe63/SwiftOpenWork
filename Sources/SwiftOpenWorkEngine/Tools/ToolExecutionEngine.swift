@@ -102,6 +102,8 @@ public final class ToolExecutionEngine: @unchecked Sendable {
         private let lock = NSLock()
         private var buffer = ""
 
+        public init() {}
+
         public func append(_ text: String) {
             lock.lock(); buffer += text; lock.unlock()
         }
@@ -124,6 +126,25 @@ public final class ToolExecutionEngine: @unchecked Sendable {
     /// `callId` is the tool call this execution belongs to, when there is one. It only exists so a
     /// long-running command can stream its output back to the card that is showing the spinner.
     public func execute(
+        toolName: String,
+        argumentsJson: String,
+        workspace: Workspace,
+        currentAgent: Agent,
+        callId: String? = nil
+    ) async -> ToolExecutionResult {
+        // A tool a mod registered is answered by the mod. Every other call passes through the mods'
+        // `tool.call` hooks, which may refuse it or rewrite its result; with no mod listening this
+        // is a direct call.
+        let mods = await ModHost.shared
+        if await mods.isModTool(toolName) {
+            return await mods.callModTool(toolName, argumentsJson: argumentsJson, callId: callId)
+        }
+        return await mods.wrapToolCall(toolName: toolName, argumentsJson: argumentsJson, callId: callId) {
+            await self.executeThroughHooks(toolName: toolName, argumentsJson: argumentsJson, workspace: workspace, currentAgent: currentAgent, callId: callId)
+        }
+    }
+
+    func executeThroughHooks(
         toolName: String,
         argumentsJson: String,
         workspace: Workspace,

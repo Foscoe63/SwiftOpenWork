@@ -210,6 +210,21 @@ self-verifying workflow** the agent runs against a workspace until it actually p
 - **Context meter** — the last turn's real prompt-token count against the model's window, shown beside the composer once it passes half full, amber and then red as compaction gets close. The provider's own number — and when that number is impossible (larger than the window, or far above what the transcript holds) the meter says so and shows a marked estimate instead
 - **Finished-turn notifications** — a chime plus a banner naming the session, only when the app is in the background and only for turns long enough to have walked away from. A turn that *failed* is announced however short it was
 
+## Mods
+
+Mods are small programs that add panels, status text, slash commands, tools and hooks around your chats. They use Claude Code's mod format (`.claude-plugin/plugin.json`, `hooks/hooks.json` naming the modules, and TypeScript or JSX in `hooks/`), so a mod written for Claude Code or GrizzyCode runs here unchanged. Settings → Mods.
+
+- **Where they come from** — this app's own folder (`~/.swiftopenwork/mods`, where new and installed mods go), Claude Code's installed plugins and `~/.GrizzyCode/mods`. The last two are read, never written. **New mod…** scaffolds a working one; **Install from folder or .zip…**, **Export .zip** and **Publish…** (into a marketplace folder you choose, with the two `/plugin` lines to share) cover sharing; **Delete** removes a mod from this app's folder only
+- **Each mod is isolated** — its own JavaScriptCore context and queue, with no Node, DOM, `eval` or package imports. Everything it can do to the app is a message the app decides on. TypeScript and JSX are compiled by a bundled Sucrase, so nothing needs installing
+- **Hooks** — `session.start`, `prompt.submit` (rewrite or take a message), `prompt.compose` (add to the system prompt), `command.run`, `tool.call` (refuse a call, rewrite its result, or answer it), `turn.start`, `turn.step`, `turn.complete`, `ui.render` and `ui.press`. Hooks run in a chain: each can change the event, answer it, or call `next`
+- **What `$` offers** — `$.ui` (toast, status, ask, notify, panes, copy), `$.session`, `$.model` (complete, fork, classify, using the model you chose), `$.fs`, `$.process.run`, `$.http.fetch` (local and private addresses blocked, as in the model's web tool), `$.store`, `$.state`, `$.clock`, `$.command`, `$.tool` (register tools the agent can call, or call a built-in one), `$.mcp.call`, `$.audio.speak`
+- **What shows up** — a band above the message box (`AbovePrompt`), a Mods tab in the inspector for panes, status text under the composer, mod commands in the `/` menu, `$.ui.ask` questions as a sheet, and message rewrites (`UserMessage`, `AssistantMessage`) drawn in the chat
+- **Mod tools** — a tool a mod registers is offered to the agent as `mod__<mod>__<tool>`; every other tool call passes through the mods' `tool.call` hooks first, whichever agent or sub-agent makes it. Plan mode offers no mod tools
+- **Trust** — turning a mod on asks first. A mod that came from Claude Code or GrizzyCode and has changed since you turned it on is held until you turn it on again. Mods in this app's folder are yours to edit: save a file and the mod reloads itself. Each mod has a log (Settings → Mods → Log)
+- **Compatibility** — a mod written for Claude Code looks for its settings under `~/.claude`; those paths are mapped to this app's folders (`~/.swiftopenwork/mods`, `~/.swiftopenwork/mods-data`), and nothing is written under `~/.claude`
+
+To make one, write `hooks/register.tsx` exporting `register = (on) => { on('<event>', [matcher], async ($, event, next) => result) }`. See the scaffold from **New mod…** for a working command, or ask the agent: it knows the layout from `docs/MODS.md`.
+
 ## MCP servers
 
 SwiftOpenWork speaks the [Model Context Protocol](https://modelcontextprotocol.io) with a Radiant-inspired client that prefers **failing soft** over freezing chat.

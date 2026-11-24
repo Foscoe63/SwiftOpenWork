@@ -71,6 +71,8 @@ public enum InspectorTab: String, CaseIterable, Identifiable, Codable, Hashable 
     case files = "files"
     case tools = "tools"
     case terminal = "terminal"
+    /// Panes mods open. Shown only while one is open.
+    case mods = "mods"
 
     public var id: String { rawValue }
 
@@ -86,6 +88,7 @@ public enum InspectorTab: String, CaseIterable, Identifiable, Codable, Hashable 
         case .files: return "Files"
         case .tools: return "Tools"
         case .terminal: return "Terminal"
+        case .mods: return "Mods"
         }
     }
 
@@ -99,6 +102,7 @@ public enum InspectorTab: String, CaseIterable, Identifiable, Codable, Hashable 
         case .files: return "folder.fill"
         case .tools: return "wrench.and.screwdriver.fill"
         case .terminal: return "terminal.fill"
+        case .mods: return "puzzlepiece.extension.fill"
         }
     }
 }
@@ -181,7 +185,10 @@ public final class AppState: ObservableObject {
     private var pullRequestTimer: Timer?
     @Published public var sessions: [Session] = []
     @Published public var currentSessionId: String? = nil {
-        didSet { WindowLayoutStore.sessionId = currentSessionId }
+        didSet {
+            WindowLayoutStore.sessionId = currentSessionId
+            ModHost.shared.setSession(id: currentSessionId ?? "", cwd: currentWorkspace.folderPath)
+        }
     }
     @Published public var agents: [Agent] = []
     /// Departments, who sits in each, and what each shares. See `AppState+Team.swift`.
@@ -282,6 +289,7 @@ public final class AppState: ObservableObject {
         refreshPullRequest()
         applyLocalAPISettings()
         EngineHosting.host = self
+        configureMods()
         recoverInterruptedAutomationRuns()
         recoverInterruptedLoops()
         mlxLoadedObserver = MLXLoadedModelsObserver { [weak self] in
@@ -1656,6 +1664,7 @@ public final class AppState: ObservableObject {
     private func handleSlashCommand(_ command: String) -> Bool {
         let parts = command.split(separator: " ")
         guard let first = parts.first?.lowercased() else { return false }
+        if handleModSlashCommand(command) { return true }
         
         switch first {
         case "/clear":

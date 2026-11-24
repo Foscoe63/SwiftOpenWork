@@ -3,6 +3,8 @@ import SwiftOpenWorkEngine
 
 public struct SideInspectorView: View {
     @ObservedObject var appState: AppState
+    /// Watched so the Mods tab appears when a mod opens a pane.
+    @ObservedObject private var mods = ModHost.shared
     @Environment(\.openWindow) private var openWindow
 
     public init(appState: AppState) {
@@ -33,7 +35,8 @@ public struct SideInspectorView: View {
     /// a tab bar with nothing selected and the content of a tab the user just switched off.
     private var visibleTabs: [InspectorTab] {
         InspectorTab.allCases.filter {
-            $0 != .comms || appState.settings.showInterAgentCommunicationLogs
+            ($0 != .comms || appState.settings.showInterAgentCommunicationLogs)
+                && ($0 != .mods || !ModHost.shared.panes.isEmpty || appState.inspectorTab == .mods)
         }
     }
 
