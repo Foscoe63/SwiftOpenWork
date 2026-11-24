@@ -33,6 +33,16 @@ Draw with `const { Box, Text, Button, Input, Select, Link, Code, Markdown } = $.
 
 `$.ui` (toast, status, ask, notify, open, close, copy) · `$.session` (id, cwd, messages, turns, model, usage, send) · `$.prompt` (read, fill) · `$.turn.abort` · `$.model` (complete, fork, classify) · `$.fs` (read, write, list, exists, stat, mkdir, remove) · `$.process.run([argv])` · `$.http.fetch(url, init)` · `$.store` (get, set, delete, keys; per mod) · `$.state` and `atom`, `read`, `update` from `'claude-code'` · `$.clock` (after, every, sleep) · `$.command` · `$.tool` (register, list, call) · `$.mcp.call(server, tool, args)` · `$.agent.list` · `$.audio.speak`.
 
+## Permissions
+
+List what the mod needs in `plugin.json`:
+
+```json
+{ "name": "my-mod", "permissions": ["process", "network"] }
+```
+
+The choices are `files`, `process`, `network`, `mcp`, `tools`, `model`, `conversation` and `chat`. The person sees exactly that list when they turn the mod on, and any call outside it is refused (and noted in the mod's log). Panels, status text, slash commands and the mod's own store need no permission. A mod that lists nothing at all is not limited, which is how mods made for Claude Code and GrizzyCode keep working; its card is marked "Full access" and the prompt says so. New mods start with only what the starter uses.
+
 ## Limits
 
 The code runs in a sandbox: no Node, no `process`, no `require`, no `eval`, and no package imports (only relative files and `'claude-code'`). TypeScript and JSX are fine.

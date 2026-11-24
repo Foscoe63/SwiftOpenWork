@@ -54,12 +54,14 @@ enum ModDiscovery {
         for (key, def) in (manifest["userConfig"] as? [String: Any]) ?? [:] {
             if let def = def as? [String: Any], let value = def["default"] { options[key] = value }
         }
+        var declared: [String]?
+        if let list = manifest["permissions"] as? [Any], list.allSatisfy({ $0 is String }) { declared = list.compactMap { $0 as? String } }
         return ModManifest(
             name: name,
             version: (manifest["version"] as? String) ?? "",
             description: (manifest["description"] as? String) ?? "",
             root: base, entries: entries, source: source,
-            optionsJSON: ModRuntime.json(options), pluginId: pluginId
+            optionsJSON: ModRuntime.json(options), pluginId: pluginId, permissions: declared
         )
     }
 

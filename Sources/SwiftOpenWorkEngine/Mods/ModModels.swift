@@ -120,6 +120,8 @@ struct ModManifest: Equatable, Sendable {
     var source: String
     var optionsJSON: String
     var pluginId: String?
+    /// What the mod says it needs (`permissions` in plugin.json). nil: it didn't say, so it is not limited.
+    var permissions: [String]? = nil
 }
 
 /// How a mod stands, for the Mods page.
@@ -139,6 +141,58 @@ public struct ModInfo: Identifiable, Equatable, Sendable {
     public var commandCount: Int
     /// Only mods in this app's own folder can be deleted here.
     public var isRemovable: Bool
+    /// The permissions the mod declared; nil when it declared none (full access).
+    public var permissions: [String]? = nil
+}
+
+/// What a mod may ask the app to do beyond drawing panels, status text and commands. A mod lists the
+/// ones it needs under `permissions` in plugin.json; one that lists none of them is not limited, so mods
+/// made for Claude Code and GrizzyCode keep working, and the trust prompt says so.
+public enum ModPermission: String, CaseIterable, Sendable {
+    case files, process, network, mcp, tools, model, conversation, chat
+
+    public var title: String {
+        switch self {
+        case .files: return "Read and write files"
+        case .process: return "Run programs and commands"
+        case .network: return "Use the internet"
+        case .mcp: return "Call your MCP servers"
+        case .tools: return "Run the app’s tools"
+        case .model: return "Ask the model questions"
+        case .conversation: return "Read this conversation"
+        case .chat: return "Send messages as you"
+        }
+    }
+
+    /// The permission a call needs, as `noun.method`; nil when anyone may make it.
+    static func required(for call: String) -> ModPermission? {
+        if call.hasPrefix("fs.") { return .files }
+        switch call {
+        case "process.run": return .process
+        case "http.fetch": return .network
+        case "mcp.call": return .mcp
+        case "tool.call": return .tools
+        case "model.complete", "model.fork", "model.classify": return .model
+        case "session.messages", "session.turns": return .conversation
+        case "session.send", "prompt.submit": return .chat
+        default: return nil
+        }
+    }
+
+    /// What the trust prompt says a mod can do.
+    public static func summary(declared: [String]?) -> String {
+        guard let declared else {
+            return "It has not said what it needs, so it can do all of this: read and write files, run commands, use the internet, call your MCP servers, run the app’s tools, ask the model questions, read this conversation and send messages as you."
+        }
+        let known = declared.compactMap { ModPermission(rawValue: $0) }
+        let unknown = declared.filter { ModPermission(rawValue: $0) == nil }
+        var lines = known.isEmpty && unknown.isEmpty
+            ? ["It asks for nothing beyond panels, status text and commands."]
+            : ["It asks to:"] + known.map { "• " + $0.title }
+        if !unknown.isEmpty { lines.append("• Also listed, and not blocked or allowed by anything: " + unknown.joined(separator: ", ")) }
+        if !known.isEmpty || !unknown.isEmpty { lines.append("Anything else it tries is refused.") }
+        return lines.joined(separator: "\n")
+    }
 }
 
 public struct ModPane: Identifiable, Equatable, Sendable {
