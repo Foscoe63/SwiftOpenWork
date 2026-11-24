@@ -257,6 +257,8 @@ final class AgentTurn {
             }
         }
         announceStart()
+        let modTurnStarted = Date()
+        await ModHost.shared.turnStart(text: lastPrompt, turnId: session.id)
 
         // Delegation is the model's decision, made with `agent_spawn`.
         //
@@ -277,6 +279,7 @@ final class AgentTurn {
         defer { AgentMailbox.shared.unregister(mailboxId) }
 
         await loadTools()
+        await addModTools()
         await describeMCPTools()
         trimToolsForThisTurn()
         await loadProjectContext()
@@ -297,6 +300,11 @@ final class AgentTurn {
         }
 
         await finish()
+        await ModHost.shared.turnComplete(
+            answer: String(accumulator.message.content.suffix(8000)),
+            durationMs: Int(Date().timeIntervalSince(modTurnStarted) * 1000),
+            aborted: halted || Task.isCancelled, turnId: session.id
+        )
     }
 
     // MARK: - Preparing the turn
@@ -332,6 +340,15 @@ final class AgentTurn {
         return tools.filter {
             alwaysAvailableTools.contains($0.name) || allowed.contains($0.id)
                 || names.contains(AgentRunner.canonicalToolName($0.name))
+        }
+    }
+
+    /// Tools mods registered. Not offered in plan mode, where nothing may change anything, nor in
+    /// turns that answer from an inventory or run without tools.
+    private func addModTools() async {
+        guard !inventoryPrompt, !groupToolless, !planModeActive else { return }
+        for tool in await ModHost.shared.toolDefinitions() where !availableTools.contains(where: { $0.name == tool.name }) {
+            availableTools.append(tool)
         }
     }
 
@@ -630,6 +647,17 @@ mcpPromptSummary = ""
             accumulator.setHalt(reason: "hook", text: "A hook blocked this message: \(reason)")
             return false
         }
+        // Mods see the message too: one may rewrite what the model is sent (the saved chat keeps
+        // what was typed) or take the message for itself.
+        switch await ModHost.shared.promptSubmit(lastPrompt) {
+        case .drop(let message):
+            accumulator.setHalt(reason: "mod", text: message.isEmpty ? "A mod took this message." : message)
+            return false
+        case .text(let changed):
+            if changed != lastPrompt, let index = workingMessages.lastIndex(where: { $0.role == .user && $0.content == lastPrompt }) {
+                workingMessages[index].content = changed
+            }
+        }
         if !promptHooks.context.isEmpty {
             workingMessages.append(ChatMessage(
                 sessionId: session.id, role: .user,
@@ -654,9 +682,9 @@ mcpPromptSummary = ""
             .filter { !MCPNamespacedTool.isNamespaced($0) }
             .sorted()
             .joined(separator: ", ")
-        let stablePrompt: String
+        let stablePromptBase: String
         if inventoryPrompt {
-            stablePrompt = """
+            stablePromptBase = """
             \(agent.systemPrompt)
             \(mcpPromptSummary)
 
@@ -666,7 +694,7 @@ mcpPromptSummary = ""
             // No tool list here: a model told it has tools it does not have writes the calls out
             // as text, and then the room reads a wall of pseudo-JSON from an agent that was only
             // asked its opinion.
-            stablePrompt = """
+            stablePromptBase = """
             \(agent.systemPrompt)
             \(workspaceSection)
             \(instructionsSection)
@@ -675,7 +703,7 @@ mcpPromptSummary = ""
             Reply in prose only, without tool calls. Do not comment on tools or say that you cannot run them.
             """
         } else {
-            stablePrompt = """
+            stablePromptBase = """
             \(agent.systemPrompt)
             \(workspaceSection)
             \(instructionsSection)
@@ -748,6 +776,13 @@ mcpPromptSummary = ""
                 ? MemoryPrompt.projectFile(workspaceRoot: workspace.folderPath) : nil,
             recalled: recalled
         )
+        var modSections = inventoryPrompt || groupToolless ? [] : await ModHost.shared.promptCompose(model: model.id)
+        // Asked about mods: say where they go and how they are written, so the agent does not
+        // reach for Claude Code's folders or commands.
+        if !inventoryPrompt, !groupToolless, lastPrompt.range(of: #"\bmods?\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            modSections.append(ModAuthoring.agentGuide)
+        }
+        let stablePrompt = modSections.isEmpty ? stablePromptBase : stablePromptBase + "\n\n" + modSections.joined(separator: "\n\n")
         let volatilePrompt = [workspaceSnapshot.map { WorkspaceContext.gitLine($0) } ?? "", memorySection, handoffSection]
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .joined(separator: "\n")
@@ -781,6 +816,7 @@ mcpPromptSummary = ""
         }
 
         iteration += 1
+        await ModHost.shared.turnStep(turnId: session.id, index: iteration, model: model.id, messageCount: workingMessages.count)
 
         await compactContext()
         guard let step = await streamStep() else { return .endTurn }

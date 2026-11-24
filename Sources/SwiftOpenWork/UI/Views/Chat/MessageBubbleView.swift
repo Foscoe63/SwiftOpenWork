@@ -102,9 +102,11 @@ public struct MessageBubbleView: View {
                         .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme).opacity(0.6))
                 }
 
-                Text(message.content)
-                    .font(.system(size: 13.5))
-                    .foregroundColor(.white)
+                ModMaskedMessage(component: "UserMessage", text: message.content, isStreaming: false) { shown in
+                    Text(shown)
+                        .font(.system(size: 13.5))
+                        .foregroundColor(.white)
+                }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(ThemeColors.accent(for: appState.settings.accentColor))
@@ -275,7 +277,9 @@ public struct MessageBubbleView: View {
 
                 // Main Markdown / Content Text — read this first.
                 if !message.content.isEmpty {
-                    MarkdownRichContentView(content: message.content, appState: appState)
+                    ModMaskedMessage(component: "AssistantMessage", text: message.content, isStreaming: message.isStreaming) { shown in
+                        MarkdownRichContentView(content: shown, appState: appState)
+                    }
                 } else if message.isStreaming {
                     HStack(spacing: 4) {
                         ProgressView()

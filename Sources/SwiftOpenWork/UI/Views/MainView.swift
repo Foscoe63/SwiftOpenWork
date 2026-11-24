@@ -1,8 +1,10 @@
 import SwiftUI
 import AppKit
+import SwiftOpenWorkEngine
 
 public struct MainView: View {
     @ObservedObject var appState: AppState
+    @ObservedObject private var mods = ModHost.shared
     @State private var sidebarWidth: CGFloat = CGFloat(WindowLayoutStore.sidebarWidth)
     @State private var inspectorWidth: CGFloat = CGFloat(WindowLayoutStore.inspectorWidth)
     @State private var sidebarDragOrigin: CGFloat?
@@ -109,6 +111,13 @@ public struct MainView: View {
         .background(WindowFramePersistenceInstaller())
         .sheet(isPresented: $appState.isGroupPickerPresented) {
             GroupPickerSheet(appState: appState)
+        }
+        // A question one of the mods asked.
+        .sheet(item: Binding(
+            get: { mods.question },
+            set: { if $0 == nil, let open = mods.question { mods.answer(open.id, selection: nil) } }
+        )) { question in
+            ModQuestionSheet(question: question)
         }
         .onChange(of: appState.inspectorWidthRequest) { _, requested in
             guard let requested else { return }

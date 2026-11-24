@@ -66,6 +66,7 @@ public struct ChatView: View {
                 PlanModeBanner(appState: appState)
                 SessionTodosBar(appState: appState)
                 TokenStatsBar(appState: appState)
+                ModStatusLineView(appState: appState)
                 ComposerView(appState: appState)
             }
         }

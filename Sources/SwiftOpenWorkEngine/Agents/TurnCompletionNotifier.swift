@@ -18,6 +18,11 @@ public enum TurnCompletionNotifier {
     public struct Notice: Equatable {
         public var title: String
         public var body: String
+
+        public init(title: String, body: String) {
+            self.title = title
+            self.body = body
+        }
     }
 
     /// What to show, or nil for "stay quiet". Pure, so the rules can be tested without a
