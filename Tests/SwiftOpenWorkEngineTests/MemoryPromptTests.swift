@@ -70,7 +70,9 @@ final class MemoryPromptTests: XCTestCase {
         XCTAssertTrue(source.contains("MemoryPrompt.promptBlock("))
         XCTAssertTrue(source.contains("ProjectTrust.mayLoad(workspaceRoot: workspace.folderPath)\n                ? MemoryPrompt.projectFile"),
                       "a repository's memory file is an instruction source and waits for the trust decision")
-        XCTAssertTrue(source.contains("memorySection, handoffSection]"))
+        // Saved facts ride in the volatile part, after the cache boundary, with the other things
+        // that change between turns.
+        XCTAssertTrue(source.contains("memorySection, handoffSection"))
     }
 
     func testMemoryStoreHasAProjectScope() throws {
