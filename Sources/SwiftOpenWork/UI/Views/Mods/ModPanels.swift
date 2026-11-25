@@ -109,7 +109,7 @@ struct ModPanesView: View {
                 }
                 .padding(8)
                 Divider()
-                ScrollView {
+                ScrollView([.vertical, .horizontal]) {
                     if case .tree(let node) = result, let id = host.activePaneId {
                         ModElementView(node: node, component: "Pane", requestId: id, theme: "")
                             .frame(maxWidth: .infinity, alignment: .leading)
