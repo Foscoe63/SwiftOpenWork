@@ -63,6 +63,8 @@ struct ModPanesView: View {
     /// Terminal columns that fit the pane (8pt each, less its padding), so a mod wraps its text
     /// to the pane instead of drawing a fixed 44 columns that run past a narrow inspector.
     @State private var columns = 44
+    /// The pane's width, so mod content is laid out inside it rather than at its own ideal width.
+    @State private var paneWidth: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -112,19 +114,22 @@ struct ModPanesView: View {
                 }
                 .padding(8)
                 Divider()
-                ScrollView(.vertical) {
+                // Some mods keep a minimum width of their own (Helper Desk draws at least 32 columns),
+                // which is wider than the narrowest inspector, so the pane scrolls sideways for the rest.
+                ScrollView([.vertical, .horizontal]) {
                     if case .tree(let node) = result, let id = host.activePaneId {
                         ModElementView(node: node, component: "Pane", requestId: id, theme: "")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
+                            .frame(minWidth: paneWidth > 16 ? paneWidth - 16 : nil, alignment: .leading)
+                            .padding(.horizontal, 8).padding(.vertical, 14)
                     }
                 }
             }
         }
         .background(GeometryReader { geo in
             Color.clear.onChange(of: geo.size.width, initial: true) { _, width in
-                let fit = max(16, min(120, Int((width - 48) / 8)))
+                let fit = max(16, min(120, Int((width - 24) / 8)))
                 if fit != columns { columns = fit }
+                if paneWidth != width { paneWidth = width }
             }
         })
         .task(id: "\(host.revision)-\(host.activePaneId ?? "")-\(columns)") {
