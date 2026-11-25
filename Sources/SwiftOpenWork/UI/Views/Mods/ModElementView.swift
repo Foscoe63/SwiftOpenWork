@@ -216,6 +216,8 @@ enum ModTextNode {
         styled(element)
             .textSelection(.enabled)
             .lineLimit(truncates(element) ? 1 : nil)
+            // Wrap to the pane's width instead of running past it.
+            .fixedSize(horizontal: false, vertical: true)
             .truncationMode(element.prop("wrap")?.string == "truncate-start" ? .head : element.prop("wrap")?.string == "middle" ? .middle : .tail)
     }
 
