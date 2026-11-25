@@ -59,4 +59,25 @@ final class TokenBarAndToolDeferralTests: XCTestCase {
                                                 alreadyLoaded: BuiltInToolSearch.LoadedInChat.shared.names(for: "other-\(chat)"))
         XCTAssertTrue(other.deferred.contains { $0.name == "preview_start" })
     }
+
+    func testOpenRouterClaudeGetsCacheMarkersAndNothingElseDoes() {
+        XCTAssertTrue(OpenAIService.cachesWithExplicitMarkers(kind: .openrouter, modelId: "anthropic/claude-sonnet-4"))
+        XCTAssertFalse(OpenAIService.cachesWithExplicitMarkers(kind: .openrouter, modelId: "openai/gpt-5"))
+        XCTAssertFalse(OpenAIService.cachesWithExplicitMarkers(kind: .openai, modelId: "claude-x"))
+
+        var messages: [[String: Any]] = [
+            ["role": "system", "content": "sys"],
+            ["role": "user", "content": "hi"],
+            ["role": "assistant", "content": "calling"],
+            ["role": "tool", "content": "result", "tool_call_id": "1"],
+        ]
+        OpenAIService.markCacheBreakpoints(in: &messages)
+        func marked(_ i: Int) -> Bool {
+            ((messages[i]["content"] as? [[String: Any]])?.first?["cache_control"]) != nil
+        }
+        XCTAssertTrue(marked(0))
+        XCTAssertFalse(marked(1))
+        XCTAssertTrue(marked(2))
+        XCTAssertTrue(messages[3]["content"] is String)
+    }
 }
