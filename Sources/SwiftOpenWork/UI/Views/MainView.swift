@@ -28,6 +28,9 @@ public struct MainView: View {
                 // Custom split: fixed sidebar widths + flexible center.
                 // Do NOT add a second flexible .frame(min/max) on the side panes —
                 // HStack will expand those and leave empty gutters around the content.
+                GeometryReader { geo in
+                let inspectorMax = max(200, min(WindowLayoutStore.maxInspectorWidth, Double(geo.size.width - sidebarWidth) - 12 - 400))
+                let shownInspectorWidth = min(inspectorWidth, CGFloat(inspectorMax))
                 HStack(spacing: 0) {
                     AppSidebar(appState: appState)
                         .frame(width: sidebarWidth)
@@ -50,9 +53,9 @@ public struct MainView: View {
                     if showInspector {
                         splitHandle(
                             origin: $inspectorDragOrigin,
-                            current: inspectorWidth,
-                            minWidth: WindowLayoutStore.minInspectorWidth,
-                            maxWidth: WindowLayoutStore.maxInspectorWidth,
+                            current: shownInspectorWidth,
+                            minWidth: min(WindowLayoutStore.minInspectorWidth, inspectorMax),
+                            maxWidth: inspectorMax,
                             inverted: true
                         ) { newWidth in
                             inspectorWidth = newWidth
@@ -60,9 +63,11 @@ public struct MainView: View {
                         }
 
                         SideInspectorView(appState: appState)
-                            .frame(width: inspectorWidth)
+                            .frame(width: shownInspectorWidth)
                             .clipped()
                     }
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

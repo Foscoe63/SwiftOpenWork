@@ -1578,10 +1578,15 @@ public final class AppState: ObservableObject {
         if !session.isGroup,
            let id = session.messages.last(where: { $0.role == .assistant })?.agentId,
            id != currentAgent.id,
-           let agent = agents.first(where: { $0.id == id }),
-           !agent.name.trimmingCharacters(in: .whitespaces).isEmpty,
-           TeamMapLogic.targets(text: "@\(agent.name)", agents: agents, state: teamMap).agentIds == [agent.id] {
-            return "@\(agent.name) " + AutoContinuePolicy.continuePrompt
+           let agent = agents.first(where: { $0.id == id }) {
+            if !agent.name.trimmingCharacters(in: .whitespaces).isEmpty,
+               TeamMapLogic.targets(text: "@\(agent.name)", agents: agents, state: teamMap).agentIds == [agent.id] {
+                return "@\(agent.name) " + AutoContinuePolicy.continuePrompt
+            }
+            // The name cannot be tagged unambiguously (a department shares it, or it has no
+            // name), so make the agent that stopped the chat's agent; a bare Continue would
+            // otherwise go to whoever the chat was set to, usually the lead.
+            if session.id == currentSessionId { setActiveAgent(id) }
         }
         guard session.isGroup,
               let id = session.messages.last(where: { $0.role == .assistant })?.agentId,
