@@ -1707,6 +1707,8 @@ public final class AppState: ObservableObject {
                 ContextSavings.shared.recordTokens(sessionId: session.id, savedTokens: max(0, result.tokensBefore - result.tokensAfter))
             }
             guard result.didCompact else {
+                // A toast alone is easy to miss, so say it in the chat too.
+                postCompactNote("Nothing to compact yet: the conversation is still short (about \(ContextMeter.abbreviate(result.tokensBefore)) tokens sent to the model). /compact starts to help once older steps pile up.", sessionIndex: idx)
                 showToast("Nothing to compact yet")
                 return true
             }
@@ -1715,7 +1717,7 @@ public final class AppState: ObservableObject {
                 coveredMessageIds: session.messages.map(\.id),
                 messages: result.messages
             )
-            persistence.saveSessions(sessions)
+            postCompactNote("Compacted what the model is sent: about \(ContextMeter.abbreviate(result.tokensBefore)) → \(ContextMeter.abbreviate(result.tokensAfter)) tokens. Your chat above is unchanged; older steps are now a short digest of the files and commands involved.", sessionIndex: idx)
             showToast("Compacted: ~\(ContextMeter.abbreviate(result.tokensBefore)) → ~\(ContextMeter.abbreviate(result.tokensAfter)) tokens")
             return true
 
@@ -1899,6 +1901,21 @@ public final class AppState: ObservableObject {
             composerText = composerText.isEmpty ? text : composerText + "\n\n" + text
         }
         composerAttachmentInbox.append(contentsOf: attachments)
+    }
+
+    /// Says what /compact did in the chat itself. The transcript you see is never shortened, so
+    /// without this the command looks like it did nothing.
+    private func postCompactNote(_ text: String, sessionIndex idx: Int) {
+        guard sessions.indices.contains(idx) else { return }
+        sessions[idx].messages.append(ChatMessage(
+            sessionId: sessions[idx].id,
+            role: .assistant,
+            content: text,
+            agentName: "System Help",
+            agentAvatar: "arrow.down.right.and.arrow.up.left",
+            agentColor: "#8B5CF6"
+        ))
+        persistence.saveSessions(sessions)
     }
 
     public func showToast(_ message: String) {
