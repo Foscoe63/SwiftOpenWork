@@ -42,4 +42,21 @@ final class TokenBarAndToolDeferralTests: XCTestCase {
         let tools = ["file_read", "worktree_create", "run_app"].map(tool)
         XCTAssertTrue(BuiltInToolSearch.partition(tools, prompt: "hi").deferred.isEmpty)
     }
+
+    func testAToolLoadedInAChatStaysLoadedOnLaterMessages() {
+        let tools = ["file_read", "worktree_create", "worktree_list", "preview_start", "generate_image", "quit_app"].map(tool)
+        let chat = "sticky-\(UUID().uuidString)"
+        let first = BuiltInToolSearch.partition(tools, prompt: "start a preview of the app",
+                                                alreadyLoaded: BuiltInToolSearch.LoadedInChat.shared.names(for: chat))
+        BuiltInToolSearch.LoadedInChat.shared.record(
+            first.loaded.map(\.name).filter { BuiltInToolSearch.deferrable.contains($0) }, for: chat)
+        let later = BuiltInToolSearch.partition(tools, prompt: "fix the failing test",
+                                                alreadyLoaded: BuiltInToolSearch.LoadedInChat.shared.names(for: chat))
+        XCTAssertTrue(later.loaded.contains { $0.name == "preview_start" })
+        XCTAssertFalse(later.deferred.contains { $0.name == "preview_start" })
+        // Another chat is unaffected.
+        let other = BuiltInToolSearch.partition(tools, prompt: "fix the failing test",
+                                                alreadyLoaded: BuiltInToolSearch.LoadedInChat.shared.names(for: "other-\(chat)"))
+        XCTAssertTrue(other.deferred.contains { $0.name == "preview_start" })
+    }
 }

@@ -62,6 +62,31 @@ public enum BuiltInToolSearch {
         "resources", "definition", "diagnostics",
     ]
 
+    /// Deferrable tools that have been sent in full in a chat, so they stay sent.
+    ///
+    /// Which tools a request carries is the first thing the prompt cache reads. Loading a tool only
+    /// when the latest message happens to name it made the set change from one message to the next,
+    /// and every change re-sent the whole conversation uncached. Once a tool is loaded in a chat it
+    /// stays loaded, so the set only grows. In memory only; a restart starts over.
+    public final class LoadedInChat: @unchecked Sendable {
+        public static let shared = LoadedInChat()
+        private let lock = NSLock()
+        private var byChat: [String: Set<String>] = [:]
+        static let limit = 100
+
+        public func names(for chatId: String) -> Set<String> {
+            lock.lock(); defer { lock.unlock() }
+            return byChat[chatId] ?? []
+        }
+
+        public func record(_ names: some Sequence<String>, for chatId: String) {
+            lock.lock(); defer { lock.unlock() }
+            let added = byChat[chatId, default: []].union(names)
+            if byChat[chatId] == nil, byChat.count >= Self.limit, let drop = byChat.keys.first { byChat[drop] = nil }
+            byChat[chatId] = added
+        }
+    }
+
     /// Splits `tools` into those sent in full and those deferred. A tool stays loaded when the
     /// prompt names what it does ("worktree", "screenshot", "preview"), so a request that plainly
     /// needs one does not spend a round trip finding it.
