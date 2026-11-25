@@ -60,6 +60,9 @@ struct ModPanesView: View {
     @ObservedObject var appState: AppState
     @ObservedObject private var host = ModHost.shared
     @State private var result: ModRenderResult = .none
+    /// Terminal columns that fit the pane (8pt each, less its padding), so a mod wraps its text
+    /// to the pane instead of drawing a fixed 44 columns that run past a narrow inspector.
+    @State private var columns = 44
 
     var body: some View {
         VStack(spacing: 0) {
@@ -109,7 +112,7 @@ struct ModPanesView: View {
                 }
                 .padding(8)
                 Divider()
-                ScrollView {
+                ScrollView(.vertical) {
                     if case .tree(let node) = result, let id = host.activePaneId {
                         ModElementView(node: node, component: "Pane", requestId: id, theme: "")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -118,10 +121,16 @@ struct ModPanesView: View {
                 }
             }
         }
-        .task(id: "\(host.revision)-\(host.activePaneId ?? "")") {
+        .background(GeometryReader { geo in
+            Color.clear.onChange(of: geo.size.width, initial: true) { _, width in
+                let fit = max(16, min(120, Int((width - 48) / 8)))
+                if fit != columns { columns = fit }
+            }
+        })
+        .task(id: "\(host.revision)-\(host.activePaneId ?? "")-\(columns)") {
             guard let id = host.activePaneId, let pane = host.panes.first(where: { $0.id == id }) else { result = .none; return }
             result = await host.render(component: "Pane", requestId: id, props: [
-                "title": .string(pane.title), "isFocused": .bool(true), "bodyColumns": .number(44), "placement": .string("dock"),
+                "title": .string(pane.title), "isFocused": .bool(true), "bodyColumns": .number(Double(columns)), "placement": .string("dock"),
             ])
         }
     }

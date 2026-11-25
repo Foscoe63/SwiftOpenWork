@@ -12,19 +12,32 @@ public struct SideInspectorView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            // Inspector Tab Bar
-            inspectorTabBar
+        // A GeometryReader has no minimum size of its own, so nothing inside can make the inspector
+        // wider than the column it was given. Without it, a pane with a wide minimum (a mod's pane
+        // with a fixed-width row, say) overflowed the column on both sides: the tab bar was cut off
+        // at the edges and the overflow sat on top of the drag handle, so the sidebar could not be
+        // resized.
+        GeometryReader { geo in
+            VStack(spacing: 0) {
+                // Inspector Tab Bar
+                inspectorTabBar
 
-            Divider()
-                .background(ThemeColors.border(for: appState.settings.theme))
+                Divider()
+                    .background(ThemeColors.border(for: appState.settings.theme))
 
-            // Tab Content
-            if appState.detachedPanes.contains(appState.inspectorTab) {
-                DetachedPanePlaceholder(appState: appState, tab: appState.inspectorTab)
-            } else {
-                InspectorTabContent(appState: appState, tab: appState.inspectorTab)
+                // Tab Content
+                if appState.detachedPanes.contains(appState.inspectorTab) {
+                    DetachedPanePlaceholder(appState: appState, tab: appState.inspectorTab)
+                } else {
+                    // A pane that is wider than the inspector (a mod's content) must not
+                    // widen the stack and push the tab bar off its edge.
+                    InspectorTabContent(appState: appState, tab: appState.inspectorTab)
+                        .frame(width: geo.size.width, alignment: .topLeading)
+                        .clipped()
+                }
             }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+            .clipped()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ThemeColors.paneBg(for: appState.settings.theme, translucent: appState.settings.useTranslucentBackground))
@@ -41,53 +54,68 @@ public struct SideInspectorView: View {
     }
 
     // MARK: - Inspector Tab Bar
+
+    /// Two rows rather than one. Nine tabs in a single row did not fit a narrow inspector, so the
+    /// bar was cut off at the edges. The pop-out button ends the second row.
     private var inspectorTabBar: some View {
-        HStack(spacing: 4) {
-            ForEach(visibleTabs) { tab in
-                let isSelected = appState.inspectorTab == tab
+        let tabs = visibleTabs
+        let split = (tabs.count + 1) / 2
+        return VStack(spacing: 2) {
+            HStack(spacing: 4) {
+                ForEach(Array(tabs.prefix(split))) { tabButton($0) }
+            }
+            HStack(spacing: 4) {
+                ForEach(Array(tabs.dropFirst(split))) { tabButton($0) }
+
                 Button {
-                    if tab == .editor || tab == .preview {
-                        // Code and web pages are unreadable at the inspector's narrow default.
-                        appState.revealInspector(tab: tab, minimumWidth: 480)
-                    } else {
-                        appState.inspectorTab = tab
-                    }
+                    openWindow(id: "pane", value: appState.inspectorTab)
                 } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 13))
-                            // A fixed box, because these glyphs are not the same shape:
-                            // `bubble.left.and.exclamationmark.bubble.right.fill` measures 23pt
-                            // wide against 15-19 for the others, so that tab rendered edge to
-                            // edge with no clear margin.
-                            .frame(width: 20, height: 16)
-                        Text(tab.title)
-                            .font(.system(size: 9.5, weight: isSelected ? .bold : .regular))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                    }
-                    .foregroundColor(isSelected ? ThemeColors.accent(for: appState.settings.accentColor) : ThemeColors.textSecondary(for: appState.settings.theme))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(isSelected ? ThemeColors.cardBg(for: appState.settings.theme) : Color.clear)
-                    .cornerRadius(6)
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                        .font(.system(size: 12))
+                        .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
+                        .frame(width: 24, height: 36)
                 }
                 .buttonStyle(.hitTestable)
-                .help(tab.title)
+                .help("Open \(appState.inspectorTab.title) in its own window")
             }
-
-            Button {
-                openWindow(id: "pane", value: appState.inspectorTab)
-            } label: {
-                Image(systemName: "rectangle.portrait.and.arrow.right")
-                    .font(.system(size: 12))
-                    .foregroundColor(ThemeColors.textSecondary(for: appState.settings.theme))
-                    .frame(width: 24, height: 40)
-            }
-            .buttonStyle(.hitTestable)
-            .help("Open \(appState.inspectorTab.title) in its own window")
         }
         .padding(6)
+    }
+
+    private func tabButton(_ tab: InspectorTab) -> some View {
+        let isSelected = appState.inspectorTab == tab
+        return Button {
+            if tab == .editor || tab == .preview {
+                // Code and web pages are unreadable at the inspector's narrow default.
+                appState.revealInspector(tab: tab, minimumWidth: 480)
+            } else {
+                appState.inspectorTab = tab
+            }
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: tab.icon)
+                    .font(.system(size: 13))
+                    // A fixed box, because these glyphs are not the same shape:
+                    // `bubble.left.and.exclamationmark.bubble.right.fill` measures 23pt
+                    // wide against 15-19 for the others, so that tab rendered edge to
+                    // edge with no clear margin.
+                    .frame(width: 20, height: 16)
+                Text(tab.title)
+                    .font(.system(size: 9.5, weight: isSelected ? .bold : .regular))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    // minWidth 0 lets the row shrink at the narrowest inspector width
+                    // instead of the label's natural width pushing the bar past the edge.
+                    .frame(minWidth: 0, maxWidth: .infinity)
+            }
+            .foregroundColor(isSelected ? ThemeColors.accent(for: appState.settings.accentColor) : ThemeColors.textSecondary(for: appState.settings.theme))
+            .frame(minWidth: 0, maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(isSelected ? ThemeColors.cardBg(for: appState.settings.theme) : Color.clear)
+            .cornerRadius(6)
+        }
+        .buttonStyle(.hitTestable)
+        .help(tab.title)
     }
 }
 
