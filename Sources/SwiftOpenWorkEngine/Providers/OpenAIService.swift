@@ -205,6 +205,31 @@ public final class OpenAIService: LLMProviderClient, Sendable {
         ))
     }
 
+    /// Whether a request needs `cache_control` markers to be cached. OpenAI, DeepSeek and most
+    /// gateways cache a stable prefix on their own; Claude routed through OpenRouter does not
+    /// unless the request marks where the prefix ends. Limited to OpenRouter, the gateway known to
+    /// accept the markers: other servers may reject content arrays with unknown fields.
+    static func cachesWithExplicitMarkers(kind: ProviderKind, modelId: String) -> Bool {
+        let id = modelId.lowercased()
+        return kind == .openrouter && (id.hasPrefix("anthropic/") || id.contains("claude"))
+    }
+
+    /// Marks the system prompt and the last system, user or assistant message as cache
+    /// breakpoints, turning their plain-string content into one text block first. A trailing
+    /// `tool` message cannot carry a marker, so the mark goes on the last message that can.
+    static func markCacheBreakpoints(in messages: inout [[String: Any]]) {
+        let mark: [String: Any] = ["type": "ephemeral"]
+        func markMessage(at index: Int) {
+            guard let text = messages[index]["content"] as? String, !text.isEmpty else { return }
+            messages[index]["content"] = [["type": "text", "text": text, "cache_control": mark] as [String: Any]]
+        }
+        if let first = messages.firstIndex(where: { $0["role"] as? String == "system" }) { markMessage(at: first) }
+        if let last = messages.lastIndex(where: { ["system", "user", "assistant"].contains($0["role"] as? String ?? "") }),
+           messages[last]["content"] is String {
+            markMessage(at: last)
+        }
+    }
+
     public func streamChat(
         provider: ModelProvider,
         model: ModelInfo,
@@ -299,6 +324,11 @@ public final class OpenAIService: LLMProviderClient, Sendable {
             let text = formattedMessages[last]["content"] as? String ?? ""
             formattedMessages[last]["content"] = text
                 + ImageTransport.blindModelNotice(count: blindImageCount, modelName: model.name)
+        }
+
+        // Claude through OpenRouter caches only where told to, as it does on Anthropic's own API.
+        if Self.cachesWithExplicitMarkers(kind: provider.kind, modelId: model.id) {
+            Self.markCacheBreakpoints(in: &formattedMessages)
         }
 
         let loadedSettings = PersistenceManager.shared.loadSettings()

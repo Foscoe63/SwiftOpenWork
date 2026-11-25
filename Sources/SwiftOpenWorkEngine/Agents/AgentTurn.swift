@@ -515,9 +515,16 @@ mcpPromptSummary = ""
         if !inventoryPrompt && !groupToolless && !planModeActive {
             // A small local model gets a shorter list up front; see `usesCompactProfile`.
             let compact = BuiltInToolSearch.usesCompactProfile(providerType: provider.type, contextWindow: model.contextWindow)
-            let split = BuiltInToolSearch.partition(availableTools, prompt: lastPrompt, compact: compact)
+            // A small local model keeps its short list; everyone else keeps what an earlier turn
+            // of this chat loaded, so the tools sent do not change with the wording of a message.
+            let sticky = compact ? [] : BuiltInToolSearch.LoadedInChat.shared.names(for: session.id)
+            let split = BuiltInToolSearch.partition(availableTools, prompt: lastPrompt, alreadyLoaded: sticky, compact: compact)
             availableTools = split.loaded
             deferredBuiltIns = split.deferred
+            if !compact {
+                BuiltInToolSearch.LoadedInChat.shared.record(
+                    split.loaded.map(\.name).filter { BuiltInToolSearch.deferrable.contains($0) }, for: session.id)
+            }
         }
         let skillsOffered = !inventoryPrompt && !groupToolless
         availableTools.removeAll { tool in
@@ -777,14 +784,16 @@ mcpPromptSummary = ""
                 ? MemoryPrompt.projectFile(workspaceRoot: workspace.folderPath) : nil,
             recalled: recalled
         )
-        var modSections = inventoryPrompt || groupToolless ? [] : await ModHost.shared.promptCompose(model: model.id)
+        let modSections = inventoryPrompt || groupToolless ? [] : await ModHost.shared.promptCompose(model: model.id)
         // Asked about mods: say where they go and how they are written, so the agent does not
-        // reach for Claude Code's folders or commands.
-        if !inventoryPrompt, !groupToolless, lastPrompt.range(of: #"\bmods?\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
-            modSections.append(ModAuthoring.agentGuide)
-        }
+        // reach for Claude Code's folders or commands. It depends on the message, so it goes after
+        // the cache boundary: in the stable part, one mention of "mod" would rewrite the cached
+        // system prompt.
+        let modGuide = (!inventoryPrompt && !groupToolless
+            && lastPrompt.range(of: #"\bmods?\b"#, options: [.regularExpression, .caseInsensitive]) != nil)
+            ? ModAuthoring.agentGuide : ""
         let stablePrompt = modSections.isEmpty ? stablePromptBase : stablePromptBase + "\n\n" + modSections.joined(separator: "\n\n")
-        let volatilePrompt = [workspaceSnapshot.map { WorkspaceContext.gitLine($0) } ?? "", memorySection, handoffSection]
+        let volatilePrompt = [workspaceSnapshot.map { WorkspaceContext.gitLine($0) } ?? "", memorySection, handoffSection, modGuide]
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .joined(separator: "\n")
         systemPromptWithTools = PromptCache.join(stable: stablePrompt, volatile: volatilePrompt)
@@ -2034,6 +2043,7 @@ mcpPromptSummary = ""
             where !availableTools.contains(where: { $0.id == tool.id || $0.name == tool.name })
                 && !(planModeActive && ToolCallRepair.isBlockedInPlanMode(tool.name)) {
                 availableTools.append(tool)
+                BuiltInToolSearch.LoadedInChat.shared.record([tool.name], for: session.id)
             }
         }
 
